@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# Lint / format / typecheck / test gate — mirrors the frontend's Husky hook.
+# Auto-fixes + formats staged Python, re-stages the tidied files, then gates on
+# ruff + mypy + pytest. Uses the project's .venv so tool versions match pyproject.
+# One-time setup: `git config core.hooksPath .githooks` (see README).
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Only act on staged Python files (the full suite runs in CI on PRs).
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+if [ -z "$STAGED_PY" ]; then
+  exit 0
+fi
+
+# Auto-fix + format, then re-stage so the tidied versions are what gets committed.
+echo "$STAGED_PY" | xargs .venv/bin/ruff check --fix || true
+echo "$STAGED_PY" | xargs .venv/bin/ruff format
+echo "$STAGED_PY" | xargs git add
+
+# Gate: lint clean, types check, tests pass.
+echo "$STAGED_PY" | xargs .venv/bin/ruff check
+.venv/bin/mypy app scripts
+.venv/bin/pytest -q

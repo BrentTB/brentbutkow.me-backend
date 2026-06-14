@@ -61,7 +61,7 @@ python -m scripts.reclassify                 # re-run the trained model over sto
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
 mypy app scripts                    # typecheck
-pre-commit install                  # one-time: gate commits on ruff + mypy + pytest
+git config core.hooksPath .githooks # one-time: gate commits on ruff + mypy + pytest (auto-formats & re-stages)
 ```
 
 Schema is managed by **Alembic**: `alembic upgrade head` creates/updates the tables. After changing a
