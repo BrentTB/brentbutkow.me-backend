@@ -43,6 +43,9 @@ def list_recalls(
     since: date | None = None,
     search: str | None = None,
 ) -> RecallListResult:
+    # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
+    search = search.strip() if search else None
+
     conditions = []
     if category:
         conditions.append(Recall.category == category)

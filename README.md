@@ -17,8 +17,9 @@ app/
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
   modules/recalls/ schemas · models · openfda (fetch+normalize+validate) · categorize · classifier (+ model/) · service · router
+  modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
 scripts/ingest.py  manual ingest entrypoint
-tests/             categorize · openfda · routes (TestClient, no DB)
+tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
 ```
 
 ## API
@@ -29,10 +30,12 @@ tests/             categorize · openfda · routes (TestClient, no DB)
 | GET | `/recalls?limit&offset&category&classification&state&company&since` | paginated list → `{ items, total }` |
 | GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, lastIngestAt }` |
 | POST | `/recalls/ingest` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
+| POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
+| GET | `/contact` | **bearer-only** — stored messages, newest first |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · other`. `classification` ∈
-`Class I · Class II · Class III`. Public reads are rate-limited (60/min per IP). FastAPI also serves
-interactive API docs at `/docs`.
+`Class I · Class II · Class III`. Public reads are rate-limited (60/min per IP); `POST /contact` is
+limited to 5/min per IP. FastAPI also serves interactive API docs at `/docs`.
 
 ## Local development
 

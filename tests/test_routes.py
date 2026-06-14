@@ -39,6 +39,24 @@ def test_list_recalls_forwards_search(monkeypatch):
     assert captured["search"] == "listeria"
 
 
+def test_search_edge_cases(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.clear()
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    # special tsquery characters are accepted and forwarded verbatim (the service binds them safely)
+    assert client.get("/recalls?search=%26%7C%21listeria").status_code == 200
+    assert captured["search"] == "&|!listeria"
+    # whitespace-only is accepted (the service normalizes it to "no search")
+    assert client.get("/recalls?search=%20%20").status_code == 200
+    # over-length terms are rejected by the 200-char bound, not pushed into the query
+    assert client.get("/recalls?search=" + "x" * 201).status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,

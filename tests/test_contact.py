@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.db import get_session
 from app.main import app
 from app.modules.contact import router as contact_router_module
+from app.rate_limit import limiter
 
 app.dependency_overrides[get_session] = lambda: None
 client = TestClient(app)
@@ -66,3 +67,19 @@ def test_invalid_email_is_rejected():
 
 def test_list_messages_requires_bearer():
     assert client.get("/contact").status_code == 401
+
+
+def test_post_contact_is_rate_limited(monkeypatch):
+    # The limiter is disabled suite-wide (conftest) to keep tests order-independent; re-enable it
+    # here since it's the primary anti-abuse control on the public POST. store() is stubbed so the
+    # check is exercised without a DB.
+    monkeypatch.setattr(contact_router_module, "create_message", lambda *a, **k: None)
+    limiter.enabled = True
+    try:
+        body = {"message": "Hello there", "elapsedMs": 5000}
+        for _ in range(5):
+            assert client.post("/contact", json=body).status_code == 200
+        # 6th request in the window trips the 5/min per-IP limit.
+        assert client.post("/contact", json=body).status_code == 429
+    finally:
+        limiter.enabled = False

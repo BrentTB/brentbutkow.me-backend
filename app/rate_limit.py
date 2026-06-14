@@ -19,4 +19,7 @@ def client_ip(request: Request) -> str:
     return get_remote_address(request)
 
 
+# Counters live in-process (slowapi's default in-memory store): correct for the current
+# single-instance deploy, but they reset on restart and aren't shared across workers — so before
+# scaling to multiple instances, point this at a shared backend (storage_uri="redis://...").
 limiter = Limiter(key_func=client_ip, default_limits=["60/minute"])

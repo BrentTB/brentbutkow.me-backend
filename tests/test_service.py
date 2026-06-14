@@ -151,6 +151,42 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
     assert [i.recall_number for i in page_two.items] == ["A-3"]
 
 
+def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "F-1", product_description="frozen spinach", reason_for_recall="listeria found"
+            ),
+            _record("F-2", product_description="peanut butter", reason_for_recall="undeclared soy"),
+            _record(
+                "F-3",
+                product_description="ice cream",
+                reason_for_recall="possible listeria contamination",
+                recalling_firm="Listeria Free Foods",
+            ),
+        ],
+    )
+    service.run_ingest(session)
+
+    # @@ match: only the listeria records come back, and ts_rank puts F-3 (term in reason + company)
+    # ahead of F-1 (single occurrence).
+    listeria = service.list_recalls(session, limit=50, offset=0, search="listeria")
+    assert [i.recall_number for i in listeria.items] == ["F-3", "F-1"]
+
+    # websearch AND semantics across terms.
+    soy = service.list_recalls(session, limit=50, offset=0, search="undeclared soy")
+    assert {i.recall_number for i in soy.items} == {"F-2"}
+
+    # tsquery metacharacters must be tolerated, not raise a raw Postgres error (the term is bound,
+    # not interpolated). websearch_to_tsquery sanitizes them down to the searchable words.
+    weird = service.list_recalls(session, limit=50, offset=0, search="listeria & | ! :*")
+    assert {i.recall_number for i in weird.items} == {"F-1", "F-3"}
+
+    # whitespace-only is normalized to "no search" → the filter is skipped, all rows return.
+    assert service.list_recalls(session, limit=50, offset=0, search="   ").total == 3
+
+
 def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     _patch_fetch(
         monkeypatch,

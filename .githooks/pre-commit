@@ -3,22 +3,29 @@
 # Auto-fixes + formats staged Python, re-stages the tidied files, then gates on
 # ruff + mypy + pytest. Uses the project's .venv so tool versions match pyproject.
 # One-time setup: `git config core.hooksPath .githooks` (see README).
+#
+# Caveat: a partially-staged file is re-staged whole after auto-fix, so its unstaged
+# hunks get pulled into the commit. Stage whole files, or stash unstaged work first.
 set -e
 
 cd "$(git rev-parse --show-toplevel)"
 
-# Only act on staged Python files (the full suite runs in CI on PRs).
-STAGED_PY=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
-if [ -z "$STAGED_PY" ]; then
+# Only act on staged Python files (the full suite runs in CI on PRs). Let git filter to *.py
+# and emit NUL-delimited paths so names with spaces survive xargs.
+if [ -z "$(git diff --cached --name-only --diff-filter=ACMR -- '*.py')" ]; then
   exit 0
 fi
 
+staged_py() {
+  git diff --cached --name-only --diff-filter=ACMR -z -- '*.py'
+}
+
 # Auto-fix + format, then re-stage so the tidied versions are what gets committed.
-echo "$STAGED_PY" | xargs .venv/bin/ruff check --fix || true
-echo "$STAGED_PY" | xargs .venv/bin/ruff format
-echo "$STAGED_PY" | xargs git add
+staged_py | xargs -0 .venv/bin/ruff check --fix || true
+staged_py | xargs -0 .venv/bin/ruff format
+staged_py | xargs -0 git add
 
 # Gate: lint clean, types check, tests pass.
-echo "$STAGED_PY" | xargs .venv/bin/ruff check
+staged_py | xargs -0 .venv/bin/ruff check
 .venv/bin/mypy app scripts
 .venv/bin/pytest -q
