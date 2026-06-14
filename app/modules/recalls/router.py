@@ -48,6 +48,9 @@ def get_recalls(
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
+    search: str | None = Query(
+        default=None, description="Full-text search across product, reason, and company name."
+    ),
 ) -> RecallListResult:
     # Public read — daily-updated data, so let browsers/CDN cache it briefly.
     response.headers["Cache-Control"] = "public, max-age=120"
@@ -60,6 +63,7 @@ def get_recalls(
         state=state,
         company=company,
         since=since,
+        search=search,
     )
 
 

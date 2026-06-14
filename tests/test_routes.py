@@ -27,6 +27,18 @@ def test_list_recalls(monkeypatch):
     assert client.get("/recalls?state=CA&company=Acme&category=allergen").status_code == 200
 
 
+def test_list_recalls_forwards_search(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?search=listeria").status_code == 200
+    assert captured["search"] == "listeria"
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,

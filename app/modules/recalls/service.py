@@ -41,6 +41,7 @@ def list_recalls(
     state: str | None = None,
     company: str | None = None,
     since: date | None = None,
+    search: str | None = None,
 ) -> RecallListResult:
     conditions = []
     if category:
@@ -56,6 +57,10 @@ def list_recalls(
         conditions.append(Recall.company_name.ilike(f"%{company}%"))
     if since:
         conditions.append(Recall.report_date >= since)
+    if search:
+        conditions.append(
+            Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search))
+        )
 
     stmt = select(Recall)
     count_stmt = select(func.count()).select_from(Recall)
@@ -63,9 +68,14 @@ def list_recalls(
         stmt = stmt.where(condition)
         count_stmt = count_stmt.where(condition)
 
-    rows = session.scalars(
-        stmt.order_by(Recall.report_date.desc().nulls_last()).limit(limit).offset(offset)
-    ).all()
+    # Rank by text relevance when searching, then fall back to most-recent-first.
+    ordering = []
+    if search:
+        ordering.append(
+            func.ts_rank(Recall.search_vector, func.websearch_to_tsquery("english", search)).desc()
+        )
+    ordering.append(Recall.report_date.desc().nulls_last())
+    rows = session.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     total = session.scalar(count_stmt) or 0
 
     return RecallListResult(items=[RecallOut.model_validate(row) for row in rows], total=total)
