@@ -58,7 +58,7 @@ python -m scripts.backfill                   # one-time: seed full history (~26k
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
-mypy app                            # typecheck
+mypy app scripts                    # typecheck
 pre-commit install                  # one-time: gate commits on ruff + mypy + pytest
 ```
 

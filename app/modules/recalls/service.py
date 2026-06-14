@@ -10,6 +10,7 @@ from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
     CategoryCount,
     IngestResult,
+    LabelCount,
     MonthCount,
     RecallListResult,
     RecallOut,
@@ -18,6 +19,9 @@ from app.modules.recalls.schemas import (
 
 # Rows per upsert statement — keeps a large backfill to a few statements instead of thousands.
 _UPSERT_CHUNK = 500
+
+# How many rows to return for the high-cardinality breakdowns (states, companies).
+_TOP_N = 15
 
 
 def _redact_secrets(message: str) -> str:
@@ -34,6 +38,8 @@ def list_recalls(
     offset: int,
     category: str | None = None,
     classification: str | None = None,
+    state: str | None = None,
+    company: str | None = None,
     since: date | None = None,
 ) -> RecallListResult:
     conditions = []
@@ -41,6 +47,10 @@ def list_recalls(
         conditions.append(Recall.category == category)
     if classification:
         conditions.append(Recall.classification == classification)
+    if state:
+        conditions.append(Recall.state == state)
+    if company:
+        conditions.append(Recall.company_name.ilike(f"%{company}%"))
     if since:
         conditions.append(Recall.report_date >= since)
 
@@ -71,6 +81,27 @@ def get_stats(session: Session) -> RecallStats:
         .order_by(month)
     ).all()
 
+    by_classification = session.execute(
+        select(Recall.classification, func.count())
+        .where(Recall.classification.is_not(None))
+        .group_by(Recall.classification)
+        .order_by(Recall.classification)
+    ).all()
+    by_state = session.execute(
+        select(Recall.state, func.count())
+        .where(Recall.state.is_not(None))
+        .group_by(Recall.state)
+        .order_by(func.count().desc())
+        .limit(_TOP_N)
+    ).all()
+    by_company = session.execute(
+        select(Recall.company_name, func.count())
+        .where(Recall.company_name.is_not(None))
+        .group_by(Recall.company_name)
+        .order_by(func.count().desc())
+        .limit(_TOP_N)
+    ).all()
+
     total = session.scalar(select(func.count()).select_from(Recall)) or 0
     last_ingest_at = session.scalar(
         select(IngestRun.finished_at)
@@ -85,6 +116,11 @@ def get_stats(session: Session) -> RecallStats:
             CategoryCount(category=category, count=count) for category, count in by_category
         ],
         by_month=[MonthCount(month=month_label, count=count) for month_label, count in by_month],
+        by_classification=[
+            LabelCount(label=label, count=count) for label, count in by_classification
+        ],
+        by_state=[LabelCount(label=label, count=count) for label, count in by_state],
+        by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         last_ingest_at=last_ingest_at,
     )
 

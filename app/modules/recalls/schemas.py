@@ -59,10 +59,18 @@ class MonthCount(CamelModel):
     count: int
 
 
+class LabelCount(CamelModel):
+    label: str
+    count: int
+
+
 class RecallStats(CamelModel):
     total: int
     by_category: list[CategoryCount]
     by_month: list[MonthCount]
+    by_classification: list[LabelCount]
+    by_state: list[LabelCount]
+    by_company: list[LabelCount]
     last_ingest_at: datetime | None
 
 

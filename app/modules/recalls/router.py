@@ -37,6 +37,10 @@ def get_recalls(
     classification: RecallClass | None = Query(
         default=None, description="Filter by FDA recall classification."
     ),
+    state: str | None = Query(default=None, description="Filter by the recalling firm's state."),
+    company: str | None = Query(
+        default=None, description="Filter by company name (case-insensitive partial match)."
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -47,6 +51,8 @@ def get_recalls(
         offset=offset,
         category=category.value if category else None,
         classification=classification.value if classification else None,
+        state=state,
+        company=company,
         since=since,
     )
 
@@ -68,7 +74,7 @@ def recall_stats(session: Session = Depends(get_session)) -> RecallStats:
     summary="Trigger an openFDA ingest",
     description="Fetches the latest recalls from openFDA and upserts them. Bearer-protected.",
     dependencies=[Depends(require_bearer)],
-    responses={401: {"description": "Missing or invalid bearer token."}},
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest(session: Session = Depends(get_session)) -> IngestResult:
     return run_ingest(session)
