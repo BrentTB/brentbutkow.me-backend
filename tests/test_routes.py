@@ -22,6 +22,7 @@ def test_list_recalls(monkeypatch):
     res = client.get("/recalls")
     assert res.status_code == 200
     assert res.json() == {"items": [], "total": 0}
+    assert res.headers["cache-control"] == "public, max-age=120"
     # the filter params are accepted (FastAPI-validated) and don't error
     assert client.get("/recalls?state=CA&company=Acme&category=allergen").status_code == 200
 
@@ -43,6 +44,7 @@ def test_stats(monkeypatch):
     res = client.get("/recalls/stats")
     assert res.status_code == 200
     assert res.json()["total"] == 0
+    assert res.headers["cache-control"] == "public, max-age=300"
 
 
 def test_ingest_requires_bearer():

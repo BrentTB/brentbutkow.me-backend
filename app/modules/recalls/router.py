@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.auth import require_bearer
@@ -30,6 +30,7 @@ _RATE_LIMITED: dict[int | str, dict[str, Any]] = {
     responses=_RATE_LIMITED,
 )
 def get_recalls(
+    response: Response,
     session: Session = Depends(get_session),
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
@@ -45,6 +46,8 @@ def get_recalls(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
 ) -> RecallListResult:
+    # Public read — daily-updated data, so let browsers/CDN cache it briefly.
+    response.headers["Cache-Control"] = "public, max-age=120"
     return list_recalls(
         session,
         limit=limit,
@@ -64,7 +67,8 @@ def get_recalls(
     description="Totals, counts by category and by month, and the last successful ingest time.",
     responses=_RATE_LIMITED,
 )
-def recall_stats(session: Session = Depends(get_session)) -> RecallStats:
+def recall_stats(response: Response, session: Session = Depends(get_session)) -> RecallStats:
+    response.headers["Cache-Control"] = "public, max-age=300"
     return get_stats(session)
 
 

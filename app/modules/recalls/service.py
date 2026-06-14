@@ -20,7 +20,7 @@ from app.modules.recalls.schemas import (
 # Rows per upsert statement — keeps a large backfill to a few statements instead of thousands.
 _UPSERT_CHUNK = 500
 
-# How many rows to return for the high-cardinality breakdowns (states, companies).
+# How many rows to return for the high-cardinality company breakdown.
 _TOP_N = 15
 
 
@@ -87,12 +87,13 @@ def get_stats(session: Session) -> RecallStats:
         .group_by(Recall.classification)
         .order_by(Recall.classification)
     ).all()
+    # All states (bounded set ~51) so the frontend map can render every tile;
+    # the leaderboard slices this to its top rows client-side.
     by_state = session.execute(
         select(Recall.state, func.count())
         .where(Recall.state.is_not(None))
         .group_by(Recall.state)
         .order_by(func.count().desc())
-        .limit(_TOP_N)
     ).all()
     by_company = session.execute(
         select(Recall.company_name, func.count())
