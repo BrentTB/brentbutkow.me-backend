@@ -50,6 +50,9 @@ def list_recalls(
     if state:
         conditions.append(Recall.state == state)
     if company:
+        # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
+        # slowly — a few new openFDA recalls a day on top of the initial ~26k-row backfill — so it
+        # stays cheap for a long time. Revisit with a pg_trgm GIN index if it ever gets large.
         conditions.append(Recall.company_name.ilike(f"%{company}%"))
     if since:
         conditions.append(Recall.report_date >= since)

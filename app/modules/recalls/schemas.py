@@ -38,9 +38,14 @@ class RecallOut(CamelModel):
     distribution_pattern: str | None = Field(description="Where the product was distributed.")
     recall_initiation_date: date | None = Field(description="When the recall began.")
     report_date: date | None = Field(description="When openFDA reported it.")
-    category: RecallCategory = Field(description="Assigned cause category (keyword baseline, v1).")
+    category: RecallCategory = Field(
+        description="Predicted cause category from the recall classifier."
+    )
     category_confidence: float = Field(
-        description="Classifier confidence 0–1 (1.0 for matched keyword rules, 0 for 'other')."
+        description=(
+            "Classifier confidence in [0, 1]: the model's predicted probability for the chosen "
+            "category, or 1.0/0.0 from the keyword fallback when no model is loaded."
+        )
     )
 
 

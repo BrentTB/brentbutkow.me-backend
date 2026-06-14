@@ -10,6 +10,8 @@ from app.modules.recalls.models import Recall
 def main() -> None:
     session = SessionLocal()
     try:
+        # All-or-nothing: every row is updated in one transaction, so a failure mid-run rolls the
+        # whole batch back rather than leaving the table half-reclassified. Fine at ~26k rows.
         recalls = session.scalars(select(Recall)).all()
         for recall in recalls:
             category, confidence = classify(recall.reason_text)

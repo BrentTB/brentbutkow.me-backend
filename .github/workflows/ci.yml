@@ -1,0 +1,42 @@
+name: CI
+
+# Server-side mirror of the local pre-commit gate (ruff · format · mypy · pytest), so the bar is
+# enforced on every push/PR and not just on machines that ran `pre-commit install`.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-type-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        # Constraints pin the ML stack to the versions the committed model pickle was built with.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" -c constraints.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Type check
+        run: mypy app scripts
+
+      # Service integration tests skip without TEST_DATABASE_URL, so the suite runs database-free.
+      - name: Tests
+        run: pytest -q

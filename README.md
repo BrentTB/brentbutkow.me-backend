@@ -16,7 +16,7 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda (fetch+normalize+validate) · categorize · service · router
+  modules/recalls/ schemas · models · openfda (fetch+normalize+validate) · categorize · classifier (+ model/) · service · router
 scripts/ingest.py  manual ingest entrypoint
 tests/             categorize · openfda · routes (TestClient, no DB)
 ```
@@ -26,8 +26,8 @@ tests/             categorize · openfda · routes (TestClient, no DB)
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&category&classification&since` | paginated list → `{ items, total }` |
-| GET | `/recalls/stats` | `{ total, byCategory, byMonth, lastIngestAt }` |
+| GET | `/recalls?limit&offset&category&classification&state&company&since` | paginated list → `{ items, total }` |
+| GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, lastIngestAt }` |
 | POST | `/recalls/ingest` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · other`. `classification` ∈
@@ -55,6 +55,8 @@ alembic upgrade head                         # create / update tables (migration
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
 python -m scripts.ingest                     # pull the latest recalls into the DB
 python -m scripts.backfill                   # one-time: seed full history (~26k records)
+python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
+python -m scripts.reclassify                 # re-run the trained model over stored recalls (after training)
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format

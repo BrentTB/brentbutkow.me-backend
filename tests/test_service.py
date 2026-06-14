@@ -101,15 +101,24 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
                 reason_for_recall="undeclared milk",
                 classification="Class I",
                 report_date="20240101",
+                state="CA",
+                recalling_firm="Acme Foods",
             ),
             _record(
                 "A-2",
                 reason_for_recall="listeria",
                 classification="Class II",
                 report_date="20240301",
+                state="NY",
+                recalling_firm="Beta Bakery",
             ),
             _record(
-                "A-3", reason_for_recall="metal", classification="Class I", report_date="20240201"
+                "A-3",
+                reason_for_recall="metal",
+                classification="Class I",
+                report_date="20240201",
+                state="CA",
+                recalling_firm="Acme Foods",
             ),
         ],
     )
@@ -126,6 +135,13 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
 
     class_i = service.list_recalls(session, limit=50, offset=0, classification="Class I")
     assert {i.recall_number for i in class_i.items} == {"A-1", "A-3"}
+
+    in_ca = service.list_recalls(session, limit=50, offset=0, state="CA")
+    assert {i.recall_number for i in in_ca.items} == {"A-1", "A-3"}
+
+    # company is a case-insensitive partial match
+    acme = service.list_recalls(session, limit=50, offset=0, company="acme")
+    assert {i.recall_number for i in acme.items} == {"A-1", "A-3"}
 
     recent = service.list_recalls(session, limit=50, offset=0, since=date(2024, 2, 1))
     assert {i.recall_number for i in recent.items} == {"A-2", "A-3"}

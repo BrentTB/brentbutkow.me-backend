@@ -38,7 +38,10 @@ def get_recalls(
     classification: RecallClass | None = Query(
         default=None, description="Filter by FDA recall classification."
     ),
-    state: str | None = Query(default=None, description="Filter by the recalling firm's state."),
+    state: str | None = Query(
+        default=None,
+        description="Recalling firm's state — exact match on the 2-letter code (e.g. CA).",
+    ),
     company: str | None = Query(
         default=None, description="Filter by company name (case-insensitive partial match)."
     ),
@@ -64,7 +67,10 @@ def get_recalls(
     "/stats",
     response_model=RecallStats,
     summary="Aggregate stats",
-    description="Totals, counts by category and by month, and the last successful ingest time.",
+    description=(
+        "Totals, counts by category, month, classification, state, and company, "
+        "plus the last successful ingest time."
+    ),
     responses=_RATE_LIMITED,
 )
 def recall_stats(response: Response, session: Session = Depends(get_session)) -> RecallStats:
