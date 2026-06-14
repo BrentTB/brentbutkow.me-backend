@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     database_url: str
     ingest_bearer_token: str
     allowed_origin: str = "http://localhost:5173"
+    # Optional regex matched in *addition* to allowed_origin, for origins whose hostname is not
+    # fixed (e.g. Vercel preview deploys, where the subdomain changes per deployment). Anchor it
+    # to your own scope — a blanket *.vercel.app would let any site on Vercel read the API.
+    allowed_origin_regex: str | None = None
     openfda_api_key: str | None = None
     # Number of trusted reverse-proxy hops in front of the app. 0 = direct connections
     # (local/Docker): rate-limit by the peer IP. In production behind a proxy (e.g. Render = 1),
