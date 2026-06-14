@@ -11,9 +11,10 @@ from app.modules.recalls.schemas import (
     RecallCategory,
     RecallClass,
     RecallListResult,
+    RecallSource,
     RecallStats,
 )
-from app.modules.recalls.service import get_stats, list_recalls, run_ingest
+from app.modules.recalls.service import get_stats, list_recalls, run_fsis_ingest, run_ingest
 
 router = APIRouter()
 
@@ -36,11 +37,14 @@ def get_recalls(
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
-        default=None, description="Filter by FDA recall classification."
+        default=None, description="Filter by recall classification (incl. Public Health Alert)."
+    ),
+    source: RecallSource | None = Query(
+        default=None, description="Filter by data source: fda (openFDA) or usda (FSIS)."
     ),
     state: str | None = Query(
         default=None,
-        description="Recalling firm's state — exact match on the 2-letter code (e.g. CA).",
+        description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
     ),
     company: str | None = Query(
         default=None, description="Filter by company name (case-insensitive partial match)."
@@ -60,6 +64,7 @@ def get_recalls(
         session,
         limit=limit,
         offset=offset,
+        source=source.value if source else None,
         category=category.value if category else None,
         classification=classification.value if classification else None,
         state=state,
@@ -94,3 +99,18 @@ def recall_stats(response: Response, session: Session = Depends(get_session)) ->
 )
 def ingest(session: Session = Depends(get_session)) -> IngestResult:
     return run_ingest(session)
+
+
+@router.post(
+    "/ingest/fsis",
+    response_model=IngestResult,
+    summary="Trigger a USDA FSIS ingest",
+    description=(
+        "Fetches the latest recalls + public health alerts from USDA FSIS and upserts them. "
+        "Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
+    return run_fsis_ingest(session)

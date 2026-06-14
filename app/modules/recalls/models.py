@@ -18,7 +18,9 @@ _SEARCH_EXPR = (
 class Recall(Base):
     __tablename__ = "recalls"
 
+    source: Mapped[str] = mapped_column(Text, primary_key=True, server_default="fda")
     recall_number: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_url: Mapped[str | None] = mapped_column(Text)
     event_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(Text)
     classification: Mapped[str | None] = mapped_column(Text)
@@ -26,6 +28,11 @@ class Recall(Base):
     reason_text: Mapped[str] = mapped_column(Text)
     company_name: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str | None] = mapped_column(Text)
+    # Affected-state codes for the map / state filter. FDA = [recalling-firm state]; FSIS = the
+    # (often multiple) distribution states. `state` keeps the single display value.
+    # none_as_null so a Python None is stored as SQL NULL, not a JSON 'null' scalar (which would
+    # break jsonb_array_elements_text in the by-state aggregation).
+    states: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     distribution_pattern: Mapped[str | None] = mapped_column(Text)
     recall_initiation_date: Mapped[date | None] = mapped_column(Date)
     # Indexed: report_date backs the default ordering + `since` filter + monthly stats; category

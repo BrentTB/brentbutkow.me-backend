@@ -27,15 +27,17 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&category&classification&state&company&since` | paginated list → `{ items, total }` |
-| GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, lastIngestAt }` |
+| GET | `/recalls?limit&offset&category&classification&source&state&company&since&search` | paginated list → `{ items, total }` |
+| GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, lastIngestAt }` |
 | POST | `/recalls/ingest` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
+| POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · other`. `classification` ∈
-`Class I · Class II · Class III`. Public reads are rate-limited (60/min per IP); `POST /contact` is
-limited to 5/min per IP. FastAPI also serves interactive API docs at `/docs`.
+`Class I · Class II · Class III · Public Health Alert`. `source` ∈ `fda · usda`. `state` matches any
+affected state; `search` is Postgres full-text over product/reason/company. Public reads are
+rate-limited (60/min per IP); `POST /contact` is limited to 5/min per IP. Interactive docs at `/docs`.
 
 ## Local development
 
@@ -56,8 +58,9 @@ cp .env.example .env               # set DATABASE_URL + INGEST_BEARER_TOKEN
 # point DATABASE_URL at a local Postgres (any instance), create that database, then:
 alembic upgrade head                         # create / update tables (migrations)
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
-python -m scripts.ingest                     # pull the latest recalls into the DB
-python -m scripts.backfill                   # one-time: seed full history (~26k records)
+python -m scripts.ingest                     # pull the latest openFDA recalls into the DB
+python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (via curl_cffi)
+python -m scripts.backfill                   # one-time: seed full openFDA history (~26k records)
 python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
 python -m scripts.reclassify                 # re-run the trained model over stored recalls (after training)
 
@@ -70,6 +73,10 @@ git config core.hooksPath .githooks # one-time: gate commits on ruff + mypy + py
 Schema is managed by **Alembic**: `alembic upgrade head` creates/updates the tables. After changing a
 model, generate a migration with `alembic revision --autogenerate -m "describe change"`, review it, and
 commit it. (Docker and deploys run `alembic upgrade head` automatically on start.)
+
+> **USDA FSIS ingest:** FSIS sits behind Akamai, which 403s plain Python HTTP clients by TLS
+> fingerprint. The ingest uses `curl_cffi` (browser-impersonating TLS), so it works from any host —
+> the deploy and the daily job included. No proxy needed.
 
 ### Docker (app + Postgres)
 

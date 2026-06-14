@@ -19,30 +19,36 @@ class RecallClass(StrEnum):
     class_i = "Class I"
     class_ii = "Class II"
     class_iii = "Class III"
+    public_health_alert = "Public Health Alert"
+
+
+class RecallSource(StrEnum):
+    fda = "fda"
+    usda = "usda"
 
 
 class RecallOut(CamelModel):
+    source: RecallSource = Field(description="Data source: fda (openFDA) or usda (FSIS).")
     recall_number: str = Field(
-        description="openFDA recall number (unique).", examples=["F-1421-2026"]
+        description="Recall number, unique per source.", examples=["007-2026"]
     )
-    status: str | None = Field(description="openFDA status, e.g. Ongoing or Terminated.")
-    classification: RecallClass | None = Field(description="FDA recall class (severity).")
+    source_url: str | None = Field(
+        description="Canonical recall page — FSIS provides one; FDA does not."
+    )
+    status: str | None = Field(description="Status (FDA: Ongoing/Terminated; FSIS: Active/Closed).")
+    classification: RecallClass | None = Field(
+        description="Recall class (severity), or Public Health Alert."
+    )
     product_description: str = Field(description="The recalled product.")
-    reason_text: str = Field(description="Why it was recalled (openFDA reason text).")
-    company_name: str | None = Field(description="Recalling firm.")
-    state: str | None = Field(description="Recalling firm's state.")
+    reason_text: str = Field(description="Why it was recalled.")
+    company_name: str | None = Field(description="Recalling firm / establishment.")
+    state: str | None = Field(description="Single recalling-firm / primary state.")
+    states: list[str] | None = Field(description="All affected-state codes (used by the map).")
     distribution_pattern: str | None = Field(description="Where the product was distributed.")
     recall_initiation_date: date | None = Field(description="When the recall began.")
-    report_date: date | None = Field(description="When openFDA reported it.")
-    category: RecallCategory = Field(
-        description="Predicted cause category from the recall classifier."
-    )
-    category_confidence: float = Field(
-        description=(
-            "Classifier confidence in [0, 1]: the model's predicted probability for the chosen "
-            "category, or 1.0/0.0 from the keyword fallback when no model is loaded."
-        )
-    )
+    report_date: date | None = Field(description="When it was reported.")
+    category: RecallCategory = Field(description="Predicted cause category from the classifier.")
+    category_confidence: float = Field(description="Classifier confidence in [0, 1].")
 
 
 class RecallListResult(CamelModel):
@@ -72,6 +78,7 @@ class RecallStats(CamelModel):
     by_classification: list[LabelCount]
     by_state: list[LabelCount]
     by_company: list[LabelCount]
+    by_source: list[LabelCount]
     last_ingest_at: datetime | None
 
 

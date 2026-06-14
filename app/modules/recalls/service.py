@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select
@@ -5,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
 from app.modules.recalls.models import IngestRun, Recall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -23,6 +25,27 @@ _UPSERT_CHUNK = 500
 # How many rows to return for the high-cardinality company breakdown.
 _TOP_N = 15
 
+# Recalls are identified by (source, recall_number) — the dedupe + upsert conflict key.
+_CONFLICT_KEYS = ("source", "recall_number")
+
+
+def _dedupe(rows: Iterable[dict]) -> list[dict]:
+    # Keep the last row per identity so a multi-row upsert can't touch the same PK twice.
+    return list({(r["source"], r["recall_number"]): r for r in rows}.values())
+
+
+def _upsert_recalls(session: Session, rows: list[dict]) -> None:
+    for start in range(0, len(rows), _UPSERT_CHUNK):
+        chunk = rows[start : start + _UPSERT_CHUNK]
+        insert_stmt = pg_insert(Recall).values(chunk)
+        update_set = {
+            key: insert_stmt.excluded[key] for key in chunk[0] if key not in _CONFLICT_KEYS
+        }
+        update_set["updated_at"] = datetime.now(UTC)
+        session.execute(
+            insert_stmt.on_conflict_do_update(index_elements=list(_CONFLICT_KEYS), set_=update_set)
+        )
+
 
 def _redact_secrets(message: str) -> str:
     # httpx exception strings embed the request URL, which carries ?api_key=<secret>.
@@ -36,6 +59,7 @@ def list_recalls(
     *,
     limit: int,
     offset: int,
+    source: str | None = None,
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
@@ -47,12 +71,15 @@ def list_recalls(
     search = search.strip() if search else None
 
     conditions = []
+    if source:
+        conditions.append(Recall.source == source)
     if category:
         conditions.append(Recall.category == category)
     if classification:
         conditions.append(Recall.classification == classification)
     if state:
-        conditions.append(Recall.state == state)
+        # `states` is the array of affected states; match if it contains the requested code.
+        conditions.append(Recall.states.contains([state]))
     if company:
         # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
         # slowly — a few new openFDA recalls a day on top of the initial ~26k-row backfill — so it
@@ -103,12 +130,16 @@ def get_stats(session: Session) -> RecallStats:
         .group_by(Recall.classification)
         .order_by(Recall.classification)
     ).all()
-    # All states (bounded set ~51) so the frontend map can render every tile;
-    # the leaderboard slices this to its top rows client-side.
+    # Count each affected state by unnesting the `states` array, so a multi-state FSIS recall
+    # counts toward every state it touches. Bounded set (~50) — the leaderboard slices it.
+    states_elem = func.jsonb_array_elements_text(Recall.states).table_valued(
+        "value", joins_implicitly=True
+    )
     by_state = session.execute(
-        select(Recall.state, func.count())
-        .where(Recall.state.is_not(None))
-        .group_by(Recall.state)
+        select(states_elem.c.value, func.count())
+        .select_from(Recall, states_elem)
+        .where(func.jsonb_typeof(Recall.states) == "array")
+        .group_by(states_elem.c.value)
         .order_by(func.count().desc())
     ).all()
     by_company = session.execute(
@@ -117,6 +148,9 @@ def get_stats(session: Session) -> RecallStats:
         .group_by(Recall.company_name)
         .order_by(func.count().desc())
         .limit(_TOP_N)
+    ).all()
+    by_source = session.execute(
+        select(Recall.source, func.count()).group_by(Recall.source).order_by(func.count().desc())
     ).all()
 
     total = session.scalar(select(func.count()).select_from(Recall)) or 0
@@ -138,8 +172,33 @@ def get_stats(session: Session) -> RecallStats:
         ],
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
+        by_source=[LabelCount(label=label, count=count) for label, count in by_source],
         last_ingest_at=last_ingest_at,
     )
+
+
+def run_fsis_ingest(session: Session) -> IngestResult:
+    run = IngestRun(source="usda_fsis", status="running")
+    session.add(run)
+    session.commit()
+    try:
+        records = fetch_fsis()
+        rows = _dedupe(normalize_fsis(record) for record in records)
+        _upsert_recalls(session, rows)
+        run.finished_at = datetime.now(UTC)
+        run.fetched_count = len(records)
+        run.upserted_count = len(rows)
+        run.status = "ok"
+        session.commit()
+        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
+    except Exception as exc:
+        session.rollback()
+        run.status = "error"
+        run.finished_at = datetime.now(UTC)
+        run.error_text = str(exc)[:2000]
+        session.add(run)
+        session.commit()
+        raise
 
 
 def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
@@ -149,18 +208,8 @@ def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
 
     try:
         records = fetch_enforcement(limit)
-        # Dedupe within the batch (keep last) so a multi-row upsert can't touch the same PK twice.
-        rows = list({r["recall_number"]: r for r in map(normalize_recall, records)}.values())
-        for start in range(0, len(rows), _UPSERT_CHUNK):
-            chunk = rows[start : start + _UPSERT_CHUNK]
-            insert_stmt = pg_insert(Recall).values(chunk)
-            update_set = {
-                key: insert_stmt.excluded[key] for key in chunk[0] if key != "recall_number"
-            }
-            update_set["updated_at"] = datetime.now(UTC)
-            session.execute(
-                insert_stmt.on_conflict_do_update(index_elements=["recall_number"], set_=update_set)
-            )
+        rows = _dedupe(map(normalize_recall, records))
+        _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)
         run.upserted_count = len(rows)
