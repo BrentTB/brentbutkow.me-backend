@@ -1,0 +1,37 @@
+# Local dev: app + Postgres in one command — `docker compose up --build`.
+# Self-contained — the api reaches Postgres internally as `db:5432`, so no host
+# networking and no external database needed.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: recall_radar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d recall_radar']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # ports:
+    #   - '5434:5432'   # uncomment to reach the DB from host tools (5434 avoids a standalone pg on 5433)
+
+  api:
+    build: .
+    # Reads all config from .env (copy .env.example → .env first)...
+    env_file:
+      - .env
+    environment:
+      # ...but force the app at the bundled Postgres — `environment` overrides `env_file`,
+      # so any DATABASE_URL in .env is ignored here. (Comment this out to use .env's DATABASE_URL.)
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/recall_radar
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
