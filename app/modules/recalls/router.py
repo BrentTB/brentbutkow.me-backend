@@ -10,11 +10,18 @@ from app.modules.recalls.schemas import (
     IngestResult,
     RecallCategory,
     RecallClass,
+    RecallCountry,
     RecallListResult,
     RecallSource,
     RecallStats,
 )
-from app.modules.recalls.service import get_stats, list_recalls, run_fsis_ingest, run_ingest
+from app.modules.recalls.service import (
+    get_stats,
+    list_recalls,
+    run_fsis_ingest,
+    run_ingest,
+    run_uk_ingest,
+)
 
 router = APIRouter()
 
@@ -35,12 +42,13 @@ def get_recalls(
     session: Session = Depends(get_session),
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
+    country: RecallCountry | None = Query(default=None, description="Filter by country: us or uk."),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
-        default=None, description="Filter by recall classification (incl. Public Health Alert)."
+        default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda (openFDA) or usda (FSIS)."
+        default=None, description="Filter by data source: fda, usda, or uk."
     ),
     state: str | None = Query(
         default=None,
@@ -64,6 +72,7 @@ def get_recalls(
         session,
         limit=limit,
         offset=offset,
+        country=country.value if country else None,
         source=source.value if source else None,
         category=category.value if category else None,
         classification=classification.value if classification else None,
@@ -84,13 +93,17 @@ def get_recalls(
     ),
     responses=_RATE_LIMITED,
 )
-def recall_stats(response: Response, session: Session = Depends(get_session)) -> RecallStats:
+def recall_stats(
+    response: Response,
+    session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope stats to a country."),
+) -> RecallStats:
     response.headers["Cache-Control"] = "public, max-age=300"
-    return get_stats(session)
+    return get_stats(session, country.value if country else None)
 
 
 @router.post(
-    "/ingest",
+    "/ingest/fda",
     response_model=IngestResult,
     summary="Trigger an openFDA ingest",
     description="Fetches the latest recalls from openFDA and upserts them. Bearer-protected.",
@@ -114,3 +127,17 @@ def ingest(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
     return run_fsis_ingest(session)
+
+
+@router.post(
+    "/ingest/uk",
+    response_model=IngestResult,
+    summary="Trigger a UK FSA ingest",
+    description=(
+        "Fetches the latest food alerts from the UK FSA and upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
+    return run_uk_ingest(session)

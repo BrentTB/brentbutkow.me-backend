@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
 from app.modules.recalls.models import IngestRun, Recall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
@@ -27,6 +28,9 @@ _TOP_N = 15
 
 # Recalls are identified by (source, recall_number) — the dedupe + upsert conflict key.
 _CONFLICT_KEYS = ("source", "recall_number")
+
+# Which ingest sources belong to each country — scopes the "last updated" timestamp.
+_COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
 
 
 def _dedupe(rows: Iterable[dict]) -> list[dict]:
@@ -59,6 +63,7 @@ def list_recalls(
     *,
     limit: int,
     offset: int,
+    country: str | None = None,
     source: str | None = None,
     category: str | None = None,
     classification: str | None = None,
@@ -71,6 +76,8 @@ def list_recalls(
     search = search.strip() if search else None
 
     conditions = []
+    if country:
+        conditions.append(Recall.country == country)
     if source:
         conditions.append(Recall.source == source)
     if category:
@@ -111,24 +118,32 @@ def list_recalls(
     return RecallListResult(items=[RecallOut.model_validate(row) for row in rows], total=total)
 
 
-def get_stats(session: Session) -> RecallStats:
+def get_stats(session: Session, country: str | None = None) -> RecallStats:
+    def scoped(stmt):
+        # US and UK are shown separately, so every aggregation is scoped to the chosen country.
+        return stmt.where(Recall.country == country) if country else stmt
+
     by_category = session.execute(
-        select(Recall.category, func.count()).group_by(Recall.category)
+        scoped(select(Recall.category, func.count()).group_by(Recall.category))
     ).all()
 
     month = func.to_char(Recall.report_date, "YYYY-MM")
     by_month = session.execute(
-        select(month.label("month"), func.count())
-        .where(Recall.report_date.is_not(None))
-        .group_by(month)
-        .order_by(month)
+        scoped(
+            select(month.label("month"), func.count())
+            .where(Recall.report_date.is_not(None))
+            .group_by(month)
+            .order_by(month)
+        )
     ).all()
 
     by_classification = session.execute(
-        select(Recall.classification, func.count())
-        .where(Recall.classification.is_not(None))
-        .group_by(Recall.classification)
-        .order_by(Recall.classification)
+        scoped(
+            select(Recall.classification, func.count())
+            .where(Recall.classification.is_not(None))
+            .group_by(Recall.classification)
+            .order_by(Recall.classification)
+        )
     ).all()
     # Count each affected state by unnesting the `states` array, so a multi-state FSIS recall
     # counts toward every state it touches. Bounded set (~50) — the leaderboard slices it.
@@ -136,30 +151,37 @@ def get_stats(session: Session) -> RecallStats:
         "value", joins_implicitly=True
     )
     by_state = session.execute(
-        select(states_elem.c.value, func.count())
-        .select_from(Recall, states_elem)
-        .where(func.jsonb_typeof(Recall.states) == "array")
-        .group_by(states_elem.c.value)
-        .order_by(func.count().desc())
+        scoped(
+            select(states_elem.c.value, func.count())
+            .select_from(Recall, states_elem)
+            .where(func.jsonb_typeof(Recall.states) == "array")
+            .group_by(states_elem.c.value)
+            .order_by(func.count().desc())
+        )
     ).all()
     by_company = session.execute(
-        select(Recall.company_name, func.count())
-        .where(Recall.company_name.is_not(None))
-        .group_by(Recall.company_name)
-        .order_by(func.count().desc())
-        .limit(_TOP_N)
+        scoped(
+            select(Recall.company_name, func.count())
+            .where(Recall.company_name.is_not(None))
+            .group_by(Recall.company_name)
+            .order_by(func.count().desc())
+            .limit(_TOP_N)
+        )
     ).all()
     by_source = session.execute(
-        select(Recall.source, func.count()).group_by(Recall.source).order_by(func.count().desc())
+        scoped(
+            select(Recall.source, func.count())
+            .group_by(Recall.source)
+            .order_by(func.count().desc())
+        )
     ).all()
 
-    total = session.scalar(select(func.count()).select_from(Recall)) or 0
-    last_ingest_at = session.scalar(
-        select(IngestRun.finished_at)
-        .where(IngestRun.status == "ok")
-        .order_by(IngestRun.finished_at.desc())
-        .limit(1)
-    )
+    total = session.scalar(scoped(select(func.count()).select_from(Recall))) or 0
+
+    ingest_stmt = select(IngestRun.finished_at).where(IngestRun.status == "ok")
+    if country:
+        ingest_stmt = ingest_stmt.where(IngestRun.source.in_(_COUNTRY_SOURCES.get(country, ())))
+    last_ingest_at = session.scalar(ingest_stmt.order_by(IngestRun.finished_at.desc()).limit(1))
 
     return RecallStats(
         total=total,
@@ -184,6 +206,30 @@ def run_fsis_ingest(session: Session) -> IngestResult:
     try:
         records = fetch_fsis()
         rows = _dedupe(normalize_fsis(record) for record in records)
+        _upsert_recalls(session, rows)
+        run.finished_at = datetime.now(UTC)
+        run.fetched_count = len(records)
+        run.upserted_count = len(rows)
+        run.status = "ok"
+        session.commit()
+        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
+    except Exception as exc:
+        session.rollback()
+        run.status = "error"
+        run.finished_at = datetime.now(UTC)
+        run.error_text = str(exc)[:2000]
+        session.add(run)
+        session.commit()
+        raise
+
+
+def run_uk_ingest(session: Session) -> IngestResult:
+    run = IngestRun(source="uk_fsa", status="running")
+    session.add(run)
+    session.commit()
+    try:
+        records = fetch_fsa()
+        rows = _dedupe(normalize_fsa(record) for record in records)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)

@@ -16,19 +16,31 @@ class RecallCategory(StrEnum):
 
 
 class RecallClass(StrEnum):
+    # US — FDA severity classes + FSIS public-health alerts.
     class_i = "Class I"
     class_ii = "Class II"
     class_iii = "Class III"
     public_health_alert = "Public Health Alert"
+    # UK — FSA alert types.
+    product_recall = "Product Recall"
+    allergy_alert = "Allergy Alert"
+    food_alert_for_action = "Food Alert for Action"
 
 
 class RecallSource(StrEnum):
     fda = "fda"
     usda = "usda"
+    uk = "uk"
+
+
+class RecallCountry(StrEnum):
+    us = "us"
+    uk = "uk"
 
 
 class RecallOut(CamelModel):
-    source: RecallSource = Field(description="Data source: fda (openFDA) or usda (FSIS).")
+    country: RecallCountry = Field(description="Country the recall is from: us or uk.")
+    source: RecallSource = Field(description="Data source: fda (openFDA), usda (FSIS), uk (FSA).")
     recall_number: str = Field(
         description="Recall number, unique per source.", examples=["007-2026"]
     )
@@ -37,7 +49,7 @@ class RecallOut(CamelModel):
     )
     status: str | None = Field(description="Status (FDA: Ongoing/Terminated; FSIS: Active/Closed).")
     classification: RecallClass | None = Field(
-        description="Recall class (severity), or Public Health Alert."
+        description="Recall class / alert type (US: Class I-III, PHA; UK: PRIN/AA/FAFA)."
     )
     product_description: str = Field(description="The recalled product.")
     reason_text: str = Field(description="Why it was recalled.")

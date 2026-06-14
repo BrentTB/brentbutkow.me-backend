@@ -19,6 +19,7 @@ class Recall(Base):
     __tablename__ = "recalls"
 
     source: Mapped[str] = mapped_column(Text, primary_key=True, server_default="fda")
+    country: Mapped[str] = mapped_column(Text, server_default="us", index=True)
     recall_number: Mapped[str] = mapped_column(Text, primary_key=True)
     source_url: Mapped[str | None] = mapped_column(Text)
     event_id: Mapped[str | None] = mapped_column(Text)

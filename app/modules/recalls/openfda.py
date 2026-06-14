@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.modules.recalls.classifier import classify
-from app.modules.recalls.schemas import RecallClass, RecallSource
+from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
 
 ENDPOINT = "https://api.fda.gov/food/enforcement.json"
 _VALID_CLASSES = {c.value for c in RecallClass}
@@ -50,6 +50,7 @@ def normalize_recall(record: OpenFdaRecord) -> dict:
     category, confidence = classify(reason_text)
     return {
         "source": RecallSource.fda.value,
+        "country": RecallCountry.us.value,
         "recall_number": record.recall_number,
         "source_url": None,
         "event_id": record.event_id,

@@ -29,7 +29,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | GET | `/health` | liveness (no DB hit) |
 | GET | `/recalls?limit&offset&category&classification&source&state&company&since&search` | paginated list → `{ items, total }` |
 | GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, lastIngestAt }` |
-| POST | `/recalls/ingest` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
+| POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |

@@ -6,7 +6,7 @@ from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
-from app.modules.recalls.schemas import RecallClass, RecallSource
+from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
 
 # FSIS sits behind Akamai, which 403s non-browser TLS fingerprints (plain httpx/requests, any IP).
 # curl_cffi impersonates a real browser's TLS handshake, so the request gets through.
@@ -137,6 +137,7 @@ def normalize_fsis(record: FsisRecord) -> dict:
     recall_date = _parse_date(record.field_recall_date)
     return {
         "source": RecallSource.usda.value,
+        "country": RecallCountry.us.value,
         "recall_number": record.field_recall_number,
         "source_url": record.field_recall_url,
         "event_id": None,
