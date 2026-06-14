@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,10 @@ class Settings(BaseSettings):
     database_url: str
     ingest_bearer_token: str
     allowed_origin: str = "http://localhost:5173"
+    # Optional regex matched in *addition* to allowed_origin, for origins whose hostname is not
+    # fixed (e.g. Vercel preview deploys, where the subdomain changes per deployment). Anchor it
+    # to your own scope — a blanket *.vercel.app would let any site on Vercel read the API.
+    allowed_origin_regex: str | None = None
     openfda_api_key: str | None = None
     # Number of trusted reverse-proxy hops in front of the app. 0 = direct connections
     # (local/Docker): rate-limit by the peer IP. In production behind a proxy (e.g. Render = 1),
@@ -14,6 +19,13 @@ class Settings(BaseSettings):
     # instead of every request sharing the proxy's IP. Never trust XFF when this is 0 — a client
     # can forge the header, so an unset value must fall back to the direct peer.
     trusted_proxy_hops: int = 0
+
+    @field_validator("allowed_origin_regex", mode="after")
+    @classmethod
+    def _blank_regex_is_none(cls, value: str | None) -> str | None:
+        # `ALLOWED_ORIGIN_REGEX=` (blank) loads as "", which Starlette would compile into an empty
+        # regex run uselessly on every request; treat blank as unset so the None path applies.
+        return value if value and value.strip() else None
 
     @property
     def origins(self) -> list[str]:
