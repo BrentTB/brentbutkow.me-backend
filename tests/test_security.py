@@ -4,8 +4,8 @@ from starlette.requests import Request
 
 from app.auth import require_bearer
 from app.config import settings
-from app.main import client_ip
 from app.modules.recalls import service
+from app.rate_limit import client_ip
 
 
 def _request(headers: dict[str, str], peer: str = "10.0.0.1") -> Request:
