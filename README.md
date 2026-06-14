@@ -1,9 +1,9 @@
 # brentbutkow.me-backend
 
 General-purpose backend for [brentbutkow.me](https://brentbutkow.me). Modular — each feature is a
-self-contained package under `app/modules/`. First module: **Recall Radar**, a US food-recall API that
-ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) data, categorises it, and serves it to
-the site.
+self-contained package under `app/modules/`. First module: **Recall Radar**, a US + UK food-recall API
+that ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US) plus UK
+[FSA](https://data.food.gov.uk/food-alerts/) data, categorises it, and serves it to the site.
 
 **Stack:** FastAPI · SQLAlchemy 2.0 + Postgres · Pydantic v2 · pytest + ruff. Python is snake_case
 throughout; the API emits **camelCase JSON** via Pydantic aliases.
@@ -16,9 +16,9 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda (fetch+normalize+validate) · categorize · classifier (+ model/) · service · router
+  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
-scripts/ingest.py  manual ingest entrypoint
+scripts/           manual ingest (openFDA · FSIS · UK FSA) · backfill · classifier training
 tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
 ```
 
@@ -27,15 +27,17 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&category&classification&source&state&company&since&search` | paginated list → `{ items, total }` |
-| GET | `/recalls/stats` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, lastIngestAt }` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&since&search` | paginated list → `{ items, total }` |
+| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, lastIngestAt }` |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
+| POST | `/recalls/ingest/uk` | **bearer-only** — fetches UK FSA, upserts, records an ingest run |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · other`. `classification` ∈
-`Class I · Class II · Class III · Public Health Alert`. `source` ∈ `fda · usda`. `state` matches any
+`Class I · Class II · Class III · Public Health Alert` (US) · `Product Recall · Allergy Alert · Food
+Alert for Action` (UK). `country` ∈ `us · uk`; `source` ∈ `fda · usda · uk`. `state` matches any
 affected state; `search` is Postgres full-text over product/reason/company. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min per IP. Interactive docs at `/docs`.
 
@@ -60,6 +62,7 @@ alembic upgrade head                         # create / update tables (migration
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
 python -m scripts.ingest                     # pull the latest openFDA recalls into the DB
 python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (via curl_cffi)
+python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
 python -m scripts.backfill                   # one-time: seed full openFDA history (~26k records)
 python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
 python -m scripts.reclassify                 # re-run the trained model over stored recalls (after training)
@@ -96,7 +99,7 @@ docker compose down         # stop (add -v to also wipe the DB)
 | Var | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | ✅ | Postgres connection string. `postgresql://` or `postgres://` both work — the app normalizes to the psycopg driver. |
-| `INGEST_BEARER_TOKEN` | ✅ | Guards `POST /recalls/ingest`. Generate with `openssl rand -hex 32`. |
+| `INGEST_BEARER_TOKEN` | ✅ | Guards the `POST /recalls/ingest/*` endpoints. Generate with `openssl rand -hex 32`. |
 | `ALLOWED_ORIGIN` | – | CORS origin(s), comma-separated. Defaults to `http://localhost:5173`. |
 | `ALLOWED_ORIGIN_REGEX` | – | Optional regex matched in addition to `ALLOWED_ORIGIN`, for origins whose subdomain changes per deploy (e.g. Vercel previews). Anchor it to your own scope — never a blanket `*.vercel.app`. |
 | `PORT` | – | Server port. Defaults to `3000`. |

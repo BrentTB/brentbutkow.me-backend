@@ -1,13 +1,15 @@
-from datetime import date
-
 from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
+from app.modules.recalls.normalize import NormalizedRecall, parse_iso_date
 from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
 
 ENDPOINT = "https://data.food.gov.uk/food-alerts/id"
 _PAGE = 200  # FSA paginates via _limit/_offset
+# Safety ceiling on pagination. The live dataset (alerts since 2018) is a few thousand rows, so this
+# is huge headroom — it exists only so an endpoint that ignores `_offset` can't loop/OOM forever.
+_MAX_OFFSET = 20_000
 
 # FSA alert type (last path segment of the non-Alert `type` URI) → our classification value.
 _TYPE_CLASS = {
@@ -52,15 +54,6 @@ class FsaRecord(BaseModel):
     productDetails: list[FsaProduct] = []
 
 
-def _parse_date(raw: str | None) -> date | None:
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(raw[:10])
-    except ValueError:
-        return None
-
-
 def _classification(type_uris: list[str]) -> str | None:
     for uri in type_uris:
         code = uri.rsplit("/", 1)[-1]
@@ -69,13 +62,13 @@ def _classification(type_uris: list[str]) -> str | None:
     return None
 
 
-def normalize_fsa(record: FsaRecord) -> dict:
+def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
     reason_text = " ".join(p.riskStatement for p in record.problem if p.riskStatement).strip()
     if not reason_text:
         reason_text = record.title
     category, confidence = classify(reason_text)
     product = " / ".join(p.productName for p in record.productDetails if p.productName)
-    created = _parse_date(record.created)
+    created = parse_iso_date(record.created)
     return {
         "source": RecallSource.uk.value,
         "country": RecallCountry.uk.value,
@@ -103,7 +96,7 @@ def normalize_fsa(record: FsaRecord) -> dict:
 def fetch_fsa() -> list[FsaRecord]:
     records: list[FsaRecord] = []
     offset = 0
-    while True:
+    while offset <= _MAX_OFFSET:
         response = curl_requests.get(
             ENDPOINT,
             params={"_limit": _PAGE, "_offset": offset},

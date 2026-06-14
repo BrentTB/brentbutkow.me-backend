@@ -88,7 +88,7 @@ def get_recalls(
     response_model=RecallStats,
     summary="Aggregate stats",
     description=(
-        "Totals, counts by category, month, classification, state, and company, "
+        "Totals, counts by category, month, classification, state, company, and source, "
         "plus the last successful ingest time."
     ),
     responses=_RATE_LIMITED,

@@ -1,17 +1,16 @@
 import html
-from datetime import date
 from html.parser import HTMLParser
 
 from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
-from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
+from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_iso_date
+from app.modules.recalls.schemas import RecallCountry, RecallSource
 
 # FSIS sits behind Akamai, which 403s non-browser TLS fingerprints (plain httpx/requests, any IP).
 # curl_cffi impersonates a real browser's TLS handshake, so the request gets through.
 ENDPOINT = "https://www.fsis.usda.gov/fsis/api/recall/v/1"
-_VALID_CLASSES = {c.value for c in RecallClass}
 
 # FSIS reports affected states by full name; the map/filter key on 2-letter codes.
 _STATE_CODE = {
@@ -112,29 +111,18 @@ def _strip_html(value: str | None) -> str:
     return " ".join(stripper.text.split())
 
 
-def _parse_class(raw: str | None) -> str | None:
-    return raw if raw in _VALID_CLASSES else None
-
-
-def _parse_date(raw: str | None) -> date | None:
-    try:
-        return date.fromisoformat(raw) if raw else None
-    except ValueError:
-        return None
-
-
 def _map_states(names: list[str]) -> list[str] | None:
     codes = [_STATE_CODE[name] for name in names if name in _STATE_CODE]
     return codes or None
 
 
-def normalize_fsis(record: FsisRecord) -> dict:
+def normalize_fsis(record: FsisRecord) -> NormalizedRecall:
     reason_text = ", ".join(record.field_recall_reason).strip() or _strip_html(record.field_summary)
     category, confidence = classify(reason_text)
     states = _map_states(record.field_states)
     product = _strip_html(" / ".join(record.field_product_items)) or _strip_html(record.field_title)
     status = {"True": "Active", "False": "Closed"}.get(record.field_active_notice or "")
-    recall_date = _parse_date(record.field_recall_date)
+    recall_date = parse_iso_date(record.field_recall_date)
     return {
         "source": RecallSource.usda.value,
         "country": RecallCountry.us.value,
@@ -142,7 +130,7 @@ def normalize_fsis(record: FsisRecord) -> dict:
         "source_url": record.field_recall_url,
         "event_id": None,
         "status": status,
-        "classification": _parse_class(record.field_recall_classification),
+        "classification": parse_class(record.field_recall_classification),
         "product_description": product,
         "reason_text": reason_text,
         "company_name": record.field_establishment[0] if record.field_establishment else None,
@@ -159,6 +147,8 @@ def normalize_fsis(record: FsisRecord) -> dict:
 
 
 # FSIS returns the full set in one response (no server-side paging/limit), English + Spanish mixed.
+# We keep only English rows — the Spanish ones mirror them by recall number — so the ingest's
+# `fetched_count` is the post-filter English count, not the raw response row total.
 def fetch_fsis() -> list[FsisRecord]:
     response = curl_requests.get(ENDPOINT, impersonate="chrome", timeout=60)
     response.raise_for_status()

@@ -120,3 +120,33 @@ def test_ingest_with_bearer(monkeypatch):
     res = client.post("/recalls/ingest/fda", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "fetched": 3, "upserted": 3}
+
+
+def test_ingest_fsis_requires_bearer():
+    assert client.post("/recalls/ingest/fsis").status_code == 401
+
+
+def test_ingest_fsis_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_fsis_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 2, "upserted": 2},
+    )
+    res = client.post("/recalls/ingest/fsis", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 2, "upserted": 2}
+
+
+def test_ingest_uk_requires_bearer():
+    assert client.post("/recalls/ingest/uk").status_code == 401
+
+
+def test_ingest_uk_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_uk_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 1, "upserted": 1},
+    )
+    res = client.post("/recalls/ingest/uk", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 1, "upserted": 1}

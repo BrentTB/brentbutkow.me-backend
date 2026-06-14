@@ -1,5 +1,6 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -9,6 +10,7 @@ from app.config import settings
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
 from app.modules.recalls.models import IngestRun, Recall
+from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
     CategoryCount,
@@ -33,16 +35,16 @@ _CONFLICT_KEYS = ("source", "recall_number")
 _COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
 
 
-def _dedupe(rows: Iterable[dict]) -> list[dict]:
+def _dedupe(rows: Iterable[NormalizedRecall]) -> list[NormalizedRecall]:
     # Keep the last row per identity so a multi-row upsert can't touch the same PK twice.
     return list({(r["source"], r["recall_number"]): r for r in rows}.values())
 
 
-def _upsert_recalls(session: Session, rows: list[dict]) -> None:
+def _upsert_recalls(session: Session, rows: list[NormalizedRecall]) -> None:
     for start in range(0, len(rows), _UPSERT_CHUNK):
         chunk = rows[start : start + _UPSERT_CHUNK]
         insert_stmt = pg_insert(Recall).values(chunk)
-        update_set = {
+        update_set: dict[str, Any] = {
             key: insert_stmt.excluded[key] for key in chunk[0] if key not in _CONFLICT_KEYS
         }
         update_set["updated_at"] = datetime.now(UTC)
@@ -199,13 +201,19 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
     )
 
 
-def run_fsis_ingest(session: Session) -> IngestResult:
-    run = IngestRun(source="usda_fsis", status="running")
+def _run_ingest_job(
+    session: Session,
+    *,
+    source: str,
+    fetch: Callable[[], list[Any]],
+    normalize: Callable[[Any], NormalizedRecall],
+) -> IngestResult:
+    run = IngestRun(source=source, status="running")
     session.add(run)
     session.commit()
     try:
-        records = fetch_fsis()
-        rows = _dedupe(normalize_fsis(record) for record in records)
+        records = fetch()
+        rows = _dedupe(normalize(record) for record in records)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)
@@ -217,56 +225,26 @@ def run_fsis_ingest(session: Session) -> IngestResult:
         session.rollback()
         run.status = "error"
         run.finished_at = datetime.now(UTC)
-        run.error_text = str(exc)[:2000]
-        session.add(run)
-        session.commit()
-        raise
-
-
-def run_uk_ingest(session: Session) -> IngestResult:
-    run = IngestRun(source="uk_fsa", status="running")
-    session.add(run)
-    session.commit()
-    try:
-        records = fetch_fsa()
-        rows = _dedupe(normalize_fsa(record) for record in records)
-        _upsert_recalls(session, rows)
-        run.finished_at = datetime.now(UTC)
-        run.fetched_count = len(records)
-        run.upserted_count = len(rows)
-        run.status = "ok"
-        session.commit()
-        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
-    except Exception as exc:
-        session.rollback()
-        run.status = "error"
-        run.finished_at = datetime.now(UTC)
-        run.error_text = str(exc)[:2000]
+        # Redact (openFDA exception strings embed ?api_key) before persisting, then bound the
+        # length — redact-then-slice so a secret straddling the cutoff can't survive.
+        run.error_text = _redact_secrets(str(exc))[:2000]
         session.add(run)
         session.commit()
         raise
 
 
 def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
-    run = IngestRun(source="openfda_food", status="running")
-    session.add(run)
-    session.commit()
+    return _run_ingest_job(
+        session,
+        source="openfda_food",
+        fetch=lambda: fetch_enforcement(limit),
+        normalize=normalize_recall,
+    )
 
-    try:
-        records = fetch_enforcement(limit)
-        rows = _dedupe(map(normalize_recall, records))
-        _upsert_recalls(session, rows)
-        run.finished_at = datetime.now(UTC)
-        run.fetched_count = len(records)
-        run.upserted_count = len(rows)
-        run.status = "ok"
-        session.commit()
-        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
-    except Exception as exc:
-        session.rollback()
-        run.status = "error"
-        run.finished_at = datetime.now(UTC)
-        run.error_text = _redact_secrets(str(exc))
-        session.add(run)
-        session.commit()
-        raise
+
+def run_fsis_ingest(session: Session) -> IngestResult:
+    return _run_ingest_job(session, source="usda_fsis", fetch=fetch_fsis, normalize=normalize_fsis)
+
+
+def run_uk_ingest(session: Session) -> IngestResult:
+    return _run_ingest_job(session, source="uk_fsa", fetch=fetch_fsa, normalize=normalize_fsa)

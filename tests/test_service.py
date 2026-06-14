@@ -17,9 +17,16 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.modules.recalls import service
+from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
+from app.modules.recalls.fsis import FsisRecord
 from app.modules.recalls.models import Recall
 from app.modules.recalls.openfda import OpenFdaRecord
-from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.schemas import (
+    RecallCategory,
+    RecallClass,
+    RecallCountry,
+    RecallSource,
+)
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -57,6 +64,56 @@ def _record(number: str, **fields) -> OpenFdaRecord:
 
 def _patch_fetch(monkeypatch, batch: list[OpenFdaRecord]) -> None:
     monkeypatch.setattr(service, "fetch_enforcement", lambda limit=1000: batch)
+
+
+def _fsis_record(number: str, **fields) -> FsisRecord:
+    return FsisRecord(field_recall_number=number, **fields)
+
+
+def _patch_fsis(monkeypatch, batch: list[FsisRecord]) -> None:
+    monkeypatch.setattr(service, "fetch_fsis", lambda: batch)
+
+
+def _fsa_record(number: str, **fields) -> FsaRecord:
+    return FsaRecord(notation=number, **fields)
+
+
+def _patch_fsa(monkeypatch, batch: list[FsaRecord]) -> None:
+    monkeypatch.setattr(service, "fetch_fsa", lambda: batch)
+
+
+def _seed_multi_source(session, monkeypatch) -> None:
+    # One row per source so country/source/state filters and the by_source/by_state aggregations
+    # all have something distinct to match. D-2 (FSIS) is multi-state to exercise the jsonb unnest.
+    _patch_fetch(
+        monkeypatch,
+        [_record("D-1", reason_for_recall="undeclared milk", state="CA", report_date="20240101")],
+    )
+    service.run_ingest(session)
+    _patch_fsis(
+        monkeypatch,
+        [
+            _fsis_record(
+                "D-2",
+                field_recall_reason=["listeria"],
+                field_states=["California", "Texas"],
+                field_recall_date="2024-02-01",
+            )
+        ],
+    )
+    service.run_fsis_ingest(session)
+    _patch_fsa(
+        monkeypatch,
+        [
+            _fsa_record(
+                "D-3",
+                title="alert",
+                type=["https://data.food.gov.uk/food-alerts/def/PRIN"],
+                created="2024-03-01",
+            )
+        ],
+    )
+    service.run_uk_ingest(session)
 
 
 def test_run_ingest_dedupes_batch_and_upserts(session, monkeypatch):
@@ -208,3 +265,106 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     assert by_month["2024-01"] == 2
     assert by_month["2024-03"] == 1
     assert stats.last_ingest_at is not None
+
+
+def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):
+    _patch_fsis(
+        monkeypatch,
+        [
+            _fsis_record(
+                "F-1",
+                field_recall_reason=["listeria"],
+                field_recall_classification="Class I",
+                field_states=["California", "New York"],
+                field_establishment=["Acme Meats"],
+                field_recall_url="https://www.fsis.usda.gov/recalls/F-1",
+                field_recall_date="2024-02-01",
+                field_active_notice="True",
+            ),
+        ],
+    )
+
+    result = service.run_fsis_ingest(session)
+
+    assert result.fetched == 1
+    assert result.upserted == 1
+    row = session.scalars(select(Recall)).one()
+    assert row.source == RecallSource.usda.value
+    assert row.country == RecallCountry.us.value
+    # Full names map to 2-letter codes; multi-state → no single primary `state`.
+    assert row.states == ["CA", "NY"]
+    assert row.state is None
+    assert row.classification == "Class I"
+    assert row.status == "Active"
+    assert row.source_url == "https://www.fsis.usda.gov/recalls/F-1"
+    assert row.category == RecallCategory.pathogen.value
+
+
+def test_run_uk_ingest_classifies_and_upserts(session, monkeypatch):
+    _patch_fsa(
+        monkeypatch,
+        [
+            _fsa_record(
+                "UK-1",
+                title="Allergy alert",
+                created="2024-03-01T09:00:00",
+                type=["https://data.food.gov.uk/food-alerts/def/AA"],
+                status=FsaStatus(label="Published"),
+                alertURL="https://www.food.gov.uk/alert/UK-1",
+                reportingBusiness=FsaBusiness(commonName="Beta Bakery"),
+                problem=[FsaProblem(riskStatement="undeclared milk")],
+                productDetails=[FsaProduct(productName="Choc Cake")],
+            ),
+        ],
+    )
+
+    result = service.run_uk_ingest(session)
+
+    assert result.upserted == 1
+    row = session.scalars(select(Recall)).one()
+    assert row.source == RecallSource.uk.value
+    assert row.country == RecallCountry.uk.value
+    # AA alert-type URI → Allergy Alert; UK alerts carry no US state.
+    assert row.classification == RecallClass.allergy_alert.value
+    assert row.states is None
+    assert row.company_name == "Beta Bakery"
+    assert row.source_url == "https://www.food.gov.uk/alert/UK-1"
+    assert row.category == RecallCategory.allergen.value
+
+
+def test_list_recalls_filters_by_country_source_and_state(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+
+    us = service.list_recalls(session, limit=50, offset=0, country="us")
+    assert {i.recall_number for i in us.items} == {"D-1", "D-2"}
+
+    uk = service.list_recalls(session, limit=50, offset=0, country="uk")
+    assert {i.recall_number for i in uk.items} == {"D-3"}
+
+    usda = service.list_recalls(session, limit=50, offset=0, source="usda")
+    assert {i.recall_number for i in usda.items} == {"D-2"}
+
+    # The state filter matches via `states.contains`; D-2 (FSIS) affects CA + TX.
+    in_tx = service.list_recalls(session, limit=50, offset=0, state="TX")
+    assert {i.recall_number for i in in_tx.items} == {"D-2"}
+    in_ca = service.list_recalls(session, limit=50, offset=0, state="CA")
+    assert {i.recall_number for i in in_ca.items} == {"D-1", "D-2"}
+
+
+def test_get_stats_by_source_state_and_country_scope(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+
+    stats = service.get_stats(session)
+    assert stats.total == 3
+    by_source = {s.label: s.count for s in stats.by_source}
+    assert by_source == {"fda": 1, "usda": 1, "uk": 1}
+    # The multi-state FSIS recall counts toward every state it touches (jsonb unnest); the UK row
+    # has no `states` array and is excluded.
+    by_state = {s.label: s.count for s in stats.by_state}
+    assert by_state["CA"] == 2  # D-1 (FDA, CA) + D-2 (FSIS, CA+TX)
+    assert by_state["TX"] == 1
+
+    # country scoping restricts every aggregation to the chosen country.
+    uk_stats = service.get_stats(session, country="uk")
+    assert uk_stats.total == 1
+    assert {s.label for s in uk_stats.by_source} == {"uk"}
