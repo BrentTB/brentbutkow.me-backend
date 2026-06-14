@@ -29,7 +29,8 @@ limiter = Limiter(key_func=client_ip, default_limits=["60/minute"])
 def create_app() -> FastAPI:
     app = FastAPI(title="brentbutkow.me backend")
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # slowapi types its handler for RateLimitExceeded; Starlette's signature wants Exception.
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(
         CORSMiddleware,

@@ -58,6 +58,8 @@ python -m scripts.backfill                   # one-time: seed full history (~26k
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
+mypy app                            # typecheck
+pre-commit install                  # one-time: gate commits on ruff + mypy + pytest
 ```
 
 Schema is managed by **Alembic**: `alembic upgrade head` creates/updates the tables. After changing a
