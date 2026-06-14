@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -26,18 +26,22 @@ class CamelModel(BaseModel):
 
 
 class RecallOut(CamelModel):
-    recall_number: str
-    status: str | None
-    classification: str | None
-    product_description: str
-    reason_text: str
-    company_name: str | None
-    state: str | None
-    distribution_pattern: str | None
-    recall_initiation_date: date | None
-    report_date: date | None
-    category: str
-    category_confidence: float
+    recall_number: str = Field(
+        description="openFDA recall number (unique).", examples=["F-1421-2026"]
+    )
+    status: str | None = Field(description="openFDA status, e.g. Ongoing or Terminated.")
+    classification: RecallClass | None = Field(description="FDA recall class (severity).")
+    product_description: str = Field(description="The recalled product.")
+    reason_text: str = Field(description="Why it was recalled (openFDA reason text).")
+    company_name: str | None = Field(description="Recalling firm.")
+    state: str | None = Field(description="Recalling firm's state.")
+    distribution_pattern: str | None = Field(description="Where the product was distributed.")
+    recall_initiation_date: date | None = Field(description="When the recall began.")
+    report_date: date | None = Field(description="When openFDA reported it.")
+    category: RecallCategory = Field(description="Assigned cause category (keyword baseline, v1).")
+    category_confidence: float = Field(
+        description="Classifier confidence 0–1 (1.0 for matched keyword rules, 0 for 'other')."
+    )
 
 
 class RecallListResult(CamelModel):
