@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.modules.recalls.models import IngestRun, Recall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -17,6 +18,13 @@ from app.modules.recalls.schemas import (
 
 # Rows per upsert statement — keeps a large backfill to a few statements instead of thousands.
 _UPSERT_CHUNK = 500
+
+
+def _redact_secrets(message: str) -> str:
+    # httpx exception strings embed the request URL, which carries ?api_key=<secret>.
+    # Strip it before the message is persisted to ingest_runs.error_text.
+    secret = settings.openfda_api_key
+    return message.replace(secret, "***") if secret else message
 
 
 def list_recalls(
@@ -110,7 +118,7 @@ def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
         session.rollback()
         run.status = "error"
         run.finished_at = datetime.now(UTC)
-        run.error_text = str(exc)
+        run.error_text = _redact_secrets(str(exc))
         session.add(run)
         session.commit()
         raise

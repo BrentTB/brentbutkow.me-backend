@@ -5,9 +5,16 @@ from app.main import app
 from app.modules.recalls import router as router_module
 
 # Override the DB dependency and patch the service so routes are tested without a database.
-# (TestClient is used without a `with` block, so the lifespan / create_all never runs.)
 app.dependency_overrides[get_session] = lambda: None
 client = TestClient(app)
+
+
+def test_health_ok_and_not_rate_limited():
+    # /health is exempt from the global 60/min limit, so liveness probes never get a 429.
+    for _ in range(70):
+        res = client.get("/health")
+        assert res.status_code == 200
+    assert res.json() == {"status": "ok"}
 
 
 def test_list_recalls(monkeypatch):

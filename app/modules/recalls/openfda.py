@@ -5,10 +5,10 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.modules.recalls.categorize import categorize
-from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.schemas import RecallCategory, RecallClass
 
 ENDPOINT = "https://api.fda.gov/food/enforcement.json"
-_VALID_CLASSES = {"Class I", "Class II", "Class III"}
+_VALID_CLASSES = {c.value for c in RecallClass}
 
 
 # The external boundary — openFDA's payload, validated by Pydantic and mapped to the domain shape.

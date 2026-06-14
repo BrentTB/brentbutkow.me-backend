@@ -51,6 +51,7 @@ pip install -e ".[dev]"
 cp .env.example .env               # set DATABASE_URL + INGEST_BEARER_TOKEN
 
 # point DATABASE_URL at a local Postgres (any instance), create that database, then:
+alembic upgrade head                         # create / update tables (migrations)
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
 python -m scripts.ingest                     # pull the latest recalls into the DB
 python -m scripts.backfill                   # one-time: seed full history (~26k records)
@@ -59,8 +60,9 @@ pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
 ```
 
-Tables are created on boot (`Base.metadata.create_all`). Alembic migrations are the planned next step
-as the schema evolves.
+Schema is managed by **Alembic**: `alembic upgrade head` creates/updates the tables. After changing a
+model, generate a migration with `alembic revision --autogenerate -m "describe change"`, review it, and
+commit it. (Docker and deploys run `alembic upgrade head` automatically on start.)
 
 ### Docker (app + Postgres)
 
@@ -84,6 +86,7 @@ docker compose down         # stop (add -v to also wipe the DB)
 | `ALLOWED_ORIGIN` | – | CORS origin(s), comma-separated. Defaults to `http://localhost:5173`. |
 | `PORT` | – | Server port. Defaults to `3000`. |
 | `OPENFDA_API_KEY` | – | Optional; raises openFDA rate limits. |
+| `TRUSTED_PROXY_HOPS` | – | Reverse-proxy hops in front of the app, so per-IP rate limiting reads the real client from `X-Forwarded-For`. `0` (default) for local/Docker; set `1` behind Render. |
 
 ## License
 

@@ -1,7 +1,4 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -9,22 +6,28 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.config import settings
-from app.db import Base, engine
 from app.modules.recalls.router import router as recalls_router
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # v1: create tables on boot. Alembic migrations are the next step as the schema evolves.
-    Base.metadata.create_all(bind=engine)
-    yield
+def client_ip(request: Request) -> str:
+    # Behind a proxy the peer is the proxy, so without this every client shares one rate-limit
+    # bucket. Read the real client from the proxy-controlled end of X-Forwarded-For — the entry
+    # `trusted_proxy_hops` from the right, which the closest trusted proxy appends and a client
+    # cannot forge past. With no trusted proxy configured, fall back to the direct peer.
+    hops = settings.trusted_proxy_hops
+    if hops > 0:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        chain = [ip.strip() for ip in forwarded.split(",") if ip.strip()]
+        if len(chain) >= hops:
+            return chain[-hops]
+    return get_remote_address(request)
 
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+limiter = Limiter(key_func=client_ip, default_limits=["60/minute"])
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="brentbutkow.me backend", lifespan=lifespan)
+    app = FastAPI(title="brentbutkow.me backend")
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
@@ -36,6 +39,7 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health")
+    @limiter.exempt  # liveness probes must not be throttled by the global per-IP limit
     def health() -> dict[str, str]:
         return {"status": "ok"}
 

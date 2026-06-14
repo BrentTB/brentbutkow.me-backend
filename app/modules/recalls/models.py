@@ -20,8 +20,10 @@ class Recall(Base):
     state: Mapped[str | None] = mapped_column(Text)
     distribution_pattern: Mapped[str | None] = mapped_column(Text)
     recall_initiation_date: Mapped[date | None] = mapped_column(Date)
-    report_date: Mapped[date | None] = mapped_column(Date)
-    category: Mapped[str] = mapped_column(Text)
+    # Indexed: report_date backs the default ordering + `since` filter + monthly stats; category
+    # backs the category filter + per-category stats. See migration ...add_recall_indexes.
+    report_date: Mapped[date | None] = mapped_column(Date, index=True)
+    category: Mapped[str] = mapped_column(Text, index=True)
     category_confidence: Mapped[float] = mapped_column(Float)
     raw: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
