@@ -10,13 +10,14 @@ from app.modules.recalls.router import router as recalls_router
 from app.rate_limit import limiter
 
 API_DESCRIPTION = """
-**Recall Radar** — a live US food-recall API.
+**Recall Radar** — a live food-recall API covering the US and UK.
 
-Ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) food-enforcement reports, classifies
-each by likely cause, and serves them to the [brentbutkow.me](https://brentbutkow.me) dashboard.
+Ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US) plus UK
+[FSA](https://data.food.gov.uk/food-alerts/) food alerts, classifies each by likely cause, and
+serves them to the [brentbutkow.me](https://brentbutkow.me) dashboard.
 
 - Public reads are rate-limited to **60 requests/min per IP**.
-- `POST /recalls/ingest` is **bearer-protected** (used by the daily ingest job).
+- The `POST /recalls/ingest/*` endpoints are **bearer-protected** (used by the daily ingest job).
 """
 
 OPENAPI_TAGS = [
@@ -32,7 +33,7 @@ OPENAPI_TAGS = [
 def create_app() -> FastAPI:
     app = FastAPI(
         title="brentbutkow.me backend",
-        summary="Live US food-recall API (Recall Radar).",
+        summary="Live US + UK food-recall API (Recall Radar).",
         description=API_DESCRIPTION,
         version="0.1.0",
         openapi_tags=OPENAPI_TAGS,

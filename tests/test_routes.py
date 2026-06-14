@@ -57,6 +57,34 @@ def test_search_edge_cases(monkeypatch):
     assert client.get("/recalls?search=" + "x" * 201).status_code == 422
 
 
+def test_list_recalls_forwards_source(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?source=usda").status_code == 200
+    assert captured["source"] == "usda"
+    # an unknown source is rejected by the enum, not silently forwarded
+    assert client.get("/recalls?source=epa").status_code == 422
+
+
+def test_list_recalls_forwards_country(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?country=uk").status_code == 200
+    assert captured["country"] == "uk"
+    # an unknown country is rejected by the enum, not silently forwarded
+    assert client.get("/recalls?country=narnia").status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,
@@ -68,6 +96,7 @@ def test_stats(monkeypatch):
             "by_classification": [],
             "by_state": [],
             "by_company": [],
+            "by_source": [],
             "last_ingest_at": None,
         },
     )
@@ -75,16 +104,49 @@ def test_stats(monkeypatch):
     assert res.status_code == 200
     assert res.json()["total"] == 0
     assert res.headers["cache-control"] == "public, max-age=300"
+    # stats can be scoped to a country; an unknown one is rejected
+    assert client.get("/recalls/stats?country=uk").status_code == 200
+    assert client.get("/recalls/stats?country=zz").status_code == 422
 
 
 def test_ingest_requires_bearer():
-    assert client.post("/recalls/ingest").status_code == 401
+    assert client.post("/recalls/ingest/fda").status_code == 401
 
 
 def test_ingest_with_bearer(monkeypatch):
     monkeypatch.setattr(
         router_module, "run_ingest", lambda *a, **k: {"status": "ok", "fetched": 3, "upserted": 3}
     )
-    res = client.post("/recalls/ingest", headers={"Authorization": "Bearer test-token"})
+    res = client.post("/recalls/ingest/fda", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "fetched": 3, "upserted": 3}
+
+
+def test_ingest_fsis_requires_bearer():
+    assert client.post("/recalls/ingest/fsis").status_code == 401
+
+
+def test_ingest_fsis_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_fsis_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 2, "upserted": 2},
+    )
+    res = client.post("/recalls/ingest/fsis", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 2, "upserted": 2}
+
+
+def test_ingest_uk_requires_bearer():
+    assert client.post("/recalls/ingest/uk").status_code == 401
+
+
+def test_ingest_uk_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_uk_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 1, "upserted": 1},
+    )
+    res = client.post("/recalls/ingest/uk", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 1, "upserted": 1}

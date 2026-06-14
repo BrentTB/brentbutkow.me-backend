@@ -5,10 +5,10 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.modules.recalls.classifier import classify
-from app.modules.recalls.schemas import RecallClass
+from app.modules.recalls.normalize import NormalizedRecall, parse_class
+from app.modules.recalls.schemas import RecallCountry, RecallSource
 
 ENDPOINT = "https://api.fda.gov/food/enforcement.json"
-_VALID_CLASSES = {c.value for c in RecallClass}
 
 
 # The external boundary — openFDA's payload, validated by Pydantic and mapped to the domain shape.
@@ -41,22 +41,22 @@ def _parse_date(raw: str | None) -> date | None:
         return None
 
 
-def _parse_class(raw: str | None) -> str | None:
-    return raw if raw in _VALID_CLASSES else None
-
-
-def normalize_recall(record: OpenFdaRecord) -> dict:
+def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
     reason_text = record.reason_for_recall or ""
     category, confidence = classify(reason_text)
     return {
+        "source": RecallSource.fda.value,
+        "country": RecallCountry.us.value,
         "recall_number": record.recall_number,
+        "source_url": None,
         "event_id": record.event_id,
         "status": record.status,
-        "classification": _parse_class(record.classification),
+        "classification": parse_class(record.classification),
         "product_description": record.product_description or "",
         "reason_text": reason_text,
         "company_name": record.recalling_firm,
         "state": record.state,
+        "states": [record.state] if record.state else None,
         "distribution_pattern": record.distribution_pattern,
         "recall_initiation_date": _parse_date(record.recall_initiation_date),
         "report_date": _parse_date(record.report_date),
