@@ -1,0 +1,28 @@
+# Mirrors the frontend's lint / format / typecheck / test gate.
+# One-time setup: `pre-commit install`. Hooks use the project's .venv tools, so versions
+# match pyproject and can't drift. (Requires the .venv — see the README.)
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff (lint)
+        entry: .venv/bin/ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff (format)
+        entry: .venv/bin/ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (typecheck)
+        entry: .venv/bin/mypy app scripts
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: .venv/bin/pytest -q
+        language: system
+        types: [python]
+        pass_filenames: false

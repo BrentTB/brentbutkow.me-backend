@@ -4,8 +4,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
-from app.modules.recalls.categorize import categorize
-from app.modules.recalls.schemas import RecallCategory, RecallClass
+from app.modules.recalls.classifier import classify
+from app.modules.recalls.schemas import RecallClass
 
 ENDPOINT = "https://api.fda.gov/food/enforcement.json"
 _VALID_CLASSES = {c.value for c in RecallClass}
@@ -47,7 +47,7 @@ def _parse_class(raw: str | None) -> str | None:
 
 def normalize_recall(record: OpenFdaRecord) -> dict:
     reason_text = record.reason_for_recall or ""
-    category = categorize(reason_text)
+    category, confidence = classify(reason_text)
     return {
         "recall_number": record.recall_number,
         "event_id": record.event_id,
@@ -61,7 +61,7 @@ def normalize_recall(record: OpenFdaRecord) -> dict:
         "recall_initiation_date": _parse_date(record.recall_initiation_date),
         "report_date": _parse_date(record.report_date),
         "category": category.value,
-        "category_confidence": 0.0 if category == RecallCategory.other else 1.0,
+        "category_confidence": confidence,
         "raw": record.model_dump(),
     }
 

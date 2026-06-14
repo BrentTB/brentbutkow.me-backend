@@ -1,0 +1,10 @@
+# Pinned ML stack that produced app/modules/recalls/model/classifier.joblib.
+# A scikit-learn pickle is version-sensitive: loading it under a different scikit-learn / numpy /
+# scipy can warn or fail. These hold the runtime stack in lockstep with the committed artifact —
+# re-pin (and retrain) together. The abstract lower bounds stay in pyproject.toml; this file is
+# applied at install time via `pip install . -c constraints.txt` (see Dockerfile).
+scikit-learn==1.9.0
+joblib==1.5.3
+numpy==2.4.6
+scipy==1.17.1
+threadpoolctl==3.6.0

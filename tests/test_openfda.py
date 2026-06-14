@@ -8,7 +8,9 @@ from app.modules.recalls.openfda import OpenFdaRecord, OpenFdaResponse, normaliz
 from app.modules.recalls.schemas import RecallCategory
 
 
-def test_normalize_maps_openfda_fields_to_domain():
+def test_normalize_maps_openfda_fields_to_domain(monkeypatch):
+    # Isolate field mapping from the classifier (assert the category + confidence pass through).
+    monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.allergen, 0.9))
     record = OpenFdaRecord(
         recall_number="F-0276-2017",
         classification="Class II",
@@ -26,9 +28,11 @@ def test_normalize_maps_openfda_fields_to_domain():
     assert result["recall_initiation_date"] == date(2016, 8, 8)
     assert result["report_date"] == date(2016, 11, 2)
     assert result["category"] == RecallCategory.allergen.value
+    assert result["category_confidence"] == 0.9
 
 
-def test_normalize_handles_missing_and_invalid_values():
+def test_normalize_handles_missing_and_invalid_values(monkeypatch):
+    monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.other, 0.0))
     result = normalize_recall(OpenFdaRecord(recall_number="X-1", classification="Bogus"))
     assert result["company_name"] is None
     assert result["classification"] is None
