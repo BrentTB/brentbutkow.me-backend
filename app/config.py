@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,13 @@ class Settings(BaseSettings):
     # instead of every request sharing the proxy's IP. Never trust XFF when this is 0 — a client
     # can forge the header, so an unset value must fall back to the direct peer.
     trusted_proxy_hops: int = 0
+
+    @field_validator("allowed_origin_regex", mode="after")
+    @classmethod
+    def _blank_regex_is_none(cls, value: str | None) -> str | None:
+        # `ALLOWED_ORIGIN_REGEX=` (blank) loads as "", which Starlette would compile into an empty
+        # regex run uselessly on every request; treat blank as unset so the None path applies.
+        return value if value and value.strip() else None
 
     @property
     def origins(self) -> list[str]:

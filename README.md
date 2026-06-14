@@ -88,6 +88,7 @@ docker compose down         # stop (add -v to also wipe the DB)
 | `DATABASE_URL` | ✅ | Postgres connection string. `postgresql://` or `postgres://` both work — the app normalizes to the psycopg driver. |
 | `INGEST_BEARER_TOKEN` | ✅ | Guards `POST /recalls/ingest`. Generate with `openssl rand -hex 32`. |
 | `ALLOWED_ORIGIN` | – | CORS origin(s), comma-separated. Defaults to `http://localhost:5173`. |
+| `ALLOWED_ORIGIN_REGEX` | – | Optional regex matched in addition to `ALLOWED_ORIGIN`, for origins whose subdomain changes per deploy (e.g. Vercel previews). Anchor it to your own scope — never a blanket `*.vercel.app`. |
 | `PORT` | – | Server port. Defaults to `3000`. |
 | `OPENFDA_API_KEY` | – | Optional; raises openFDA rate limits. |
 | `TRUSTED_PROXY_HOPS` | – | Reverse-proxy hops in front of the app, so per-IP rate limiting reads the real client from `X-Forwarded-For`. `0` (default) for local/Docker; set `1` behind Render. |
