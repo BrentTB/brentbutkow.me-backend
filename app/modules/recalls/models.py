@@ -1,10 +1,18 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, Integer, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Computed, Date, DateTime, Float, Integer, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+# Searchable text for full-text search — kept identical to the migration's generated column.
+_SEARCH_EXPR = (
+    "to_tsvector('english', "
+    "coalesce(product_description, '') || ' ' || "
+    "coalesce(reason_text, '') || ' ' || "
+    "coalesce(company_name, ''))"
+)
 
 
 class Recall(Base):
@@ -25,6 +33,11 @@ class Recall(Base):
     report_date: Mapped[date | None] = mapped_column(Date, index=True)
     category: Mapped[str] = mapped_column(Text, index=True)
     category_confidence: Mapped[float] = mapped_column(Float)
+    # Full-text search over product/reason/company — generated tsvector, GIN-indexed (deferred so
+    # the list query doesn't load it). Expression matches migration ...add_recall_search.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR, Computed(_SEARCH_EXPR, persisted=True), deferred=True
+    )
     raw: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,8 +1,9 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic.alias_generators import to_camel
+from pydantic import Field
+
+from app.camel import CamelModel
 
 
 # Derived enums — values are the runtime identifiers shared with the frontend.
@@ -18,11 +19,6 @@ class RecallClass(StrEnum):
     class_i = "Class I"
     class_ii = "Class II"
     class_iii = "Class III"
-
-
-# snake_case fields in Python, camelCase JSON on the wire (FastAPI serializes by alias).
-class CamelModel(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, from_attributes=True)
 
 
 class RecallOut(CamelModel):
