@@ -2,14 +2,14 @@ name: Daily recall ingest
 
 on:
   schedule:
-    - cron: '0 4 * * *' # 04:00 UTC daily
+    - cron: "24 4 * * *" # 04:24 UTC daily - not on the hour, to avoid github load dropping scheduled job
   workflow_dispatch: {}
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger ingest endpoint
+      - name: Trigger FDA ingest endpoint
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
