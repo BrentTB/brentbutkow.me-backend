@@ -125,6 +125,19 @@ def test_stats(monkeypatch):
     assert client.get("/recalls/stats?country=zz").status_code == 422
 
 
+def test_trend(monkeypatch):
+    monkeypatch.setattr(
+        router_module, "get_trend", lambda *a, **k: {"group": "category", "buckets": []}
+    )
+    res = client.get("/recalls/trend?group=category")
+    assert res.status_code == 200
+    assert res.json() == {"group": "category", "buckets": []}
+    assert res.headers["cache-control"] == "public, max-age=300"
+    # group defaults to total; an unknown group is rejected by the enum
+    assert client.get("/recalls/trend").status_code == 200
+    assert client.get("/recalls/trend?group=state").status_code == 422
+
+
 def test_ingest_requires_bearer():
     assert client.post("/recalls/ingest/fda").status_code == 401
 

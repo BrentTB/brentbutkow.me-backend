@@ -14,9 +14,12 @@ from app.modules.recalls.schemas import (
     RecallListResult,
     RecallSource,
     RecallStats,
+    TrendGroup,
+    TrendResult,
 )
 from app.modules.recalls.service import (
     get_stats,
+    get_trend,
     list_recalls,
     run_fsis_ingest,
     run_ingest,
@@ -106,6 +109,25 @@ def recall_stats(
 ) -> RecallStats:
     response.headers["Cache-Control"] = "public, max-age=300"
     return get_stats(session, country.value if country else None)
+
+
+@router.get(
+    "/trend",
+    response_model=TrendResult,
+    summary="Monthly trend",
+    description="Monthly recall counts, optionally grouped by cause category or data source.",
+    responses=_RATE_LIMITED,
+)
+def recall_trend(
+    response: Response,
+    session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope to a country."),
+    group: TrendGroup = Query(
+        default=TrendGroup.total, description="Group by: total, category, or source."
+    ),
+) -> TrendResult:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return get_trend(session, country.value if country else None, group.value)
 
 
 @router.post(

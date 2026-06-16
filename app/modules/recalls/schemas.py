@@ -130,6 +130,23 @@ class Anomaly(CamelModel):
     )
 
 
+class TrendGroup(StrEnum):
+    total = "total"
+    category = "category"
+    source = "source"
+
+
+class TrendBucket(CamelModel):
+    month: str = Field(description="Month bucket (YYYY-MM).")
+    group: str = Field(description="Group key — a category/source value, or 'total'.")
+    count: int
+
+
+class TrendResult(CamelModel):
+    group: TrendGroup = Field(description="The dimension the monthly counts are grouped by.")
+    buckets: list[TrendBucket] = Field(description="Long-format (month, group, count) rows.")
+
+
 class RecallStats(CamelModel):
     total: int
     by_category: list[CategoryCount]

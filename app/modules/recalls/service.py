@@ -25,6 +25,9 @@ from app.modules.recalls.schemas import (
     RecallListResult,
     RecallOut,
     RecallStats,
+    TrendBucket,
+    TrendGroup,
+    TrendResult,
 )
 
 # Rows per upsert statement — keeps a large backfill to a few statements instead of thousands.
@@ -346,6 +349,40 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         anomalies=anomalies,
         last_ingest_at=last_ingest_at,
     )
+
+
+def get_trend(session: Session, country: str | None = None, group: str = "total") -> TrendResult:
+    # Monthly counts, optionally split by category or source — feeds the groupable trend chart.
+    def scoped(stmt):
+        return stmt.where(Recall.country == country) if country else stmt
+
+    month = func.to_char(Recall.report_date, "YYYY-MM")
+    dimension = {
+        TrendGroup.category.value: Recall.category,
+        TrendGroup.source.value: Recall.source,
+    }.get(group)
+    if dimension is not None:
+        rows = session.execute(
+            scoped(
+                select(month.label("month"), dimension, func.count())
+                .where(Recall.report_date.is_not(None))
+                .group_by(month, dimension)
+                .order_by(month)
+            )
+        ).all()
+        buckets = [TrendBucket(month=m, group=key, count=count) for m, key, count in rows]
+    else:
+        rows = session.execute(
+            scoped(
+                select(month.label("month"), func.count())
+                .where(Recall.report_date.is_not(None))
+                .group_by(month)
+                .order_by(month)
+            )
+        ).all()
+        buckets = [TrendBucket(month=m, group="total", count=count) for m, count in rows]
+
+    return TrendResult(group=TrendGroup(group), buckets=buckets)
 
 
 def _run_ingest_job(

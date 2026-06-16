@@ -296,6 +296,31 @@ def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
     }
 
 
+def test_get_trend_groups_by_category_and_source(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
+            _record("T-2", reason_for_recall="listeria", report_date="20240115"),
+            _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    total = {b.month: b.count for b in service.get_trend(session, group="total").buckets}
+    assert total["2024-01"] == 2 and total["2024-03"] == 1
+
+    cat = {
+        (b.month, b.group): b.count for b in service.get_trend(session, group="category").buckets
+    }
+    assert cat[("2024-01", "allergen")] == 1  # milk
+    assert cat[("2024-01", "pathogen")] == 1  # listeria
+    assert cat[("2024-03", "allergen")] == 1  # soy
+
+    src = {(b.month, b.group): b.count for b in service.get_trend(session, group="source").buckets}
+    assert src[("2024-01", "fda")] == 2
+
+
 def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):
     _patch_fsis(
         monkeypatch,
