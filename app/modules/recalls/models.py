@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Computed, Date, DateTime, Float, Integer, Text, func
+from sqlalchemy import Computed, Date, DateTime, Float, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +41,11 @@ class Recall(Base):
     report_date: Mapped[date | None] = mapped_column(Date, index=True)
     category: Mapped[str] = mapped_column(Text, index=True)
     category_confidence: Mapped[float] = mapped_column(Float)
+    # Allergens / pathogens / hazards extracted from reason_text (gazetteer match) as
+    # [{type, value}]. GIN-indexed for the `@>` entity filter + the by-entity unnest aggregation.
+    entities: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     # Full-text search over product/reason/company — generated tsvector, GIN-indexed (deferred so
     # the list query doesn't load it). Expression matches migration ...add_recall_search.
     search_vector: Mapped[str | None] = mapped_column(

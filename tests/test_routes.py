@@ -85,6 +85,20 @@ def test_list_recalls_forwards_country(monkeypatch):
     assert client.get("/recalls?country=narnia").status_code == 422
 
 
+def test_list_recalls_forwards_entity(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?entity=peanuts").status_code == 200
+    assert captured["entity"] == "peanuts"
+    # over-length entity is rejected by the 100-char bound
+    assert client.get("/recalls?entity=" + "x" * 101).status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,
@@ -97,6 +111,8 @@ def test_stats(monkeypatch):
             "by_state": [],
             "by_company": [],
             "by_source": [],
+            "by_entity": [],
+            "anomalies": [],
             "last_ingest_at": None,
         },
     )

@@ -265,6 +265,35 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     assert by_month["2024-01"] == 2
     assert by_month["2024-03"] == 1
     assert stats.last_ingest_at is not None
+    # Too little history to baseline against → no false anomalies, but the field is present.
+    assert stats.anomalies == []
+
+
+def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("E-1", reason_for_recall="undeclared milk and soy", report_date="20240101"),
+            _record("E-2", reason_for_recall="undeclared milk", report_date="20240115"),
+            _record("E-3", reason_for_recall="possible listeria", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # by_entity unnests the {type, value} array, so a recall naming several entities counts to each.
+    by_entity = {(e.type.value, e.label): e.count for e in service.get_stats(session).by_entity}
+    assert by_entity[("allergen", "milk")] == 2
+    assert by_entity[("allergen", "soybeans")] == 1
+    assert by_entity[("pathogen", "Listeria")] == 1
+
+    # The entity filter matches any recall naming that canonical value (GIN @>).
+    milk = service.list_recalls(session, limit=50, offset=0, entity="milk")
+    assert {i.recall_number for i in milk.items} == {"E-1", "E-2"}
+    e1 = next(i for i in milk.items if i.recall_number == "E-1")
+    assert {(x.type.value, x.value) for x in e1.entities} == {
+        ("allergen", "milk"),
+        ("allergen", "soybeans"),
+    }
 
 
 def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):

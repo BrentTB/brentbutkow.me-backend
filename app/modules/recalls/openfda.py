@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.modules.recalls.classifier import classify
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_class
 from app.modules.recalls.schemas import RecallCountry, RecallSource
 
@@ -62,6 +63,7 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
         "report_date": _parse_date(record.report_date),
         "category": category.value,
         "category_confidence": confidence,
+        "entities": extract_entities(reason_text),
         "raw": record.model_dump(),
     }
 

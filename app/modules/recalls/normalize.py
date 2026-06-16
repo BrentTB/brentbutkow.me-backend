@@ -31,6 +31,7 @@ class NormalizedRecall(TypedDict):
     report_date: date | None
     category: str
     category_confidence: float
+    entities: list[dict[str, str]]
     raw: dict[str, Any]
 
 

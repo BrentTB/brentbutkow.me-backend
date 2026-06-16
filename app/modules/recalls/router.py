@@ -57,6 +57,11 @@ def get_recalls(
     company: str | None = Query(
         default=None, description="Filter by company name (case-insensitive partial match)."
     ),
+    entity: str | None = Query(
+        default=None,
+        max_length=100,
+        description="Filter to recalls naming this allergen/pathogen/hazard, e.g. peanuts.",
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -78,6 +83,7 @@ def get_recalls(
         classification=classification.value if classification else None,
         state=state,
         company=company,
+        entity=entity,
         since=since,
         search=search,
     )

@@ -5,6 +5,7 @@ from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_iso_date
 from app.modules.recalls.schemas import RecallCountry, RecallSource
 
@@ -142,6 +143,7 @@ def normalize_fsis(record: FsisRecord) -> NormalizedRecall:
         "report_date": recall_date,
         "category": category.value,
         "category_confidence": confidence,
+        "entities": extract_entities(reason_text),
         "raw": record.model_dump(),
     }
 

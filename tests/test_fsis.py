@@ -64,6 +64,9 @@ def test_normalize_recall(monkeypatch):
     assert "&amp;" not in row["product_description"]  # HTML entities decoded
     assert "&" in row["product_description"]
     assert row["category"] == "allergen"
+    # Entities come from reason_text only — "Misbranding, Unreported Allergens" names no specific
+    # allergen, and "CRAB" in the product description is (correctly) not matched.
+    assert row["entities"] == []
 
 
 def test_normalize_public_health_alert(monkeypatch):

@@ -7,13 +7,18 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
 from app.modules.recalls.models import IngestRun, Recall
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
+    Anomaly,
+    AnomalyMonth,
+    AnomalyScope,
     CategoryCount,
+    EntityCount,
     IngestResult,
     LabelCount,
     MonthCount,
@@ -33,6 +38,64 @@ _CONFLICT_KEYS = ("source", "recall_number")
 
 # Which ingest sources belong to each country — scopes the "last updated" timestamp.
 _COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
+
+# Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
+# we surface them from — current trends matter more than a big spike from a decade ago.
+_ANOMALY_TOP_ENTITIES = 20
+_ANOMALY_LIMIT = 8
+_ANOMALY_RECENT_MONTHS = 24
+
+
+def _continuous_months(months: list[str]) -> list[str]:
+    # Fill the calendar between the first and last present month so the anomaly baseline sees
+    # zero-recall months instead of treating sparse months as adjacent.
+    if not months:
+        return []
+    year, month = int(months[0][:4]), int(months[0][5:7])
+    end = (int(months[-1][:4]), int(months[-1][5:7]))
+    out: list[str] = []
+    while (year, month) <= end:
+        out.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+    return out
+
+
+def _scope_anomaly(
+    scope: AnomalyScope, label: str, series: list[tuple[str, int]]
+) -> Anomaly | None:
+    # One consolidated card per thing: all its flagged months + the window to chart them against.
+    points = detect_anomalies(series)
+    if not points:
+        return None
+    window = [MonthCount(month=m, count=c) for m, c in series[-_ANOMALY_RECENT_MONTHS:]]
+    months = [
+        AnomalyMonth(
+            month=point["month"],
+            observed=point["observed"],
+            baseline=point["baseline"],
+            z=point["z"],
+        )
+        for point in points
+    ]
+    return Anomaly(scope=scope, label=label, months=months, series=window)
+
+
+def _surface_anomalies(
+    candidates: list[Anomaly], recent_months: set[str], limit: int
+) -> list[Anomaly]:
+    # Emphasize current trends: keep only each thing's recent flagged months, drop things with none,
+    # rank by peak severity (so the slots go to distinct things), then present newest-first.
+    surfaced: list[Anomaly] = []
+    for candidate in candidates:
+        recent = [month for month in candidate.months if month.month in recent_months]
+        if recent:
+            surfaced.append(candidate.model_copy(update={"months": recent}))
+    surfaced.sort(key=lambda a: max(abs(month.z) for month in a.months), reverse=True)
+    surfaced = surfaced[:limit]
+    surfaced.sort(key=lambda a: max(month.month for month in a.months), reverse=True)
+    return surfaced
 
 
 def _dedupe(rows: Iterable[NormalizedRecall]) -> list[NormalizedRecall]:
@@ -71,6 +134,7 @@ def list_recalls(
     classification: str | None = None,
     state: str | None = None,
     company: str | None = None,
+    entity: str | None = None,
     since: date | None = None,
     search: str | None = None,
 ) -> RecallListResult:
@@ -94,6 +158,9 @@ def list_recalls(
         # slowly — a few new openFDA recalls a day on top of the initial ~26k-row backfill — so it
         # stays cheap for a long time. Revisit with a pg_trgm GIN index if it ever gets large.
         conditions.append(Recall.company_name.ilike(f"%{company}%"))
+    if entity:
+        # `entities` is the array of {type, value}; match if any element has this value (GIN @>).
+        conditions.append(Recall.entities.contains([{"value": entity}]))
     if since:
         conditions.append(Recall.report_date >= since)
     if search:
@@ -177,6 +244,82 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .order_by(func.count().desc())
         )
     ).all()
+    # Unnest the entities array-of-objects and count each (type, value), so a recall touching
+    # several allergens counts toward each. Reads object fields with ->> (cf. the by_state unnest).
+    entity_elem = func.jsonb_array_elements(Recall.entities).table_valued(
+        "value", joins_implicitly=True
+    )
+    entity_type = entity_elem.c.value.op("->>")("type")
+    entity_value = entity_elem.c.value.op("->>")("value")
+    by_entity = session.execute(
+        scoped(
+            select(entity_type, entity_value, func.count())
+            .select_from(Recall, entity_elem)
+            .where(func.jsonb_typeof(Recall.entities) == "array")
+            .group_by(entity_type, entity_value)
+            .order_by(func.count().desc())
+        )
+    ).all()
+
+    # Anomaly scan: robust z-score over the monthly series for overall volume, each category, and
+    # the busiest entities. Cheap on ~29k rows; the highest-|z| flags surface as trend callouts.
+    calendar = _continuous_months([m for m, _ in by_month])
+    anomalies: list[Anomaly] = []
+    if calendar:
+        candidates: list[Anomaly] = []
+
+        def _add(scope: AnomalyScope, label: str, counts: list[tuple[str, int]]) -> None:
+            found = _scope_anomaly(scope, label, counts)
+            if found is not None:
+                candidates.append(found)
+
+        overall_counts = {m: c for m, c in by_month}
+        _add(AnomalyScope.overall, "All recalls", [(m, overall_counts.get(m, 0)) for m in calendar])
+
+        cat_rows = session.execute(
+            scoped(
+                select(Recall.category, month.label("month"), func.count())
+                .where(Recall.report_date.is_not(None))
+                .group_by(Recall.category, month)
+            )
+        ).all()
+        cat_counts: dict[tuple[str, str], int] = {}
+        categories: set[str] = set()
+        for category, month_label, count in cat_rows:
+            cat_counts[(category, month_label)] = count
+            categories.add(category)
+        for category in categories:
+            _add(
+                AnomalyScope.category,
+                category,
+                [(m, cat_counts.get((category, m), 0)) for m in calendar],
+            )
+
+        ent_elem = func.jsonb_array_elements(Recall.entities).table_valued(
+            "value", joins_implicitly=True
+        )
+        ent_value = ent_elem.c.value.op("->>")("value")
+        ent_rows = session.execute(
+            scoped(
+                select(ent_value, month.label("month"), func.count())
+                .select_from(Recall, ent_elem)
+                .where(func.jsonb_typeof(Recall.entities) == "array")
+                .where(Recall.report_date.is_not(None))
+                .group_by(ent_value, month)
+            )
+        ).all()
+        ent_counts: dict[tuple[str, str], int] = {}
+        ent_total: dict[str, int] = {}
+        for value, month_label, count in ent_rows:
+            ent_counts[(value, month_label)] = count
+            ent_total[value] = ent_total.get(value, 0) + count
+        for value in sorted(ent_total, key=lambda v: ent_total[v], reverse=True)[
+            :_ANOMALY_TOP_ENTITIES
+        ]:
+            _add(AnomalyScope.entity, value, [(m, ent_counts.get((value, m), 0)) for m in calendar])
+
+        recent_months = set(calendar[-_ANOMALY_RECENT_MONTHS:])
+        anomalies = _surface_anomalies(candidates, recent_months, _ANOMALY_LIMIT)
 
     total = session.scalar(scoped(select(func.count()).select_from(Recall))) or 0
 
@@ -197,6 +340,10 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         by_source=[LabelCount(label=label, count=count) for label, count in by_source],
+        by_entity=[
+            EntityCount(type=etype, label=label, count=count) for etype, label, count in by_entity
+        ],
+        anomalies=anomalies,
         last_ingest_at=last_ingest_at,
     )
 

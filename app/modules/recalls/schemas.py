@@ -38,6 +38,17 @@ class RecallCountry(StrEnum):
     uk = "uk"
 
 
+class EntityType(StrEnum):
+    allergen = "allergen"
+    pathogen = "pathogen"
+    hazard = "hazard"
+
+
+class RecallEntity(CamelModel):
+    type: EntityType = Field(description="Entity kind: allergen, pathogen, or hazard.")
+    value: str = Field(description="Canonical entity name.", examples=["peanuts", "Listeria"])
+
+
 class RecallOut(CamelModel):
     country: RecallCountry = Field(description="Country the recall is from: us or uk.")
     source: RecallSource = Field(description="Data source: fda (openFDA), usda (FSIS), uk (FSA).")
@@ -61,6 +72,9 @@ class RecallOut(CamelModel):
     report_date: date | None = Field(description="When it was reported.")
     category: RecallCategory = Field(description="Predicted cause category from the classifier.")
     category_confidence: float = Field(description="Classifier confidence in [0, 1].")
+    entities: list[RecallEntity] = Field(
+        default_factory=list, description="Allergens, pathogens, and hazards found in the reason."
+    )
 
 
 class RecallListResult(CamelModel):
@@ -83,6 +97,39 @@ class LabelCount(CamelModel):
     count: int
 
 
+class EntityCount(CamelModel):
+    type: EntityType
+    label: str
+    count: int
+
+
+class AnomalyScope(StrEnum):
+    overall = "overall"
+    category = "category"
+    entity = "entity"
+
+
+class AnomalyMonth(CamelModel):
+    month: str = Field(description="The anomalous month (YYYY-MM).", examples=["2026-03"])
+    observed: int = Field(description="Recall count that month.")
+    baseline: float = Field(description="Median count of the trailing baseline window.")
+    z: float = Field(description="Robust z-score; sign gives direction (+ spike, - dip).")
+
+
+class Anomaly(CamelModel):
+    scope: AnomalyScope = Field(
+        description="What is anomalous: overall volume, a category, or an entity."
+    )
+    label: str = Field(description="Human label for the scope, e.g. 'All recalls' or 'Listeria'.")
+    months: list[AnomalyMonth] = Field(
+        description="Every flagged month for this thing in the window (consolidated, ≥1)."
+    )
+    series: list[MonthCount] = Field(
+        default_factory=list,
+        description="Monthly counts over the displayed window, for charting the anomaly.",
+    )
+
+
 class RecallStats(CamelModel):
     total: int
     by_category: list[CategoryCount]
@@ -91,6 +138,8 @@ class RecallStats(CamelModel):
     by_state: list[LabelCount]
     by_company: list[LabelCount]
     by_source: list[LabelCount]
+    by_entity: list[EntityCount]
+    anomalies: list[Anomaly]
     last_ingest_at: datetime | None
 
 
