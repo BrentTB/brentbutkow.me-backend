@@ -113,7 +113,12 @@ class AnomalyMonth(CamelModel):
     month: str = Field(description="The anomalous month (YYYY-MM).", examples=["2026-03"])
     observed: int = Field(description="Recall count that month.")
     baseline: float = Field(description="Median count of the trailing baseline window.")
-    z: float = Field(description="Robust z-score; sign gives direction (+ spike, - dip).")
+    z: float = Field(
+        description=(
+            "Robust z-score vs the trailing baseline; positive (dips never flag), and may sit "
+            "below the spike threshold when the month flagged as a near-record high."
+        )
+    )
 
 
 class Anomaly(CamelModel):

@@ -44,9 +44,49 @@ def test_short_history_is_not_scored():
     assert detect_anomalies(_series([5, 90, 5, 90, 5])) == []
 
 
-def test_flat_zero_variance_baseline_is_skipped():
-    # No spread in the baseline → no scale to measure against; skip rather than report infinity.
-    assert detect_anomalies(_series([10, 10, 10, 10, 10, 10, 10, 50, 10])) == []
+def test_flat_baseline_still_flags_a_real_spike():
+    # A perfectly flat baseline has zero spread, but the scale floor gives it a sane denominator,
+    # so a genuine spike (10 → 50) is still caught instead of being silently skipped.
+    anomalies = detect_anomalies(_series([10, 10, 10, 10, 10, 10, 10, 50, 10]))
+    assert len(anomalies) == 1
+    assert anomalies[0]["observed"] == 50
+
+
+def test_dips_are_not_flagged():
+    # One-sided: a sharp drop (10 → 0) is not an anomaly, even though |z| is huge. Otherwise it
+    # renders as a near-zero "highlighted" bar that no reader recognises as flagged.
+    assert detect_anomalies(_series(_BASELINE + [0, 10])) == []
+
+
+def test_tiny_absolute_move_on_a_quiet_series_is_not_flagged():
+    # Sparse near-zero category: a 0 → 2 bump is statistically large but absolutely trivial, so the
+    # absolute-rise floor suppresses it — while a real 0 → 3 spike still flags.
+    assert detect_anomalies(_series([0] * 12 + [2, 0])) == []
+    flagged = detect_anomalies(_series([0] * 12 + [3, 0]))
+    assert [a["observed"] for a in flagged] == [3]
+
+
+def test_equal_heights_after_a_spike_are_treated_consistently():
+    # Regression: a quiet series spikes 2 → 3 → 2. The two 2s are identical, so neither should
+    # flag; only the 3 clears the floors. (Previously the first 2 flagged and the second didn't,
+    # because the spike inflated the trailing stddev — the bug this detector now guards against.)
+    flagged = detect_anomalies(_series([0] * 12 + [2, 3, 2, 1, 0]))
+    assert [a["observed"] for a in flagged] == [3]
+
+
+def test_near_record_high_flags_even_when_local_baseline_is_too_noisy_for_sigma():
+    # A choppy 5/15 baseline (spread ≈ 7) means a record-high 22 is only ~1.6σ — the relative test
+    # alone would miss it. The near-record rule catches it anyway: it's well above the series' 90th
+    # percentile and clears the absolute-rise floor.
+    flagged = detect_anomalies(_series([5, 15] * 6 + [22, 10]))
+    assert [a["observed"] for a in flagged] == [22]
+    assert flagged[0]["z"] < 3.0  # flagged on magnitude, not on a 3σ spike
+
+
+def test_high_but_flat_plateau_never_flags():
+    # Every month is the all-time high, so the near-record percentile is always cleared — but none
+    # rises above the (equally high) baseline, so the absolute-rise floor keeps the plateau quiet.
+    assert detect_anomalies(_series([20] * 20)) == []
 
 
 def _candidate(label: str, months: list[tuple[str, float]]) -> Anomaly:
