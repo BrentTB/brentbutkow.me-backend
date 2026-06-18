@@ -1,13 +1,20 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy.exc import OperationalError
 
 from app.config import settings
+from app.db import engine
 from app.modules.contact.router import router as contact_router
 from app.modules.recalls.router import router as recalls_router
 from app.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 API_DESCRIPTION = """
 **Recall Radar** — a live food-recall API covering the US and UK.
@@ -43,6 +50,17 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     # slowapi types its handler for RateLimitExceeded; Starlette's signature wants Exception.
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+    @app.exception_handler(OperationalError)
+    def _postgres_unavailable(request: Request, exc: OperationalError) -> JSONResponse:
+        # The engine connects lazily, so a down/unreachable Postgres surfaces here on the first
+        # query of a request rather than at startup. Translate the noisy driver traceback into a
+        # short 503 instead of leaking a 500 with the full SQLAlchemy/psycopg stack.
+        port = engine.url.port or 5432
+        message = f"Postgres instance not found on port {port}, ensure it is running"
+        logger.warning(message)
+        return JSONResponse(status_code=503, content={"detail": message})
+
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(
         CORSMiddleware,

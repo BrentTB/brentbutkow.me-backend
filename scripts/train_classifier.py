@@ -7,7 +7,7 @@ from sklearn.pipeline import Pipeline
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.modules.recalls.categorize import categorize
+from app.modules.recalls.categorize import label_category
 from app.modules.recalls.classifier import MODEL_PATH
 from app.modules.recalls.models import Recall
 from app.modules.recalls.schemas import RecallCategory
@@ -40,7 +40,7 @@ def _load_training_data() -> tuple[list[str], list[str]]:
         texts = [text for text in session.scalars(select(Recall.reason_text)).all() if text]
     finally:
         session.close()
-    labels = [categorize(text).value for text in texts]
+    labels = [label_category(text).value for text in texts]
     return texts, labels
 
 
@@ -51,19 +51,21 @@ def _write_model_card(total: int, accuracy: float, reclassified: int, other_tota
 
 **Task:** classify a recall's `reason_for_recall` text into one of {_LABELS}.
 
-**Labels — weak supervision.** The v1 keyword baseline (`categorize`) labels the corpus; there is
-**no human ground-truth set**. So the model learns to *generalize* the keyword taxonomy rather than
-beat an independent gold standard, and `category_confidence` is the model's predicted probability
-for the chosen class.
+**Labels — weak supervision.** An entity-aware labeler (`label_category`) labels the corpus: the
+typed entity gazetteer sets the category when a pathogen, physical hazard, or allergen is named
+(pathogen wins ties, so an incidental ingredient word can't outrank the actual cause), falling back
+to the v1 keyword baseline otherwise. There is **no human ground-truth set**, so the model learns to
+*generalize* this taxonomy rather than beat an independent gold standard, and `category_confidence`
+is the model's predicted probability for the chosen class.
 
 **Training data:** {total} openFDA food-enforcement recalls.
 
-**Held-out accuracy vs keyword labels:** {accuracy:.3f} — how faithfully it reproduces the rules on
+**Held-out accuracy vs weak labels:** {accuracy:.3f} — how faithfully it reproduces the labeler on
 a 20% test split.
 
-**Generalization:** {reclassified} of {other_total} recalls the keyword rules left as `other` were
-reclassified into a concrete category with confidence ≥ {_CONFIDENCE_THRESHOLD} — signal the keyword
-rules missed.
+**Generalization:** {reclassified} of {other_total} recalls the weak labeler left as `other` were
+reclassified into a concrete category with confidence ≥ {_CONFIDENCE_THRESHOLD} — signal the labeler
+missed.
 
 **Next step (v3):** replace the weak labels with a hand-labeled sample to measure true
 precision/recall and calibrate the confidence.
@@ -73,7 +75,7 @@ precision/recall and calibrate the confidence.
 
 def main() -> None:
     texts, labels = _load_training_data()
-    print(f"Training on {len(texts)} recalls (weak-labeled by the keyword baseline).\n")
+    print(f"Training on {len(texts)} recalls (weak-labeled by the entity-aware labeler).\n")
 
     x_train, x_test, y_train, y_test = train_test_split(
         texts, labels, test_size=0.2, random_state=42, stratify=labels
@@ -83,9 +85,9 @@ def main() -> None:
     predictions = model.predict(x_test)
 
     accuracy = accuracy_score(y_test, predictions)
-    print(f"Held-out accuracy vs keyword labels: {accuracy:.3f}\n")
+    print(f"Held-out accuracy vs weak labels: {accuracy:.3f}\n")
     print(classification_report(y_test, predictions, labels=_LABELS, zero_division=0))
-    print("Confusion matrix (rows = keyword label, cols = predicted):")
+    print("Confusion matrix (rows = weak label, cols = predicted):")
     print(_LABELS)
     print(confusion_matrix(y_test, predictions, labels=_LABELS))
 

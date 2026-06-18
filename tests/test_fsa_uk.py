@@ -38,6 +38,7 @@ def test_normalize_alert(monkeypatch):
     assert "salmonella" in row["reason_text"].lower()
     assert "BBQ" in row["product_description"]
     assert row["category"] == "pathogen"
+    assert {"type": "pathogen", "value": "Salmonella"} in row["entities"]
 
 
 def test_classification_maps_alert_types():

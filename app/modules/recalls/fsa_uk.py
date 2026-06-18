@@ -2,6 +2,7 @@ from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_iso_date
 from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
 
@@ -88,6 +89,7 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
         "report_date": created,
         "category": category.value,
         "category_confidence": confidence,
+        "entities": extract_entities(reason_text),
         "raw": record.model_dump(),
     }
 

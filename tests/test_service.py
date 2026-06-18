@@ -203,9 +203,37 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
     recent = service.list_recalls(session, limit=50, offset=0, since=date(2024, 2, 1))
     assert {i.recall_number for i in recent.items} == {"A-2", "A-3"}
 
+    older = service.list_recalls(session, limit=50, offset=0, until=date(2024, 2, 1))
+    assert {i.recall_number for i in older.items} == {"A-1", "A-3"}
+
+    # A since+until window keeps only what falls inside it.
+    windowed = service.list_recalls(
+        session, limit=50, offset=0, since=date(2024, 2, 1), until=date(2024, 2, 28)
+    )
+    assert {i.recall_number for i in windowed.items} == {"A-3"}
+
     page_two = service.list_recalls(session, limit=1, offset=1)
     assert page_two.total == 3
     assert [i.recall_number for i in page_two.items] == ["A-3"]
+
+
+def test_search_companies_ranks_by_count_and_matches_substring(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("C-1", recalling_firm="Acme Foods"),
+            _record("C-2", recalling_firm="Acme Bakery"),
+            _record("C-3", recalling_firm="Beta Foods"),
+            _record("C-4", recalling_firm="Acme Foods"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # Ranked by recall count: "Acme Foods" (2) leads the singletons.
+    assert service.search_companies(session)[0] == "Acme Foods"
+    # Case-insensitive substring match.
+    assert set(service.search_companies(session, q="acme")) == {"Acme Foods", "Acme Bakery"}
+    assert service.search_companies(session, q="beta") == ["Beta Foods"]
 
 
 def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monkeypatch):
@@ -261,10 +289,95 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     by_category = {c.category: c.count for c in stats.by_category}
     assert by_category[RecallCategory.allergen.value] == 2
     assert by_category[RecallCategory.pathogen.value] == 1
+    # Largest cause first, so the "By cause" breakdown leads with the biggest.
+    assert [c.category for c in stats.by_category] == [
+        RecallCategory.allergen.value,
+        RecallCategory.pathogen.value,
+    ]
     by_month = {m.month: m.count for m in stats.by_month}
     assert by_month["2024-01"] == 2
     assert by_month["2024-03"] == 1
     assert stats.last_ingest_at is not None
+    # Too little history to baseline against → no false anomalies, but the field is present.
+    assert stats.anomalies == []
+
+
+def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("E-1", reason_for_recall="undeclared milk and soy", report_date="20240101"),
+            _record("E-2", reason_for_recall="undeclared milk", report_date="20240115"),
+            _record("E-3", reason_for_recall="possible listeria", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # by_entity unnests the {type, value} array, so a recall naming several entities counts to each.
+    by_entity = {(e.type.value, e.label): e.count for e in service.get_stats(session).by_entity}
+    assert by_entity[("allergen", "milk")] == 2
+    assert by_entity[("allergen", "soybeans")] == 1
+    assert by_entity[("pathogen", "Listeria")] == 1
+
+    # The entity filter matches any recall naming that canonical value (GIN @>).
+    milk = service.list_recalls(session, limit=50, offset=0, entity="milk")
+    assert {i.recall_number for i in milk.items} == {"E-1", "E-2"}
+    e1 = next(i for i in milk.items if i.recall_number == "E-1")
+    assert {(x.type.value, x.value) for x in e1.entities} == {
+        ("allergen", "milk"),
+        ("allergen", "soybeans"),
+    }
+
+
+def test_get_trend_groups_by_category_and_source(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
+            _record("T-2", reason_for_recall="listeria", report_date="20240115"),
+            _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    total = {b.month: b.count for b in service.get_trend(session, group="total").buckets}
+    assert total["2024-01"] == 2 and total["2024-03"] == 1
+
+    cat = {
+        (b.month, b.group): b.count for b in service.get_trend(session, group="category").buckets
+    }
+    assert cat[("2024-01", "allergen")] == 1  # milk
+    assert cat[("2024-01", "pathogen")] == 1  # listeria
+    assert cat[("2024-03", "allergen")] == 1  # soy
+
+    src = {(b.month, b.group): b.count for b in service.get_trend(session, group="source").buckets}
+    assert src[("2024-01", "fda")] == 2
+
+
+def test_get_trend_applies_the_recall_filters(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
+            _record("T-2", reason_for_recall="listeria", report_date="20240101"),
+            _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # Unfiltered: Jan has 2 (milk + listeria), Mar has 1 (soy).
+    total = {b.month: b.count for b in service.get_trend(session).buckets}
+    assert total == {"2024-01": 2, "2024-03": 1}
+
+    # category=allergen drops the listeria recall, so Jan falls to 1.
+    allergen = {b.month: b.count for b in service.get_trend(session, category="allergen").buckets}
+    assert allergen == {"2024-01": 1, "2024-03": 1}
+
+    # entity narrows to a single allergen, and the filter still applies under grouping.
+    milk = {b.month: b.count for b in service.get_trend(session, entity="milk").buckets}
+    assert milk == {"2024-01": 1}
+    milk_by_cat = service.get_trend(session, group="category", entity="milk").buckets
+    assert [(b.month, b.group, b.count) for b in milk_by_cat] == [("2024-01", "allergen", 1)]
 
 
 def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):

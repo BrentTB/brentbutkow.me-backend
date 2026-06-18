@@ -7,6 +7,7 @@ shape the ingest upsert consumes — so the column set is defined once here, not
 from datetime import date
 from typing import Any, TypedDict
 
+from app.modules.recalls.entities import Entity
 from app.modules.recalls.schemas import RecallClass
 
 # Classification values accepted verbatim from a source; anything else normalizes to None.
@@ -31,6 +32,7 @@ class NormalizedRecall(TypedDict):
     report_date: date | None
     category: str
     category_confidence: float
+    entities: list[Entity]
     raw: dict[str, Any]
 
 

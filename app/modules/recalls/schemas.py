@@ -12,6 +12,7 @@ class RecallCategory(StrEnum):
     pathogen = "pathogen"
     foreign_material = "foreignMaterial"
     mislabeling = "mislabeling"
+    contaminant = "contaminant"
     other = "other"
 
 
@@ -38,6 +39,18 @@ class RecallCountry(StrEnum):
     uk = "uk"
 
 
+class EntityType(StrEnum):
+    allergen = "allergen"
+    pathogen = "pathogen"
+    hazard = "hazard"
+    contaminant = "contaminant"
+
+
+class RecallEntity(CamelModel):
+    type: EntityType = Field(description="Entity kind: allergen, pathogen, hazard, or contaminant.")
+    value: str = Field(description="Canonical entity name.", examples=["peanuts", "Listeria"])
+
+
 class RecallOut(CamelModel):
     country: RecallCountry = Field(description="Country the recall is from: us or uk.")
     source: RecallSource = Field(description="Data source: fda (openFDA), usda (FSIS), uk (FSA).")
@@ -61,6 +74,10 @@ class RecallOut(CamelModel):
     report_date: date | None = Field(description="When it was reported.")
     category: RecallCategory = Field(description="Predicted cause category from the classifier.")
     category_confidence: float = Field(description="Classifier confidence in [0, 1].")
+    entities: list[RecallEntity] = Field(
+        default_factory=list,
+        description="Allergens, pathogens, hazards, and contaminants found in the reason.",
+    )
 
 
 class RecallListResult(CamelModel):
@@ -83,6 +100,61 @@ class LabelCount(CamelModel):
     count: int
 
 
+class EntityCount(CamelModel):
+    type: EntityType
+    label: str
+    count: int
+
+
+class AnomalyScope(StrEnum):
+    overall = "overall"
+    category = "category"
+    entity = "entity"
+
+
+class AnomalyMonth(CamelModel):
+    month: str = Field(description="The anomalous month (YYYY-MM).", examples=["2026-03"])
+    observed: int = Field(description="Recall count that month.")
+    baseline: float = Field(description="Median count of the trailing baseline window.")
+    z: float = Field(
+        description=(
+            "Robust z-score vs the trailing baseline; positive (dips never flag), and may sit "
+            "below the spike threshold when the month flagged as a near-record high."
+        )
+    )
+
+
+class Anomaly(CamelModel):
+    scope: AnomalyScope = Field(
+        description="What is anomalous: overall volume, a category, or an entity."
+    )
+    label: str = Field(description="Human label for the scope, e.g. 'All recalls' or 'Listeria'.")
+    months: list[AnomalyMonth] = Field(
+        description="Every flagged month for this thing in the window (consolidated, ≥1)."
+    )
+    series: list[MonthCount] = Field(
+        default_factory=list,
+        description="Monthly counts over the displayed window, for charting the anomaly.",
+    )
+
+
+class TrendGroup(StrEnum):
+    total = "total"
+    category = "category"
+    source = "source"
+
+
+class TrendBucket(CamelModel):
+    month: str = Field(description="Month bucket (YYYY-MM).")
+    group: str = Field(description="Group key — a category/source value, or 'total'.")
+    count: int
+
+
+class TrendResult(CamelModel):
+    group: TrendGroup = Field(description="The dimension the monthly counts are grouped by.")
+    buckets: list[TrendBucket] = Field(description="Long-format (month, group, count) rows.")
+
+
 class RecallStats(CamelModel):
     total: int
     by_category: list[CategoryCount]
@@ -91,6 +163,8 @@ class RecallStats(CamelModel):
     by_state: list[LabelCount]
     by_company: list[LabelCount]
     by_source: list[LabelCount]
+    by_entity: list[EntityCount]
+    anomalies: list[Anomaly]
     last_ingest_at: datetime | None
 
 
