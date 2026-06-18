@@ -136,6 +136,7 @@ def _recall_conditions(
     company: str | None = None,
     entity: str | None = None,
     since: date | None = None,
+    until: date | None = None,
     search: str | None = None,
 ) -> list[Any]:
     # The shared filter set behind both the recall list and the trend chart, so the two scope
@@ -161,6 +162,8 @@ def _recall_conditions(
         conditions.append(Recall.entities.contains([{"value": entity}]))
     if since:
         conditions.append(Recall.report_date >= since)
+    if until:
+        conditions.append(Recall.report_date <= until)
     if search and search.strip():
         conditions.append(
             Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search.strip()))
@@ -181,6 +184,7 @@ def list_recalls(
     company: str | None = None,
     entity: str | None = None,
     since: date | None = None,
+    until: date | None = None,
     search: str | None = None,
 ) -> RecallListResult:
     # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
@@ -195,6 +199,7 @@ def list_recalls(
         company=company,
         entity=entity,
         since=since,
+        until=until,
         search=search,
     )
 
@@ -394,6 +399,7 @@ def get_trend(
     source: str | None = None,
     entity: str | None = None,
     since: date | None = None,
+    until: date | None = None,
     search: str | None = None,
 ) -> TrendResult:
     # Monthly counts, optionally split by category or source, scoped by the same filters as the
@@ -409,6 +415,7 @@ def get_trend(
             source=source,
             entity=entity,
             since=since,
+            until=until,
             search=search,
         ),
     ]

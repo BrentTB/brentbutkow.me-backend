@@ -68,6 +68,9 @@ def get_recalls(
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
+    until: date | None = Query(
+        default=None, description="Only recalls reported on or before this date (YYYY-MM-DD)."
+    ),
     search: str | None = Query(
         default=None,
         max_length=200,
@@ -88,6 +91,7 @@ def get_recalls(
         company=company,
         entity=entity,
         since=since,
+        until=until,
         search=search,
     )
 
@@ -147,6 +151,9 @@ def recall_trend(
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
+    until: date | None = Query(
+        default=None, description="Only recalls reported on or before this date (YYYY-MM-DD)."
+    ),
     search: str | None = Query(
         default=None,
         max_length=200,
@@ -165,6 +172,7 @@ def recall_trend(
         source=source.value if source else None,
         entity=entity,
         since=since,
+        until=until,
         search=search,
     )
 

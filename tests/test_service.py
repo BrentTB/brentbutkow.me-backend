@@ -203,6 +203,15 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
     recent = service.list_recalls(session, limit=50, offset=0, since=date(2024, 2, 1))
     assert {i.recall_number for i in recent.items} == {"A-2", "A-3"}
 
+    older = service.list_recalls(session, limit=50, offset=0, until=date(2024, 2, 1))
+    assert {i.recall_number for i in older.items} == {"A-1", "A-3"}
+
+    # A since+until window keeps only what falls inside it.
+    windowed = service.list_recalls(
+        session, limit=50, offset=0, since=date(2024, 2, 1), until=date(2024, 2, 28)
+    )
+    assert {i.recall_number for i in windowed.items} == {"A-3"}
+
     page_two = service.list_recalls(session, limit=1, offset=1)
     assert page_two.total == 3
     assert [i.recall_number for i in page_two.items] == ["A-3"]
