@@ -2,11 +2,13 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.modules.recalls.classifier import classify
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.models import Recall
 
 
-# Re-runs the classifier over already-stored recalls and updates category + confidence in place,
-# without re-fetching from openFDA. Run after training a new model: `python -m scripts.reclassify`.
+# Re-derives category + confidence + entity tags over already-stored recalls, in place, without
+# re-fetching from the sources. Run after training a new model or changing the entity gazetteer:
+# `python -m scripts.reclassify`.
 def main() -> None:
     session = SessionLocal()
     try:
@@ -17,6 +19,7 @@ def main() -> None:
             category, confidence = classify(recall.reason_text)
             recall.category = category.value
             recall.category_confidence = confidence
+            recall.entities = extract_entities(recall.reason_text)
         session.commit()
         print(f"Reclassified {len(recalls)} recalls.")
     finally:

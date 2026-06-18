@@ -125,9 +125,48 @@ def recall_trend(
     group: TrendGroup = Query(
         default=TrendGroup.total, description="Group by: total, category, or source."
     ),
+    category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
+    classification: RecallClass | None = Query(
+        default=None, description="Filter by recall classification / alert type."
+    ),
+    source: RecallSource | None = Query(
+        default=None, description="Filter by data source: fda, usda, or uk."
+    ),
+    state: str | None = Query(
+        default=None,
+        description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
+    ),
+    company: str | None = Query(
+        default=None, description="Filter by company name (case-insensitive partial match)."
+    ),
+    entity: str | None = Query(
+        default=None,
+        max_length=100,
+        description="Filter to recalls naming this allergen/pathogen/hazard, e.g. peanuts.",
+    ),
+    since: date | None = Query(
+        default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
+    ),
+    search: str | None = Query(
+        default=None,
+        max_length=200,
+        description="Full-text search across product, reason, and company name.",
+    ),
 ) -> TrendResult:
     response.headers["Cache-Control"] = "public, max-age=300"
-    return get_trend(session, country.value if country else None, group.value)
+    return get_trend(
+        session,
+        country.value if country else None,
+        group.value,
+        category=category.value if category else None,
+        classification=classification.value if classification else None,
+        state=state,
+        company=company,
+        source=source.value if source else None,
+        entity=entity,
+        since=since,
+        search=search,
+    )
 
 
 @router.post(

@@ -1,8 +1,9 @@
-"""Entity extraction from recall reason text — allergens, pathogens, foreign-material hazards.
+"""Entity extraction from recall reason text — allergens, pathogens, hazards, contaminants.
 
 Closed regulatory vocabularies (FDA Big-9 + UK FSA 14 allergens, the named foodborne pathogens,
-the common physical hazards) make dictionary matching accurate and fully explainable — no model,
-no LLM. Each entry maps a canonical display value to the synonyms that should resolve to it.
+the common physical hazards, and the named chemical / drug / heavy-metal / toxin / pesticide
+contaminants) make dictionary matching accurate and fully explainable — no model, no LLM. Each
+entry maps a canonical display value to the synonyms that should resolve to it.
 """
 
 import re
@@ -10,7 +11,7 @@ import re
 from app.modules.recalls.schemas import EntityType
 
 # (type, canonical value, synonyms). Word-boundary matched, case-insensitive. Order is the output
-# order: allergens, then pathogens, then hazards.
+# order: allergens, then pathogens, then hazards, then contaminants.
 _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (EntityType.allergen, "milk", ("milk",)),
     (EntityType.allergen, "egg", ("egg", "eggs")),
@@ -69,6 +70,76 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (EntityType.hazard, "bone", ("bone",)),
     (EntityType.hazard, "stone", ("stone", "stones", "rock")),
     (EntityType.hazard, "insect", ("insect", "insects", "beetle", "larvae")),
+    # Contaminants — chemical / drug / heavy-metal / toxin / pesticide. Not microbial (→ pathogen),
+    # not an allergen, not a physical object (→ hazard).
+    (EntityType.contaminant, "chloramphenicol", ("chloramphenicol",)),
+    (EntityType.contaminant, "nitrofuran", ("nitrofuran", "nitrofurans")),
+    (
+        EntityType.contaminant,
+        "undeclared drug",
+        (
+            "undeclared drug",
+            "hidden drug",
+            "drug residue",
+            "antibiotic residue",
+            "veterinary drug",
+            "active pharmaceutical",
+            "sildenafil",
+            "tadalafil",
+            "vardenafil",
+            "dmaa",
+            "ephedrine",
+            "ephedra",
+        ),
+    ),
+    (EntityType.contaminant, "arsenic", ("arsenic",)),
+    (
+        EntityType.contaminant,
+        "lead",
+        ("elevated lead", "lead contamination", "lead poisoning", "contains lead"),
+    ),
+    (EntityType.contaminant, "cadmium", ("cadmium",)),
+    (EntityType.contaminant, "mercury", ("mercury",)),
+    (EntityType.contaminant, "histamine", ("histamine", "scombrotoxin", "scombroid")),
+    (EntityType.contaminant, "aflatoxin", ("aflatoxin", "mycotoxin", "ochratoxin")),
+    (
+        EntityType.contaminant,
+        "marine biotoxin",
+        (
+            "marine biotoxin",
+            "domoic",
+            "okadaic",
+            "ciguatera",
+            "paralytic shellfish",
+            "amnesic shellfish",
+            "diarrhetic shellfish",
+            "tetrodotoxin",
+        ),
+    ),
+    (
+        EntityType.contaminant,
+        "pesticide",
+        ("pesticide", "pesticides", "chlorpyrifos", "malathion", "glyphosate", "carbofuran"),
+    ),
+    (EntityType.contaminant, "ethylene oxide", ("ethylene oxide",)),
+    (
+        EntityType.contaminant,
+        "chemical contamination",
+        (
+            "chemical contamination",
+            "cleaning solution",
+            "cleaning chemical",
+            "industrial chemical",
+            "sanitizer",
+            "caustic",
+            "sodium hydroxide",
+            "petroleum",
+            "hydrocarbon",
+        ),
+    ),
+    (EntityType.contaminant, "melamine", ("melamine",)),
+    (EntityType.contaminant, "dioxin", ("dioxin",)),
+    (EntityType.contaminant, "benzene", ("benzene",)),
 ]
 
 _COMPILED: list[tuple[EntityType, str, re.Pattern[str]]] = [

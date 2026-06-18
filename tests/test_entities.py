@@ -27,6 +27,12 @@ def test_hazards():
     assert _values("may contain metal", "hazard") == {"metal"}
 
 
+def test_contaminants():
+    assert _values("elevated levels of chloramphenicol", "contaminant") == {"chloramphenicol"}
+    assert _values("recalled for pesticide residue (glyphosate)", "contaminant") == {"pesticide"}
+    assert _values("scombrotoxin (histamine) fish poisoning", "contaminant") == {"histamine"}
+
+
 def test_multiple_types_in_one_reason():
     types = {e["type"] for e in extract_entities("Undeclared peanuts and possible Salmonella")}
     assert types == {"allergen", "pathogen"}

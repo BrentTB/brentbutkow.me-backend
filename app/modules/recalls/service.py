@@ -126,6 +126,48 @@ def _redact_secrets(message: str) -> str:
     return message.replace(secret, "***") if secret else message
 
 
+def _recall_conditions(
+    *,
+    country: str | None = None,
+    source: str | None = None,
+    category: str | None = None,
+    classification: str | None = None,
+    state: str | None = None,
+    company: str | None = None,
+    entity: str | None = None,
+    since: date | None = None,
+    search: str | None = None,
+) -> list[Any]:
+    # The shared filter set behind both the recall list and the trend chart, so the two scope
+    # identically. Each arg is optional; an omitted one adds no constraint.
+    conditions: list[Any] = []
+    if country:
+        conditions.append(Recall.country == country)
+    if source:
+        conditions.append(Recall.source == source)
+    if category:
+        conditions.append(Recall.category == category)
+    if classification:
+        conditions.append(Recall.classification == classification)
+    if state:
+        # `states` is the array of affected states; match if it contains the requested code.
+        conditions.append(Recall.states.contains([state]))
+    if company:
+        # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
+        # slowly, so it stays cheap for a long time; revisit with a pg_trgm GIN index if it grows.
+        conditions.append(Recall.company_name.ilike(f"%{company}%"))
+    if entity:
+        # `entities` is the array of {type, value}; match if any element has this value (GIN @>).
+        conditions.append(Recall.entities.contains([{"value": entity}]))
+    if since:
+        conditions.append(Recall.report_date >= since)
+    if search and search.strip():
+        conditions.append(
+            Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search.strip()))
+        )
+    return conditions
+
+
 def list_recalls(
     session: Session,
     *,
@@ -144,32 +186,17 @@ def list_recalls(
     # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
     search = search.strip() if search else None
 
-    conditions = []
-    if country:
-        conditions.append(Recall.country == country)
-    if source:
-        conditions.append(Recall.source == source)
-    if category:
-        conditions.append(Recall.category == category)
-    if classification:
-        conditions.append(Recall.classification == classification)
-    if state:
-        # `states` is the array of affected states; match if it contains the requested code.
-        conditions.append(Recall.states.contains([state]))
-    if company:
-        # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
-        # slowly — a few new openFDA recalls a day on top of the initial ~26k-row backfill — so it
-        # stays cheap for a long time. Revisit with a pg_trgm GIN index if it ever gets large.
-        conditions.append(Recall.company_name.ilike(f"%{company}%"))
-    if entity:
-        # `entities` is the array of {type, value}; match if any element has this value (GIN @>).
-        conditions.append(Recall.entities.contains([{"value": entity}]))
-    if since:
-        conditions.append(Recall.report_date >= since)
-    if search:
-        conditions.append(
-            Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search))
-        )
+    conditions = _recall_conditions(
+        country=country,
+        source=source,
+        category=category,
+        classification=classification,
+        state=state,
+        company=company,
+        entity=entity,
+        since=since,
+        search=search,
+    )
 
     stmt = select(Recall)
     count_stmt = select(func.count()).select_from(Recall)
@@ -351,11 +378,36 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
     )
 
 
-def get_trend(session: Session, country: str | None = None, group: str = "total") -> TrendResult:
-    # Monthly counts, optionally split by category or source — feeds the groupable trend chart.
-    def scoped(stmt):
-        return stmt.where(Recall.country == country) if country else stmt
-
+def get_trend(
+    session: Session,
+    country: str | None = None,
+    group: str = "total",
+    *,
+    category: str | None = None,
+    classification: str | None = None,
+    state: str | None = None,
+    company: str | None = None,
+    source: str | None = None,
+    entity: str | None = None,
+    since: date | None = None,
+    search: str | None = None,
+) -> TrendResult:
+    # Monthly counts, optionally split by category or source, scoped by the same filters as the
+    # recall list — so the chart and the list below it always describe the same set of recalls.
+    where = [
+        Recall.report_date.is_not(None),
+        *_recall_conditions(
+            country=country,
+            category=category,
+            classification=classification,
+            state=state,
+            company=company,
+            source=source,
+            entity=entity,
+            since=since,
+            search=search,
+        ),
+    ]
     month = func.to_char(Recall.report_date, "YYYY-MM")
     dimension = {
         TrendGroup.category.value: Recall.category,
@@ -363,22 +415,15 @@ def get_trend(session: Session, country: str | None = None, group: str = "total"
     }.get(group)
     if dimension is not None:
         rows = session.execute(
-            scoped(
-                select(month.label("month"), dimension, func.count())
-                .where(Recall.report_date.is_not(None))
-                .group_by(month, dimension)
-                .order_by(month)
-            )
+            select(month.label("month"), dimension, func.count())
+            .where(*where)
+            .group_by(month, dimension)
+            .order_by(month)
         ).all()
         buckets = [TrendBucket(month=m, group=key, count=count) for m, key, count in rows]
     else:
         rows = session.execute(
-            scoped(
-                select(month.label("month"), func.count())
-                .where(Recall.report_date.is_not(None))
-                .group_by(month)
-                .order_by(month)
-            )
+            select(month.label("month"), func.count()).where(*where).group_by(month).order_by(month)
         ).all()
         buckets = [TrendBucket(month=m, group="total", count=count) for m, count in rows]
 

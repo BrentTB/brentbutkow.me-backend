@@ -12,6 +12,7 @@ class RecallCategory(StrEnum):
     pathogen = "pathogen"
     foreign_material = "foreignMaterial"
     mislabeling = "mislabeling"
+    contaminant = "contaminant"
     other = "other"
 
 
@@ -42,10 +43,11 @@ class EntityType(StrEnum):
     allergen = "allergen"
     pathogen = "pathogen"
     hazard = "hazard"
+    contaminant = "contaminant"
 
 
 class RecallEntity(CamelModel):
-    type: EntityType = Field(description="Entity kind: allergen, pathogen, or hazard.")
+    type: EntityType = Field(description="Entity kind: allergen, pathogen, hazard, or contaminant.")
     value: str = Field(description="Canonical entity name.", examples=["peanuts", "Listeria"])
 
 

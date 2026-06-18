@@ -321,6 +321,32 @@ def test_get_trend_groups_by_category_and_source(session, monkeypatch):
     assert src[("2024-01", "fda")] == 2
 
 
+def test_get_trend_applies_the_recall_filters(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
+            _record("T-2", reason_for_recall="listeria", report_date="20240101"),
+            _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # Unfiltered: Jan has 2 (milk + listeria), Mar has 1 (soy).
+    total = {b.month: b.count for b in service.get_trend(session).buckets}
+    assert total == {"2024-01": 2, "2024-03": 1}
+
+    # category=allergen drops the listeria recall, so Jan falls to 1.
+    allergen = {b.month: b.count for b in service.get_trend(session, category="allergen").buckets}
+    assert allergen == {"2024-01": 1, "2024-03": 1}
+
+    # entity narrows to a single allergen, and the filter still applies under grouping.
+    milk = {b.month: b.count for b in service.get_trend(session, entity="milk").buckets}
+    assert milk == {"2024-01": 1}
+    milk_by_cat = service.get_trend(session, group="category", entity="milk").buckets
+    assert [(b.month, b.group, b.count) for b in milk_by_cat] == [("2024-01", "allergen", 1)]
+
+
 def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):
     _patch_fsis(
         monkeypatch,
