@@ -223,7 +223,11 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         return stmt.where(Recall.country == country) if country else stmt
 
     by_category = session.execute(
-        scoped(select(Recall.category, func.count()).group_by(Recall.category))
+        scoped(
+            select(Recall.category, func.count())
+            .group_by(Recall.category)
+            .order_by(func.count().desc())
+        )
     ).all()
 
     month = func.to_char(Recall.report_date, "YYYY-MM")

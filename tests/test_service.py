@@ -261,6 +261,11 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     by_category = {c.category: c.count for c in stats.by_category}
     assert by_category[RecallCategory.allergen.value] == 2
     assert by_category[RecallCategory.pathogen.value] == 1
+    # Largest cause first, so the "By cause" breakdown leads with the biggest.
+    assert [c.category for c in stats.by_category] == [
+        RecallCategory.allergen.value,
+        RecallCategory.pathogen.value,
+    ]
     by_month = {m.month: m.count for m in stats.by_month}
     assert by_month["2024-01"] == 2
     assert by_month["2024-03"] == 1
