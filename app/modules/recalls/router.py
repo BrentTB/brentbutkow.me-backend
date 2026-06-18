@@ -24,6 +24,7 @@ from app.modules.recalls.service import (
     run_fsis_ingest,
     run_ingest,
     run_uk_ingest,
+    search_companies,
 )
 
 router = APIRouter()
@@ -175,6 +176,28 @@ def recall_trend(
         until=until,
         search=search,
     )
+
+
+@router.get(
+    "/companies",
+    response_model=list[str],
+    summary="Company name suggestions",
+    description=(
+        "Distinct company names matching `q`, ranked by recall count — feeds the company "
+        "filter's type-ahead."
+    ),
+    responses=_RATE_LIMITED,
+)
+def recall_companies(
+    response: Response,
+    session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope to a country."),
+    q: str = Query(
+        default="", max_length=100, description="Search term (case-insensitive substring)."
+    ),
+) -> list[str]:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return search_companies(session, country.value if country else None, q)
 
 
 @router.post(

@@ -441,6 +441,22 @@ def get_trend(
     return TrendResult(group=TrendGroup(group), buckets=buckets)
 
 
+def search_companies(
+    session: Session, country: str | None = None, q: str = "", limit: int = 30
+) -> list[str]:
+    # Distinct company names matching `q` (case-insensitive substring), ranked by recall count —
+    # powers the company filter's type-ahead so any of the thousands of firms is reachable, not just
+    # the top handful in the stats breakdown.
+    stmt = select(Recall.company_name).where(Recall.company_name.is_not(None))
+    if country:
+        stmt = stmt.where(Recall.country == country)
+    term = q.strip()
+    if term:
+        stmt = stmt.where(Recall.company_name.ilike(f"%{term}%"))
+    stmt = stmt.group_by(Recall.company_name).order_by(func.count().desc()).limit(limit)
+    return [name for name in session.scalars(stmt).all() if name is not None]
+
+
 def _run_ingest_job(
     session: Session,
     *,

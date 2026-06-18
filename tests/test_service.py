@@ -217,6 +217,25 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
     assert [i.recall_number for i in page_two.items] == ["A-3"]
 
 
+def test_search_companies_ranks_by_count_and_matches_substring(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("C-1", recalling_firm="Acme Foods"),
+            _record("C-2", recalling_firm="Acme Bakery"),
+            _record("C-3", recalling_firm="Beta Foods"),
+            _record("C-4", recalling_firm="Acme Foods"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # Ranked by recall count: "Acme Foods" (2) leads the singletons.
+    assert service.search_companies(session)[0] == "Acme Foods"
+    # Case-insensitive substring match.
+    assert set(service.search_companies(session, q="acme")) == {"Acme Foods", "Acme Bakery"}
+    assert service.search_companies(session, q="beta") == ["Beta Foods"]
+
+
 def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
