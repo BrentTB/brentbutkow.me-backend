@@ -13,7 +13,7 @@ splits the overall series into trend + seasonal + residual; anomalies are large 
 the stricter, seasonality-aware reference the cheap runtime detector is checked against — not
 shipped, because it needs ≥ 2 seasonal cycles of history and a heavier dependency.
 
-**Agreement (overall series, N=153 months):** z-score flags 9, STL flags 20; they agree on 7 (Jaccard 0.32).
+**Agreement (overall series, N=153 months):** z-score flags 14, STL flags 21; they agree on 11 (Jaccard 0.46).
 
 **Honest limits:** a flag means "unusual vs recent history", never a forecast; category labels are
 weakly supervised and entities come from a curated gazetteer.

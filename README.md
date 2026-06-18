@@ -16,7 +16,7 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · service · router
+  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · anomalies · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
 scripts/           manual ingest (openFDA · FSIS · UK FSA) · backfill · classifier training
 tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
@@ -27,18 +27,22 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&since&search` | paginated list → `{ items, total }` |
-| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, lastIngestAt }` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&since&until&search` | paginated list → `{ items, total }` |
+| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
+| GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
 | POST | `/recalls/ingest/uk` | **bearer-only** — fetches UK FSA, upserts, records an ingest run |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
 
-`category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · other`. `classification` ∈
-`Class I · Class II · Class III · Public Health Alert` (US) · `Product Recall · Allergy Alert · Food
-Alert for Action` (UK). `country` ∈ `us · uk`; `source` ∈ `fda · usda · uk`. `state` matches any
-affected state; `search` is Postgres full-text over product/reason/company. Public reads are
+`category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · contaminant · other`.
+`classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US) · `Product Recall ·
+Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source` ∈ `fda · usda · uk`.
+`state` matches any affected state; `search` is Postgres full-text over product/reason/company;
+`entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
+canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min per IP. Interactive docs at `/docs`.
 
 ## Local development

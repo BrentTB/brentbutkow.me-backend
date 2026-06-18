@@ -7,8 +7,15 @@ entry maps a canonical display value to the synonyms that should resolve to it.
 """
 
 import re
+from typing import TypedDict
 
 from app.modules.recalls.schemas import EntityType
+
+
+class Entity(TypedDict):
+    type: str  # an EntityType value
+    value: str  # canonical display value
+
 
 # (type, canonical value, synonyms). Word-boundary matched, case-insensitive. Order is the output
 # order: allergens, then pathogens, then hazards, then contaminants.
@@ -152,7 +159,7 @@ _COMPILED: list[tuple[EntityType, str, re.Pattern[str]]] = [
 ]
 
 
-def extract_entities(reason_text: str) -> list[dict[str, str]]:
+def extract_entities(reason_text: str) -> list[Entity]:
     # Match against the reason — *why* the recall happened — not the product, so we don't flag
     # "milk" on a milk-chocolate Listeria recall.
     return [

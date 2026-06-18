@@ -75,7 +75,8 @@ class RecallOut(CamelModel):
     category: RecallCategory = Field(description="Predicted cause category from the classifier.")
     category_confidence: float = Field(description="Classifier confidence in [0, 1].")
     entities: list[RecallEntity] = Field(
-        default_factory=list, description="Allergens, pathogens, and hazards found in the reason."
+        default_factory=list,
+        description="Allergens, pathogens, hazards, and contaminants found in the reason.",
     )
 
 

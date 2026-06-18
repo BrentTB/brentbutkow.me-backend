@@ -64,7 +64,10 @@ def get_recalls(
     entity: str | None = Query(
         default=None,
         max_length=100,
-        description="Filter to recalls naming this allergen/pathogen/hazard, e.g. peanuts.",
+        description=(
+            "Filter to recalls naming this allergen/pathogen/hazard/contaminant — exact "
+            "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
+        ),
     ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
@@ -102,8 +105,8 @@ def get_recalls(
     response_model=RecallStats,
     summary="Aggregate stats",
     description=(
-        "Totals, counts by category, month, classification, state, company, and source, "
-        "plus the last successful ingest time."
+        "Totals, counts by category, month, classification, state, company, source, and entity, "
+        "plus anomaly callouts and the last successful ingest time."
     ),
     responses=_RATE_LIMITED,
 )
@@ -147,7 +150,10 @@ def recall_trend(
     entity: str | None = Query(
         default=None,
         max_length=100,
-        description="Filter to recalls naming this allergen/pathogen/hazard, e.g. peanuts.",
+        description=(
+            "Filter to recalls naming this allergen/pathogen/hazard/contaminant — exact "
+            "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
+        ),
     ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."

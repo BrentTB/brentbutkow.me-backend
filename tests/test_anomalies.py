@@ -89,6 +89,18 @@ def test_high_but_flat_plateau_never_flags():
     assert detect_anomalies(_series([20] * 20)) == []
 
 
+def test_sustained_uptrend_is_surfaced_by_the_near_record_rule():
+    # By design (the counterpart to the flat-plateau case): a steadily climbing series IS detected.
+    # Each month is a new all-time high that clears the absolute-rise floor, so the near-record rule
+    # flags it once a full window of history sits behind it — the smooth trend never reaches a 3σ
+    # relative spike on its own. Documents intended behavior so it isn't mistaken for a regression.
+    flagged = detect_anomalies(_series(list(range(1, 21))))
+    assert flagged  # the ramp surfaces rather than being silently smoothed away
+    assert all(a["z"] > 0 for a in flagged)
+    # Only the back half flags: a month needs a full window (12) of history to clear the percentile.
+    assert flagged[0]["observed"] == 13
+
+
 def _candidate(label: str, months: list[tuple[str, float]]) -> Anomaly:
     return Anomaly(
         scope=AnomalyScope.entity,

@@ -72,6 +72,8 @@ def detect_anomalies(
     out: list[AnomalyPoint] = []
     for index in range(min_history, len(points)):
         history = [count for _, count in points[max(0, index - window) : index]]
+        if not history:
+            continue  # window <= 0 leaves no baseline to score against
         observed = points[index][1]
         median = statistics.median(history)
         # Robust spread (median + MAD), falling back to stddev when MAD degenerates to 0 — which it

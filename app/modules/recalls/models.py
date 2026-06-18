@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.modules.recalls.entities import Entity
 
 # Searchable text for full-text search — kept identical to the migration's generated column.
 _SEARCH_EXPR = (
@@ -41,9 +42,10 @@ class Recall(Base):
     report_date: Mapped[date | None] = mapped_column(Date, index=True)
     category: Mapped[str] = mapped_column(Text, index=True)
     category_confidence: Mapped[float] = mapped_column(Float)
-    # Allergens / pathogens / hazards extracted from reason_text (gazetteer match) as
-    # [{type, value}]. GIN-indexed for the `@>` entity filter + the by-entity unnest aggregation.
-    entities: Mapped[list[dict[str, str]]] = mapped_column(
+    # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
+    # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
+    # so it can't use the index).
+    entities: Mapped[list[Entity]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     # Full-text search over product/reason/company — generated tsvector, GIN-indexed (deferred so

@@ -87,7 +87,7 @@ def main() -> None:
     accuracy = accuracy_score(y_test, predictions)
     print(f"Held-out accuracy vs weak labels: {accuracy:.3f}\n")
     print(classification_report(y_test, predictions, labels=_LABELS, zero_division=0))
-    print("Confusion matrix (rows = keyword label, cols = predicted):")
+    print("Confusion matrix (rows = weak label, cols = predicted):")
     print(_LABELS)
     print(confusion_matrix(y_test, predictions, labels=_LABELS))
 

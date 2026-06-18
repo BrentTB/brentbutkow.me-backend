@@ -22,7 +22,8 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # Existing rows backfill to [] via the server default; scripts/backfill_entities.py then fills
-    # real values. GIN index backs the `@>` entity filter + the by-entity unnest aggregation.
+    # real values. GIN index backs the `@>` entity filter (the by-entity aggregation unnests with
+    # jsonb_array_elements, which seq-scans, so the index can't serve it).
     op.add_column(
         "recalls",
         sa.Column(
