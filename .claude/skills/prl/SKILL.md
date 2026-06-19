@@ -1,5 +1,5 @@
 ---
-name: pr-light
+name: prl
 description: >-
   Solo-repo fast path to open or update a PR into main for this Python/FastAPI backend, with minimal
   token cost. Skips heavy pre-flight and full-diff reads — pushes if needed, builds a short body from
