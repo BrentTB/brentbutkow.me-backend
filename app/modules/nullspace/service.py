@@ -2,7 +2,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.nullspace.models import Score
-from app.modules.nullspace.schemas import ScoreSubmission
+from app.modules.nullspace.schemas import FlagReason, ScoreSubmission
 
 _LEADERBOARD_LIMIT = 50
 # Cap flagged rows so the honeypot can't grow the table without bound.
@@ -22,18 +22,18 @@ _MAX_KILLS_PER_WAVE = 80  # far above the enemies a single wave actually spawns
 _MIN_MS_PER_WAVE = 10_000  # a wave can't realistically be cleared faster than this
 
 
-def evaluate_submission(submission: ScoreSubmission) -> tuple[bool, str | None]:
+def evaluate_submission(submission: ScoreSubmission) -> tuple[bool, FlagReason | None]:
     """Pure plausibility check — returns (flagged, reason). No DB access.
 
     Score is awarded per kill, so it must track the kill count; kills must track the
     wave reached; and reaching a wave takes time. A forged value violates one of these.
     """
     if submission.score > _SCORE_BASE + submission.kills * _MAX_SCORE_PER_KILL:
-        return True, "score-exceeds-kills"
+        return True, FlagReason.score_exceeds_kills
     if submission.kills > _MAX_KILLS_PER_WAVE * (submission.wave + 1):
-        return True, "kills-exceed-wave"
+        return True, FlagReason.kills_exceed_wave
     if submission.wave > 1 and submission.duration_ms < submission.wave * _MIN_MS_PER_WAVE:
-        return True, "too-fast-for-wave"
+        return True, FlagReason.too_fast_for_wave
     return False, None
 
 
@@ -43,7 +43,7 @@ def create_score(
     *,
     ip_address: str | None,
     flagged: bool,
-    flag_reason: str | None,
+    flag_reason: FlagReason | None,
 ) -> Score:
     score = Score(
         name=submission.name,

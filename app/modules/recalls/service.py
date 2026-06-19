@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.selectable import TableValuedAlias
 
 from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
@@ -222,6 +223,12 @@ def list_recalls(
     return RecallListResult(items=[RecallOut.model_validate(row) for row in rows], total=total)
 
 
+def _entities_unnest() -> TableValuedAlias:
+    # Unnest the JSONB `entities` array-of-objects into one row per element, so a recall touching
+    # several entities counts toward each. Caller reads object fields with `.c.value.op("->>")`.
+    return func.jsonb_array_elements(Recall.entities).table_valued("value", joins_implicitly=True)
+
+
 def get_stats(session: Session, country: str | None = None) -> RecallStats:
     def scoped(stmt):
         # US and UK are shown separately, so every aggregation is scoped to the chosen country.
@@ -283,11 +290,8 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .order_by(func.count().desc())
         )
     ).all()
-    # Unnest the entities array-of-objects and count each (type, value), so a recall touching
-    # several allergens counts toward each. Reads object fields with ->> (cf. the by_state unnest).
-    entity_elem = func.jsonb_array_elements(Recall.entities).table_valued(
-        "value", joins_implicitly=True
-    )
+    # Count each (type, value), so a recall touching several allergens counts toward each.
+    entity_elem = _entities_unnest()
     entity_type = entity_elem.c.value.op("->>")("type")
     entity_value = entity_elem.c.value.op("->>")("value")
     by_entity = session.execute(
@@ -334,9 +338,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
                 [(m, cat_counts.get((category, m), 0)) for m in calendar],
             )
 
-        ent_elem = func.jsonb_array_elements(Recall.entities).table_valued(
-            "value", joins_implicitly=True
-        )
+        ent_elem = _entities_unnest()
         ent_value = ent_elem.c.value.op("->>")("value")
         ent_rows = session.execute(
             scoped(

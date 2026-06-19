@@ -108,6 +108,29 @@ def test_leaderboard_serializes_camelcase_and_hides_internal_fields(monkeypatch)
     assert "flagged" not in item
 
 
+def test_leaderboard_limit_is_capped(monkeypatch):
+    # `limit` is bounded by the route (Query le=200), so an over-cap value is a 422 — never an
+    # unbounded scan reachable on the public endpoint.
+    monkeypatch.setattr(nullspace_router_module, "list_scores", lambda session, **kw: [])
+    assert client.get("/nullspace/leaderboard?limit=201").status_code == 422
+    assert client.get("/nullspace/leaderboard?limit=0").status_code == 422
+
+
+def test_leaderboard_forwards_version_and_limit(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(session, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(nullspace_router_module, "list_scores", fake_list)
+    res = client.get("/nullspace/leaderboard?version=1.2.0&limit=10")
+    assert res.status_code == 200
+    # version + limit reach the service unchanged (the scoping the route promises).
+    assert captured["version"] == "1.2.0"
+    assert captured["limit"] == 10
+
+
 def test_post_is_rate_limited(monkeypatch):
     # The limiter is disabled suite-wide (conftest); re-enable here since it's the
     # primary anti-abuse control on the public POST. create_score is stubbed so the

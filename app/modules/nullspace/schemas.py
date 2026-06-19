@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import Field, field_validator
 
@@ -7,6 +8,13 @@ from app.camel import CamelModel
 _MAX_NAME = 30
 # Mirrors the ShipKind union in the game engine.
 _SHIP_KINDS = {"fighter", "interceptor", "dreadnought"}
+
+
+class FlagReason(StrEnum):
+    # Why a submission was judged implausible — stored on the row, never served to clients.
+    score_exceeds_kills = "score-exceeds-kills"
+    kills_exceed_wave = "kills-exceed-wave"
+    too_fast_for_wave = "too-fast-for-wave"
 
 
 class ScoreSubmission(CamelModel):
