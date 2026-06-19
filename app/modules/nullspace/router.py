@@ -39,12 +39,13 @@ def submit_score(
     # Flagged runs return ok too — the client gets no signal it was caught (honeypot).
     if flagged:
         logger.info(
-            "nullspace score flagged (%s) from ip=%s score=%d kills=%d wave=%d",
+            "nullspace score flagged (%s) from ip=%s score=%d kills=%d wave=%d duration(s)=%d",
             reason,
             ip,
             submission.score,
             submission.kills,
             submission.wave,
+            submission.duration_ms // 1000,
         )
     return ScoreResult(status="ok")
 
