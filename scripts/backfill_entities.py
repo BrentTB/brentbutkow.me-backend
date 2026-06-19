@@ -10,8 +10,8 @@ _BATCH = 1000
 # One-time (re-runnable) pass: extract entities from every stored recall's reason_text. New rows
 # get entities at ingest via the normalizers — this seeds the existing backfill.
 def main() -> None:
+    # SessionLocal's expire_on_commit=False default keeps loaded rows usable across batch commits.
     session = SessionLocal()
-    session.expire_on_commit = False  # keep loaded rows usable across batch commits
     try:
         recalls = session.scalars(select(Recall)).all()
         for index, recall in enumerate(recalls, start=1):

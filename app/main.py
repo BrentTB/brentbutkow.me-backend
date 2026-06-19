@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from app.config import settings
 from app.db import engine
 from app.modules.contact.router import router as contact_router
+from app.modules.nullspace.router import router as nullspace_router
 from app.modules.recalls.router import router as recalls_router
 from app.rate_limit import limiter
 
@@ -33,6 +34,7 @@ OPENAPI_TAGS = [
         "description": "Food-recall data: list, aggregate stats, and the ingest trigger.",
     },
     {"name": "contact", "description": "Visitor contact messages."},
+    {"name": "nullspace", "description": "Null Space game leaderboard."},
     {"name": "system", "description": "Operational endpoints (liveness)."},
 ]
 
@@ -55,11 +57,14 @@ def create_app() -> FastAPI:
     def _postgres_unavailable(request: Request, exc: OperationalError) -> JSONResponse:
         # The engine connects lazily, so a down/unreachable Postgres surfaces here on the first
         # query of a request rather than at startup. Translate the noisy driver traceback into a
-        # short 503 instead of leaking a 500 with the full SQLAlchemy/psycopg stack.
+        # short 503 instead of leaking a 500 with the full SQLAlchemy/psycopg stack. The port/host
+        # stays in the server log; the client gets a generic message — don't disclose topology.
         port = engine.url.port or 5432
-        message = f"Postgres instance not found on port {port}, ensure it is running"
-        logger.warning(message)
-        return JSONResponse(status_code=503, content={"detail": message})
+        logger.warning("Postgres instance not reachable on port %s, ensure it is running", port)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database temporarily unavailable, please retry shortly."},
+        )
 
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(
@@ -77,6 +82,7 @@ def create_app() -> FastAPI:
 
     app.include_router(recalls_router, prefix="/recalls", tags=["recalls"])
     app.include_router(contact_router, prefix="/contact", tags=["contact"])
+    app.include_router(nullspace_router, prefix="/nullspace", tags=["nullspace"])
     return app
 
 

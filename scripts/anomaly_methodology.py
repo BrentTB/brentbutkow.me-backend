@@ -15,12 +15,11 @@ from sqlalchemy import func, select
 from statsmodels.tsa.seasonal import STL
 
 from app.db import SessionLocal
-from app.modules.recalls.anomalies import detect_anomalies
+from app.modules.recalls.anomalies import _MAD_TO_SIGMA, detect_anomalies
 from app.modules.recalls.classifier import MODEL_PATH
 from app.modules.recalls.models import Recall
 from app.modules.recalls.service import _continuous_months
 
-_MAD_TO_SIGMA = 0.6745
 _PERIOD = 12  # annual seasonality
 _THRESHOLD = 3.0
 
@@ -42,8 +41,9 @@ def _overall_series() -> list[tuple[str, int]]:
 
 
 def _stl_flags(series: list[tuple[str, int]]) -> set[str]:
-    # Flag months whose STL residual is a robust-z outlier. Drop the partial final month, as the
-    # runtime detector does, so the two are compared on the same points.
+    # Flag months whose STL residual is a high robust-z outlier. One-sided (positive residuals
+    # only), matching the runtime detector — dips never flag — so the two agree on the same
+    # criterion. Drop the partial final month, as the detector does, to compare on the same points.
     points = series[:-1]
     values = [float(count) for _, count in points]
     resid = list(STL(values, period=_PERIOD, robust=True).fit().resid)
@@ -52,7 +52,7 @@ def _stl_flags(series: list[tuple[str, int]]) -> set[str]:
     return {
         points[i][0]
         for i, r in enumerate(resid)
-        if abs(_MAD_TO_SIGMA * (r - median) / mad) >= _THRESHOLD
+        if _MAD_TO_SIGMA * (r - median) / mad >= _THRESHOLD
     }
 
 
@@ -67,9 +67,9 @@ def _write_card(n_months: int, zscore: set[str], stl: set[str]) -> None:
     card = f"""# Recall anomaly detection — methodology
 
 **Shipped detector (runtime):** robust z-score (median + MAD) over the monthly recall count, scoped
-to overall volume, each cause category, and the busiest entities. A month is flagged when |z| ≥ 3
-against its trailing 12-month baseline; the in-progress final month is excluded. Pure stdlib, so it
-runs on every `/recalls/stats` call with no extra dependency.
+to overall volume, each cause category, and the busiest entities. A month is flagged when z ≥ 3
+(one-sided) against its trailing 12-month baseline; the in-progress final month is excluded. Pure
+stdlib, so it runs on every `/recalls/stats` call with no extra dependency.
 
 **Why robust:** median + MAD resist a single past spike poisoning the baseline — a mean + stddev
 would let one outlier mask the next.

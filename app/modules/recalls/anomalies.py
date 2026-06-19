@@ -86,8 +86,9 @@ def detect_anomalies(
         z = rise / scale
         prior = [count for _, count in points[:index]]
         relative_spike = z >= threshold
-        # Near-record needs a stable percentile, so wait for a full window of history behind us.
-        near_record = len(prior) >= window and observed >= _high_water(prior)
+        # Near-record needs a stable percentile, so wait for a full window of history behind us —
+        # and never fewer than 2 points, which is the floor statistics.quantiles requires.
+        near_record = len(prior) >= max(window, 2) and observed >= _high_water(prior)
         if (relative_spike or near_record) and rise >= _MIN_ABSOLUTE_RISE:
             out.append(
                 {
@@ -103,6 +104,6 @@ def detect_anomalies(
 def _high_water(values: list[int]) -> float:
     """The `_HIGH_WATER_PCT`-th percentile of `values` — the bar a near-record month must clear.
 
-    `statistics.quantiles` needs ≥ 2 points; the caller already gates on a full window of history.
+    `statistics.quantiles` needs ≥ 2 points; the caller gates on `max(window, 2)` months of history.
     """
     return statistics.quantiles(values, n=100, method="inclusive")[_HIGH_WATER_PCT - 1]

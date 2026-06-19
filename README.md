@@ -18,6 +18,7 @@ app/
   main.py          FastAPI app, CORS, rate limit, create_all on boot
   modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · anomalies · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
+  modules/nullspace/ schemas · models · service · router — Null Space game leaderboard (rate-limited, server-side score plausibility checks)
 scripts/           manual ingest (openFDA · FSIS · UK FSA) · backfill · classifier training
 tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
 ```
@@ -36,6 +37,8 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | POST | `/recalls/ingest/uk` | **bearer-only** — fetches UK FSA, upserts, records an ingest run |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
+| POST | `/nullspace/score` | **public**, 10/min per IP — submit a game score; implausible runs are accepted but hidden from the board |
+| GET | `/nullspace/leaderboard?version&limit` | **public** — top scores, highest first; optional `version` scope, `limit` 1–200 |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · contaminant · other`.
 `classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US) · `Product Recall ·
@@ -43,7 +46,8 @@ Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source`
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Public reads are
-rate-limited (60/min per IP); `POST /contact` is limited to 5/min per IP. Interactive docs at `/docs`.
+rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
+10/min per IP. Interactive docs at `/docs`.
 
 ## Local development
 

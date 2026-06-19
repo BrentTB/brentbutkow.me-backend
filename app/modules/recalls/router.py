@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.auth import require_bearer
@@ -34,6 +34,12 @@ _RATE_LIMITED: dict[int | str, dict[str, Any]] = {
 }
 
 
+def _validate_date_range(since: date | None, until: date | None) -> None:
+    # An inverted window silently returns zero rows; a 422 makes the bad input explicit instead.
+    if since and until and since > until:
+        raise HTTPException(status_code=422, detail="`since` must be on or before `until`.")
+
+
 @router.get(
     "",
     response_model=RecallListResult,
@@ -56,10 +62,13 @@ def get_recalls(
     ),
     state: str | None = Query(
         default=None,
+        max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
     ),
     company: str | None = Query(
-        default=None, description="Filter by company name (case-insensitive partial match)."
+        default=None,
+        max_length=100,
+        description="Filter by company name (case-insensitive partial match).",
     ),
     entity: str | None = Query(
         default=None,
@@ -81,6 +90,7 @@ def get_recalls(
         description="Full-text search across product, reason, and company name.",
     ),
 ) -> RecallListResult:
+    _validate_date_range(since, until)
     # Public read — daily-updated data, so let browsers/CDN cache it briefly.
     response.headers["Cache-Control"] = "public, max-age=120"
     return list_recalls(
@@ -142,10 +152,13 @@ def recall_trend(
     ),
     state: str | None = Query(
         default=None,
+        max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
     ),
     company: str | None = Query(
-        default=None, description="Filter by company name (case-insensitive partial match)."
+        default=None,
+        max_length=100,
+        description="Filter by company name (case-insensitive partial match).",
     ),
     entity: str | None = Query(
         default=None,
@@ -167,6 +180,7 @@ def recall_trend(
         description="Full-text search across product, reason, and company name.",
     ),
 ) -> TrendResult:
+    _validate_date_range(since, until)
     response.headers["Cache-Control"] = "public, max-age=300"
     return get_trend(
         session,
