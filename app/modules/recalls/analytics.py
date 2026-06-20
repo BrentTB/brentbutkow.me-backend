@@ -44,7 +44,7 @@ _MIN_DOCS = 3
 # Rows per executemany when rewriting the neighbour table.
 _DB_CHUNK = 1000
 
-# Reason weighted 2:1 over the product description (≈ reason counted 1.5× product). TF-IDF is
+# Reason weighted 2:1 over the product description (reason counted 2× product). TF-IDF is
 # count-based, so repeating a field scales its term frequencies; document frequency (IDF) is
 # unchanged. Reason is the cause signal; product adds a little food context.
 _REASON_WEIGHT = 2
@@ -158,7 +158,95 @@ _DOMAIN_STOP = {
     "original",
     "classic",
 }
-_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP)
+# Risk-statement / symptom / affected-population boilerplate. UK FSA alerts are templated ("makes it
+# unsafe to eat", "possible health risk", "symptoms ... fever, diarrhoea", "people with weakened
+# immune systems"), which buries the hazard; plus generic US filler, titles, and a couple of brand
+# tokens that slip past company-name stripping. Hazard/allergen/food words are kept on purpose.
+_BOILERPLATE_STOP = {
+    # generic risk-statement filler
+    "risk",
+    "possible",
+    "health",
+    "make",
+    "makes",
+    "making",
+    "made",
+    "unsafe",
+    "eat",
+    "edible",
+    "presence",
+    "present",
+    "presents",
+    "listed",
+    "cause",
+    "caused",
+    "usually",
+    "safety",
+    "contains",
+    "contain",
+    "containing",
+    "constituents",
+    "allergy",
+    "allergies",
+    "intolerance",
+    "potential",
+    "potentially",
+    "packaged",
+    "ingredient",
+    "ingredients",
+    "recalled",
+    "firm",
+    "premium",
+    "select",
+    "high",
+    # symptoms — generic across pathogens, so they swamp the pathogen name
+    "symptoms",
+    "symptom",
+    "diarrhoea",
+    "diarrhea",
+    "abdominal",
+    "cramps",
+    "fever",
+    "pain",
+    "ache",
+    "aches",
+    "temperature",
+    "muscle",
+    "vomiting",
+    "nausea",
+    "sickness",
+    "headache",
+    # affected populations / vulnerability
+    "people",
+    "person",
+    "babies",
+    "baby",
+    "pregnant",
+    "women",
+    "woman",
+    "men",
+    "immune",
+    "weakened",
+    "elderly",
+    "old",
+    "age",
+    "aged",
+    "ages",
+    "vulnerable",
+    "systems",
+    "system",
+    "children",
+    "child",
+    # titles + brand tokens that slip past company-name stripping
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "st",
+    "vikki",
+    "loard",
+}
+_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP | _BOILERPLATE_STOP)
 
 # Keep only alphabetic tokens (≥2 letters) — drops pure numbers, dates, and lot/UPC codes.
 _TOKEN_PATTERN = r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
