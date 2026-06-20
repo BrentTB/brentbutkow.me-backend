@@ -61,4 +61,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
           OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
-        run: python -m scripts.${{ inputs.script }}
+          # Indirect through env rather than interpolating the input into the shell, so the run step
+          # can't be turned into a command-injection vector if this ever becomes a free-form input.
+          SCRIPT: ${{ inputs.script }}
+        run: python -m "scripts.$SCRIPT"

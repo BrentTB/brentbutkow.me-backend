@@ -18,7 +18,7 @@ from scipy.sparse import csr_matrix
 from sklearn.decomposition import NMF
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sqlalchemy import delete, insert, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.modules.recalls.models import Recall, RecallNeighbor, RecallTopic
 
@@ -144,8 +144,14 @@ def build_analytics(
 def rebuild_analytics(session: Session) -> dict[str, int]:
     """Recompute topics + neighbours over every stored recall and replace the materialised tables.
     Called by scripts/build_analytics.py after ingest. Whole thing is one transaction."""
+    # Only the text columns feed the matrix (the PK loads automatically, and topic_id is written
+    # back, not read) — so skip the heavy `raw` JSONB to bound memory over the whole corpus.
     recalls = list(
-        session.scalars(select(Recall).order_by(Recall.source, Recall.recall_number)).all()
+        session.scalars(
+            select(Recall)
+            .options(load_only(Recall.reason_text, Recall.product_description))
+            .order_by(Recall.source, Recall.recall_number)
+        ).all()
     )
     texts = [f"{r.reason_text or ''} {r.product_description or ''}".strip() for r in recalls]
     result = build_analytics(texts)

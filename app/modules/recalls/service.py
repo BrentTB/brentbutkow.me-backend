@@ -2,7 +2,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
@@ -511,9 +511,20 @@ def get_similar(
         .order_by(RecallNeighbor.rank)
         .limit(limit)
     ).all()
+    if not neighbors:
+        return []
+    # Hydrate every neighbour in one round-trip keyed by the composite PK, then re-attach in rank
+    # order. A neighbour can be missing if its recall was deleted since the build — skip those.
+    keys = [(n.neighbor_source, n.neighbor_number) for n in neighbors]
+    by_key = {
+        (recall.source, recall.recall_number): recall
+        for recall in session.scalars(
+            select(Recall).where(tuple_(Recall.source, Recall.recall_number).in_(keys))
+        )
+    }
     out: list[SimilarRecall] = []
     for neighbor in neighbors:
-        recall = session.get(Recall, (neighbor.neighbor_source, neighbor.neighbor_number))
+        recall = by_key.get((neighbor.neighbor_source, neighbor.neighbor_number))
         if recall is not None:
             out.append(
                 SimilarRecall(similarity=neighbor.score, recall=RecallOut.model_validate(recall))
@@ -551,12 +562,20 @@ def _run_ingest_job(
         records = fetch()
         rows = _dedupe(normalize(record) for record in records)
         # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
-        # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Scope
-        # by the rows' own Recall.source (e.g. "fda") — not `source`, which is the ingest-run label
-        # ("openfda_food"); a job only ever carries one source, so recall_number alone then dedupes.
-        row_sources = {row["source"] for row in rows}
-        existing = set(
-            session.scalars(select(Recall.recall_number).where(Recall.source.in_(row_sources)))
+        # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Look
+        # up only this batch's own composite keys (bounded by the fetch), not the whole source; a
+        # job carries one source, so recall_number alone then dedupes against what came back.
+        keys = [(row["source"], row["recall_number"]) for row in rows]
+        existing = (
+            set(
+                session.scalars(
+                    select(Recall.recall_number).where(
+                        tuple_(Recall.source, Recall.recall_number).in_(keys)
+                    )
+                )
+            )
+            if keys
+            else set()
         )
         new_count = sum(1 for row in rows if row["recall_number"] not in existing)
         _upsert_recalls(session, rows)
