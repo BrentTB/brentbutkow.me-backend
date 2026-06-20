@@ -1,8 +1,10 @@
 """Offline analytics over the recall corpus — themes (NMF topics) + similarity (cosine neighbours).
 
-One shared TF-IDF matrix over each recall's reason + product text powers both: NMF factorises it
-into interpretable topics (each labelled by its top terms — no model, no LLM at read time), and the
-L2-normalised rows give cosine similarity for "related recalls". Both are precomputed by
+One shared TF-IDF matrix over each recall's reason (weighted ~1.5×) + a heavily-stripped product
+description powers both: NMF factorises it into interpretable topics (each labelled by its top terms
+— no model, no LLM at read time), and the L2-normalised rows give cosine similarity for "related
+recalls". Packaging boilerplate, numbers/dates, and company names are dropped so themes land on
+hazards and foods, not "net wt oz" or brand names. Both are precomputed by
 `scripts/build_analytics.py` into the `recall_topics` / `recall_neighbors` tables and the
 `recalls.topic_id` column, so serving is plain indexed reads — sklearn is never imported by the app.
 
@@ -10,13 +12,14 @@ Pure compute lives in `build_analytics`; `rebuild_analytics` does the DB I/O. De
 (`random_state=42`) so a rebuild on unchanged data reproduces the same topics and neighbours.
 """
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.decomposition import NMF
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session, load_only
 
@@ -40,6 +43,149 @@ _MIN_DOCS = 3
 
 # Rows per executemany when rewriting the neighbour table.
 _DB_CHUNK = 1000
+
+# Reason weighted 2:1 over the product description (≈ reason counted 1.5× product). TF-IDF is
+# count-based, so repeating a field scales its term frequencies; document frequency (IDF) is
+# unchanged. Reason is the cause signal; product adds a little food context.
+_REASON_WEIGHT = 2
+_PRODUCT_WEIGHT = 1
+
+# Packaging / quantity / legal-entity / format boilerplate with no bearing on the recall cause.
+_DOMAIN_STOP = {
+    "oz",
+    "ozs",
+    "lb",
+    "lbs",
+    "fl",
+    "net",
+    "wt",
+    "weight",
+    "upc",
+    "ct",
+    "count",
+    "pack",
+    "packed",
+    "package",
+    "packages",
+    "packaging",
+    "inc",
+    "llc",
+    "co",
+    "ltd",
+    "corp",
+    "company",
+    "brand",
+    "brands",
+    "product",
+    "products",
+    "item",
+    "items",
+    "lot",
+    "lots",
+    "code",
+    "codes",
+    "approx",
+    "approximately",
+    "kg",
+    "kgs",
+    "mg",
+    "ml",
+    "case",
+    "cases",
+    "bag",
+    "bags",
+    "box",
+    "boxes",
+    "bottle",
+    "bottles",
+    "jar",
+    "jars",
+    "can",
+    "cans",
+    "container",
+    "containers",
+    "size",
+    "label",
+    "labels",
+    "best",
+    "sell",
+    "use",
+    "date",
+    "dates",
+    "exp",
+    "expiration",
+    "manufactured",
+    "distributed",
+    "sold",
+    "retail",
+    "store",
+    "stores",
+    "number",
+    "numbers",
+    "description",
+    "reads",
+    "part",
+    "include",
+    "including",
+    "various",
+    "located",
+    "marked",
+    "printed",
+    "master",
+    "flexible",
+    "individually",
+    "wrapped",
+    "sealed",
+    "vacuum",
+    "tray",
+    "trays",
+    "carton",
+    "cartons",
+    "pouch",
+    "pouches",
+    "sleeve",
+    "sleeves",
+    "clamshell",
+    "film",
+    "foodservice",
+    "ready",
+    "frozen",
+    "refrigerated",
+    "shelf",
+    "stable",
+    "variety",
+    "assorted",
+    "original",
+    "classic",
+}
+_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP)
+
+# Keep only alphabetic tokens (≥2 letters) — drops pure numbers, dates, and lot/UPC codes.
+_TOKEN_PATTERN = r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
+
+# max_df trims corpus-ubiquitous filler ("contains", "potential") on real corpora, but a tiny corpus
+# (a test, or a new country with few recalls) would empty out — so only apply it past a doc count.
+_MAX_DF = 0.3
+_MAX_DF_MIN_DOCS = 200
+
+# A term must appear in this many docs to count — higher on real corpora to shed one-off brand
+# tokens, lenient on small ones so a few-doc corpus still clusters.
+_MIN_DF_LARGE = 5
+_LARGE_CORPUS = 500
+
+
+def _strip_company(text: str, company: str | None) -> str:
+    # Drop the recalling firm's name tokens so a big manufacturer can't form its own "theme".
+    if not company:
+        return text
+    names = {word for word in re.findall(r"[a-zA-Z]+", company.lower()) if len(word) > 2}
+    return " ".join(word for word in text.split() if word.lower() not in names)
+
+
+def _compose_text(reason: str | None, product: str | None, company: str | None) -> str:
+    reason_text = _strip_company(reason or "", company)
+    product_text = _strip_company(product or "", company)
+    return " ".join([reason_text] * _REASON_WEIGHT + [product_text] * _PRODUCT_WEIGHT).strip()
 
 
 @dataclass
@@ -99,12 +245,16 @@ def build_analytics(
         return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors)
 
     corpus = [texts[i] for i in nonempty]
+    # Skip the corpus-frequency cap on tiny corpora (every shared term is a large fraction there).
+    max_df = _MAX_DF if len(corpus) >= _MAX_DF_MIN_DOCS else 1.0
     vectorizer = TfidfVectorizer(
         lowercase=True,
         ngram_range=_NGRAM,
         min_df=min_df,
+        max_df=max_df,
         max_features=_MAX_FEATURES,
-        stop_words="english",
+        stop_words=_STOP,
+        token_pattern=_TOKEN_PATTERN,
     )
     matrix = vectorizer.fit_transform(corpus)
     if matrix.shape[1] == 0:  # vocabulary emptied by min_df / stop-words
@@ -150,7 +300,14 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     recalls = list(
         session.scalars(
             select(Recall)
-            .options(load_only(Recall.country, Recall.reason_text, Recall.product_description))
+            .options(
+                load_only(
+                    Recall.country,
+                    Recall.reason_text,
+                    Recall.product_description,
+                    Recall.company_name,
+                )
+            )
             .order_by(Recall.country, Recall.source, Recall.recall_number)
         ).all()
     )
@@ -170,8 +327,10 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     next_topic_id = 0  # surrogate ids, unique across countries so recalls.topic_id stays one int
     for country in sorted(by_country):
         group = by_country[country]
-        texts = [f"{r.reason_text or ''} {r.product_description or ''}".strip() for r in group]
-        result = build_analytics(texts)
+        texts = [_compose_text(r.reason_text, r.product_description, r.company_name) for r in group]
+        # Shed one-off brand tokens on a real corpus; stay lenient so a small one still clusters.
+        min_df = _MIN_DF_LARGE if len(group) >= _LARGE_CORPUS else _MIN_DF
+        result = build_analytics(texts, min_df=min_df)
 
         local_to_global: dict[int, int] = {}
         for topic in result.topics:
