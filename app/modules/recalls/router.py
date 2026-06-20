@@ -12,17 +12,23 @@ from app.modules.recalls.schemas import (
     RecallClass,
     RecallCountry,
     RecallListResult,
+    RecallSort,
     RecallSource,
     RecallStats,
+    SeverityLabel,
+    SimilarRecall,
+    TopicOut,
     TrendGroup,
     TrendResult,
 )
 from app.modules.recalls.service import (
+    get_similar,
     get_stats,
+    get_topics,
     get_trend,
     list_recalls,
+    run_fda_ingest,
     run_fsis_ingest,
-    run_ingest,
     run_uk_ingest,
     search_companies,
 )
@@ -78,6 +84,13 @@ def get_recalls(
             "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
         ),
     ),
+    min_severity: float | None = Query(
+        default=None,
+        alias="minSeverity",
+        ge=0,
+        le=100,
+        description="Only recalls at or above this severity score (0–100).",
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -88,6 +101,17 @@ def get_recalls(
         default=None,
         max_length=200,
         description="Full-text search across product, reason, and company name.",
+    ),
+    severity: SeverityLabel | None = Query(
+        default=None,
+        description="Filter to a severity band: low, elevated, high, or severe.",
+    ),
+    topic: int | None = Query(
+        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
+    ),
+    sort: RecallSort = Query(
+        default=RecallSort.recency,
+        description="Order: recency (newest first, the default) or severity (most severe first).",
     ),
 ) -> RecallListResult:
     _validate_date_range(since, until)
@@ -104,9 +128,13 @@ def get_recalls(
         state=state,
         company=company,
         entity=entity,
+        min_severity=min_severity,
+        severity=severity.value if severity else None,
+        topic=topic,
         since=since,
         until=until,
         search=search,
+        sort=sort.value,
     )
 
 
@@ -168,6 +196,13 @@ def recall_trend(
             "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
         ),
     ),
+    min_severity: float | None = Query(
+        default=None,
+        alias="minSeverity",
+        ge=0,
+        le=100,
+        description="Only recalls at or above this severity score (0–100).",
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -178,6 +213,13 @@ def recall_trend(
         default=None,
         max_length=200,
         description="Full-text search across product, reason, and company name.",
+    ),
+    severity: SeverityLabel | None = Query(
+        default=None,
+        description="Filter to a severity band: low, elevated, high, or severe.",
+    ),
+    topic: int | None = Query(
+        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
     ),
 ) -> TrendResult:
     _validate_date_range(since, until)
@@ -192,6 +234,9 @@ def recall_trend(
         company=company,
         source=source.value if source else None,
         entity=entity,
+        min_severity=min_severity,
+        severity=severity.value if severity else None,
+        topic=topic,
         since=since,
         until=until,
         search=search,
@@ -220,6 +265,45 @@ def recall_companies(
     return search_companies(session, country.value if country else None, q)
 
 
+@router.get(
+    "/topics",
+    response_model=list[TopicOut],
+    summary="Recall themes",
+    description=(
+        "Themes discovered across recalls (NMF over the reason/product text), largest first. "
+        "Scope the list or trend to one with `topic=<id>`."
+    ),
+    responses=_RATE_LIMITED,
+)
+def recall_topics(
+    response: Response,
+    session: Session = Depends(get_session),
+) -> list[TopicOut]:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return get_topics(session)
+
+
+@router.get(
+    "/{source}/{recall_number}/similar",
+    response_model=list[SimilarRecall],
+    summary="Similar recalls",
+    description=(
+        "Recalls most similar to this one by reason/product text — precomputed cosine nearest "
+        "neighbours over the shared TF-IDF matrix."
+    ),
+    responses=_RATE_LIMITED,
+)
+def recall_similar(
+    source: RecallSource,
+    recall_number: str,
+    response: Response,
+    session: Session = Depends(get_session),
+    limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),
+) -> list[SimilarRecall]:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return get_similar(session, source.value, recall_number, limit)
+
+
 @router.post(
     "/ingest/fda",
     response_model=IngestResult,
@@ -229,7 +313,7 @@ def recall_companies(
     responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest(session: Session = Depends(get_session)) -> IngestResult:
-    return run_ingest(session)
+    return run_fda_ingest(session)
 
 
 @router.post(

@@ -2,7 +2,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
@@ -11,7 +11,7 @@ from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
-from app.modules.recalls.models import IngestRun, Recall
+from app.modules.recalls.models import IngestRun, Recall, RecallNeighbor, RecallTopic
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -25,7 +25,11 @@ from app.modules.recalls.schemas import (
     MonthCount,
     RecallListResult,
     RecallOut,
+    RecallSort,
     RecallStats,
+    SeverityLabel,
+    SimilarRecall,
+    TopicOut,
     TrendBucket,
     TrendGroup,
     TrendResult,
@@ -48,6 +52,14 @@ _COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
 _ANOMALY_TOP_ENTITIES = 20
 _ANOMALY_LIMIT = 8
 _ANOMALY_RECENT_MONTHS = 24
+
+# Severity bands surface worst-first in the stats breakdown (label is text, so we order it here).
+_SEVERITY_RANK = {
+    SeverityLabel.severe.value: 0,
+    SeverityLabel.high.value: 1,
+    SeverityLabel.elevated.value: 2,
+    SeverityLabel.low.value: 3,
+}
 
 
 def _continuous_months(months: list[str]) -> list[str]:
@@ -136,6 +148,9 @@ def _recall_conditions(
     state: str | None = None,
     company: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
+    severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -161,6 +176,15 @@ def _recall_conditions(
     if entity:
         # `entities` is the array of {type, value}; match if any element has this value (GIN @>).
         conditions.append(Recall.entities.contains([{"value": entity}]))
+    if min_severity is not None:
+        # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
+        conditions.append(Recall.severity_score >= min_severity)
+    if severity:
+        # Exact severity band: low / elevated / high / severe.
+        conditions.append(Recall.severity_label == severity)
+    if topic is not None:
+        # NMF theme — topic 0 is valid, so test against None, not falsiness.
+        conditions.append(Recall.topic_id == topic)
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -184,9 +208,13 @@ def list_recalls(
     state: str | None = None,
     company: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
+    severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
+    sort: str | None = None,
 ) -> RecallListResult:
     # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
     search = search.strip() if search else None
@@ -199,6 +227,9 @@ def list_recalls(
         state=state,
         company=company,
         entity=entity,
+        min_severity=min_severity,
+        severity=severity,
+        topic=topic,
         since=since,
         until=until,
         search=search,
@@ -210,12 +241,15 @@ def list_recalls(
         stmt = stmt.where(condition)
         count_stmt = count_stmt.where(condition)
 
-    # Rank by text relevance when searching, then fall back to most-recent-first.
+    # Rank by text relevance when searching, then by severity if asked, then most-recent-first so
+    # ties always resolve to a stable, sensible order.
     ordering = []
     if search:
         ordering.append(
             func.ts_rank(Recall.search_vector, func.websearch_to_tsquery("english", search)).desc()
         )
+    if sort == RecallSort.severity.value:
+        ordering.append(Recall.severity_score.desc().nulls_last())
     ordering.append(Recall.report_date.desc().nulls_last())
     rows = session.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     total = session.scalar(count_stmt) or 0
@@ -260,6 +294,13 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .order_by(Recall.classification)
         )
     ).all()
+    # Counts per severity band, ordered worst-first in Python (the label is text, not ordinal).
+    by_severity = sorted(
+        session.execute(
+            scoped(select(Recall.severity_label, func.count()).group_by(Recall.severity_label))
+        ).all(),
+        key=lambda row: _SEVERITY_RANK.get(row[0], len(_SEVERITY_RANK)),
+    )
     # Count each affected state by unnesting the `states` array, so a multi-state FSIS recall
     # counts toward every state it touches. Bounded set (~50) — the leaderboard slices it.
     states_elem = func.jsonb_array_elements_text(Recall.states).table_valued(
@@ -378,6 +419,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         by_classification=[
             LabelCount(label=label, count=count) for label, count in by_classification
         ],
+        by_severity=[LabelCount(label=label, count=count) for label, count in by_severity],
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         by_source=[LabelCount(label=label, count=count) for label, count in by_source],
@@ -400,6 +442,9 @@ def get_trend(
     company: str | None = None,
     source: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
+    severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -416,6 +461,9 @@ def get_trend(
             company=company,
             source=source,
             entity=entity,
+            min_severity=min_severity,
+            severity=severity,
+            topic=topic,
             since=since,
             until=until,
             search=search,
@@ -441,6 +489,47 @@ def get_trend(
         buckets = [TrendBucket(month=m, group="total", count=count) for m, count in rows]
 
     return TrendResult(group=TrendGroup(group), buckets=buckets)
+
+
+def get_topics(session: Session) -> list[TopicOut]:
+    # The materialised NMF themes, largest first; empty topics (no recalls) are hidden.
+    rows = session.scalars(
+        select(RecallTopic).where(RecallTopic.size > 0).order_by(RecallTopic.size.desc())
+    ).all()
+    return [
+        TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
+    ]
+
+
+def get_similar(
+    session: Session, source: str, recall_number: str, limit: int = 6
+) -> list[SimilarRecall]:
+    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls.
+    neighbors = session.scalars(
+        select(RecallNeighbor)
+        .where(RecallNeighbor.source == source, RecallNeighbor.recall_number == recall_number)
+        .order_by(RecallNeighbor.rank)
+        .limit(limit)
+    ).all()
+    if not neighbors:
+        return []
+    # Hydrate every neighbour in one round-trip keyed by the composite PK, then re-attach in rank
+    # order. A neighbour can be missing if its recall was deleted since the build — skip those.
+    keys = [(n.neighbor_source, n.neighbor_number) for n in neighbors]
+    by_key = {
+        (recall.source, recall.recall_number): recall
+        for recall in session.scalars(
+            select(Recall).where(tuple_(Recall.source, Recall.recall_number).in_(keys))
+        )
+    }
+    out: list[SimilarRecall] = []
+    for neighbor in neighbors:
+        recall = by_key.get((neighbor.neighbor_source, neighbor.neighbor_number))
+        if recall is not None:
+            out.append(
+                SimilarRecall(similarity=neighbor.score, recall=RecallOut.model_validate(recall))
+            )
+    return out
 
 
 def search_companies(
@@ -472,13 +561,30 @@ def _run_ingest_job(
     try:
         records = fetch()
         rows = _dedupe(normalize(record) for record in records)
+        # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
+        # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Look
+        # up only this batch's own composite keys (bounded by the fetch), not the whole source; a
+        # job carries one source, so recall_number alone then dedupes against what came back.
+        keys = [(row["source"], row["recall_number"]) for row in rows]
+        existing = (
+            set(
+                session.scalars(
+                    select(Recall.recall_number).where(
+                        tuple_(Recall.source, Recall.recall_number).in_(keys)
+                    )
+                )
+            )
+            if keys
+            else set()
+        )
+        new_count = sum(1 for row in rows if row["recall_number"] not in existing)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)
         run.upserted_count = len(rows)
         run.status = "ok"
         session.commit()
-        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
+        return IngestResult(status="ok", fetched=len(records), new=new_count, upserted=len(rows))
     except Exception as exc:
         session.rollback()
         run.status = "error"
@@ -491,7 +597,7 @@ def _run_ingest_job(
         raise
 
 
-def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
+def run_fda_ingest(session: Session, limit: int = 1000) -> IngestResult:
     return _run_ingest_job(
         session,
         source="openfda_food",

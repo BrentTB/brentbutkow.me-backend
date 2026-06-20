@@ -46,6 +46,19 @@ class EntityType(StrEnum):
     contaminant = "contaminant"
 
 
+class SeverityLabel(StrEnum):
+    # Bands over the 0–100 severity_score — see app/modules/recalls/severity.py for the thresholds.
+    low = "low"
+    elevated = "elevated"
+    high = "high"
+    severe = "severe"
+
+
+class RecallSort(StrEnum):
+    recency = "recency"  # most recent report_date first (the default)
+    severity = "severity"  # highest severity_score first, then most recent
+
+
 class RecallEntity(CamelModel):
     type: EntityType = Field(description="Entity kind: allergen, pathogen, hazard, or contaminant.")
     value: str = Field(description="Canonical entity name.", examples=["peanuts", "Listeria"])
@@ -74,6 +87,15 @@ class RecallOut(CamelModel):
     report_date: date | None = Field(description="When it was reported.")
     category: RecallCategory = Field(description="Predicted cause category from the classifier.")
     category_confidence: float = Field(description="Classifier confidence in [0, 1].")
+    severity_score: float = Field(
+        description=(
+            "Composite 0–100 severity, blending the recall's classification, cause category, the "
+            "deadliest named entities, and geographic breadth onto one US/UK-comparable scale."
+        )
+    )
+    severity_label: SeverityLabel = Field(
+        description="Banded severity: low, elevated, high, or severe."
+    )
     entities: list[RecallEntity] = Field(
         default_factory=list,
         description="Allergens, pathogens, hazards, and contaminants found in the reason.",
@@ -83,6 +105,20 @@ class RecallOut(CamelModel):
 class RecallListResult(CamelModel):
     items: list[RecallOut]
     total: int
+
+
+class TopicOut(CamelModel):
+    id: int = Field(description="Topic id (NMF component); also stored on each recall as topicId.")
+    label: str = Field(
+        description="Human label — the topic's top terms.", examples=["listeria · deli · meat"]
+    )
+    top_terms: list[str] = Field(description="Ranked terms describing the topic.")
+    size: int = Field(description="Number of recalls assigned to this topic.")
+
+
+class SimilarRecall(CamelModel):
+    similarity: float = Field(description="Cosine similarity to the queried recall, in [0, 1].")
+    recall: RecallOut = Field(description="The similar recall.")
 
 
 class CategoryCount(CamelModel):
@@ -160,6 +196,7 @@ class RecallStats(CamelModel):
     by_category: list[CategoryCount]
     by_month: list[MonthCount]
     by_classification: list[LabelCount]
+    by_severity: list[LabelCount]
     by_state: list[LabelCount]
     by_company: list[LabelCount]
     by_source: list[LabelCount]
@@ -171,4 +208,7 @@ class RecallStats(CamelModel):
 class IngestResult(CamelModel):
     status: str
     fetched: int
+    # Rows that were genuinely new (not already stored), vs. `upserted` which counts every row
+    # written — new and re-seen alike, so it's almost always just the fetched total.
+    new: int
     upserted: int
