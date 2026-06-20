@@ -28,9 +28,9 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&minSeverity&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
-| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&minSeverity&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
@@ -49,8 +49,8 @@ canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity
 carries a `severityScore` (0–100) and `severityLabel` ∈ `low · elevated · high · severe` — a
 transparent composite of classification, cause, the deadliest named entities, and geographic breadth
 that puts US classes and UK alert types on one scale (see `app/modules/recalls/severity.py`);
-`minSeverity` filters to recalls at or above a score, `sort=severity` orders by it, and `bySeverity`
-breaks the corpus down by band. Public reads are
+`severity` filters to one band, `minSeverity` to recalls at or above a score, `sort=severity` orders
+by it, and `bySeverity` breaks the corpus down by band. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
 10/min per IP. Interactive docs at `/docs`.
 

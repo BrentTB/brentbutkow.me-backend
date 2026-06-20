@@ -119,6 +119,21 @@ def test_list_recalls_forwards_sort_and_min_severity(monkeypatch):
     assert client.get("/recalls?minSeverity=150").status_code == 422
 
 
+def test_list_recalls_forwards_severity(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.clear()
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?severity=severe").status_code == 200
+    assert captured["severity"] == "severe"
+    # an unknown band is rejected by the enum, not silently forwarded
+    assert client.get("/recalls?severity=critical").status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,

@@ -509,6 +509,12 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
     floored = service.list_recalls(session, limit=50, offset=0, min_severity=70)
     assert {i.recall_number for i in floored.items} == {"V-2"}
 
+    # the exact-band filter returns only recalls in that band.
+    severe = service.list_recalls(session, limit=50, offset=0, severity="severe")
+    assert {i.recall_number for i in severe.items} == {"V-2"}
+    elevated = service.list_recalls(session, limit=50, offset=0, severity="elevated")
+    assert {i.recall_number for i in elevated.items} == {"V-3"}
+
     # stats expose a worst-first by_severity breakdown that sums back to the corpus.
     stats = service.get_stats(session)
     counts = {s.label: s.count for s in stats.by_severity}

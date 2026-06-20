@@ -147,6 +147,7 @@ def _recall_conditions(
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
+    severity: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -175,6 +176,9 @@ def _recall_conditions(
     if min_severity is not None:
         # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
         conditions.append(Recall.severity_score >= min_severity)
+    if severity:
+        # Exact severity band: low / elevated / high / severe.
+        conditions.append(Recall.severity_label == severity)
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -199,6 +203,7 @@ def list_recalls(
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
+    severity: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -216,6 +221,7 @@ def list_recalls(
         company=company,
         entity=entity,
         min_severity=min_severity,
+        severity=severity,
         since=since,
         until=until,
         search=search,
@@ -429,6 +435,7 @@ def get_trend(
     source: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
+    severity: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -446,6 +453,7 @@ def get_trend(
             source=source,
             entity=entity,
             min_severity=min_severity,
+            severity=severity,
             since=since,
             until=until,
             search=search,

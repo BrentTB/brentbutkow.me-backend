@@ -15,6 +15,7 @@ from app.modules.recalls.schemas import (
     RecallSort,
     RecallSource,
     RecallStats,
+    SeverityLabel,
     TrendGroup,
     TrendResult,
 )
@@ -97,6 +98,10 @@ def get_recalls(
         max_length=200,
         description="Full-text search across product, reason, and company name.",
     ),
+    severity: SeverityLabel | None = Query(
+        default=None,
+        description="Filter to a severity band: low, elevated, high, or severe.",
+    ),
     sort: RecallSort = Query(
         default=RecallSort.recency,
         description="Order: recency (newest first, the default) or severity (most severe first).",
@@ -117,6 +122,7 @@ def get_recalls(
         company=company,
         entity=entity,
         min_severity=min_severity,
+        severity=severity.value if severity else None,
         since=since,
         until=until,
         search=search,
@@ -200,6 +206,10 @@ def recall_trend(
         max_length=200,
         description="Full-text search across product, reason, and company name.",
     ),
+    severity: SeverityLabel | None = Query(
+        default=None,
+        description="Filter to a severity band: low, elevated, high, or severe.",
+    ),
 ) -> TrendResult:
     _validate_date_range(since, until)
     response.headers["Cache-Control"] = "public, max-age=300"
@@ -214,6 +224,7 @@ def recall_trend(
         source=source.value if source else None,
         entity=entity,
         min_severity=min_severity,
+        severity=severity.value if severity else None,
         since=since,
         until=until,
         search=search,
