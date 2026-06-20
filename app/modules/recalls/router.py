@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy.orm import Session
 
 from app.auth import require_bearer
@@ -104,7 +104,7 @@ def get_recalls(
     ),
     severity: SeverityLabel | None = Query(
         default=None,
-        description="Filter to a severity band: low, elevated, high, or severe.",
+        description="Filter to a severity band: low, moderate, high, or severe.",
     ),
     topic: int | None = Query(
         default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
@@ -216,7 +216,7 @@ def recall_trend(
     ),
     severity: SeverityLabel | None = Query(
         default=None,
-        description="Filter to a severity band: low, elevated, high, or severe.",
+        description="Filter to a severity band: low, moderate, high, or severe.",
     ),
     topic: int | None = Query(
         default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
@@ -278,9 +278,10 @@ def recall_companies(
 def recall_topics(
     response: Response,
     session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope themes to a country."),
 ) -> list[TopicOut]:
     response.headers["Cache-Control"] = "public, max-age=300"
-    return get_topics(session)
+    return get_topics(session, country.value if country else None)
 
 
 @router.get(
@@ -295,8 +296,10 @@ def recall_topics(
 )
 def recall_similar(
     source: RecallSource,
-    recall_number: str,
     response: Response,
+    recall_number: str = Path(
+        max_length=64, description="The recall's identifier within its source."
+    ),
     session: Session = Depends(get_session),
     limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),
 ) -> list[SimilarRecall]:

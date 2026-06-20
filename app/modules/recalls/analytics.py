@@ -1,8 +1,10 @@
 """Offline analytics over the recall corpus — themes (NMF topics) + similarity (cosine neighbours).
 
-One shared TF-IDF matrix over each recall's reason + product text powers both: NMF factorises it
-into interpretable topics (each labelled by its top terms — no model, no LLM at read time), and the
-L2-normalised rows give cosine similarity for "related recalls". Both are precomputed by
+One shared TF-IDF matrix over each recall's reason (weighted ~2×) + a heavily-stripped product
+description powers both: NMF factorises it into interpretable topics (each labelled by its top terms
+— no model, no LLM at read time), and the L2-normalised rows give cosine similarity for "related
+recalls". Packaging boilerplate, numbers/dates, and company names are dropped so themes land on
+hazards and foods, not "net wt oz" or brand names. Both are precomputed by
 `scripts/build_analytics.py` into the `recall_topics` / `recall_neighbors` tables and the
 `recalls.topic_id` column, so serving is plain indexed reads — sklearn is never imported by the app.
 
@@ -10,13 +12,14 @@ Pure compute lives in `build_analytics`; `rebuild_analytics` does the DB I/O. De
 (`random_state=42`) so a rebuild on unchanged data reproduces the same topics and neighbours.
 """
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.decomposition import NMF
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session, load_only
 
@@ -40,6 +43,237 @@ _MIN_DOCS = 3
 
 # Rows per executemany when rewriting the neighbour table.
 _DB_CHUNK = 1000
+
+# Reason weighted 2:1 over the product description (reason counted 2× product). TF-IDF is
+# count-based, so repeating a field scales its term frequencies; document frequency (IDF) is
+# unchanged. Reason is the cause signal; product adds a little food context.
+_REASON_WEIGHT = 2
+_PRODUCT_WEIGHT = 1
+
+# Packaging / quantity / legal-entity / format boilerplate with no bearing on the recall cause.
+_DOMAIN_STOP = {
+    "oz",
+    "ozs",
+    "lb",
+    "lbs",
+    "fl",
+    "net",
+    "wt",
+    "weight",
+    "upc",
+    "ct",
+    "count",
+    "pack",
+    "packed",
+    "package",
+    "packages",
+    "packaging",
+    "inc",
+    "llc",
+    "co",
+    "ltd",
+    "corp",
+    "company",
+    "brand",
+    "brands",
+    "product",
+    "products",
+    "item",
+    "items",
+    "lot",
+    "lots",
+    "code",
+    "codes",
+    "approx",
+    "approximately",
+    "kg",
+    "kgs",
+    "mg",
+    "ml",
+    "case",
+    "cases",
+    "bag",
+    "bags",
+    "box",
+    "boxes",
+    "bottle",
+    "bottles",
+    "jar",
+    "jars",
+    "can",
+    "cans",
+    "container",
+    "containers",
+    "size",
+    "label",
+    "labels",
+    "best",
+    "sell",
+    "use",
+    "date",
+    "dates",
+    "exp",
+    "expiration",
+    "manufactured",
+    "distributed",
+    "sold",
+    "retail",
+    "store",
+    "stores",
+    "number",
+    "numbers",
+    "description",
+    "reads",
+    "part",
+    "include",
+    "including",
+    "various",
+    "located",
+    "marked",
+    "printed",
+    "master",
+    "flexible",
+    "individually",
+    "wrapped",
+    "sealed",
+    "vacuum",
+    "tray",
+    "trays",
+    "carton",
+    "cartons",
+    "pouch",
+    "pouches",
+    "sleeve",
+    "sleeves",
+    "clamshell",
+    "film",
+    "foodservice",
+    "ready",
+    "frozen",
+    "refrigerated",
+    "shelf",
+    "stable",
+    "variety",
+    "assorted",
+    "original",
+    "classic",
+}
+# Risk-statement / symptom / affected-population boilerplate. UK FSA alerts are templated ("makes it
+# unsafe to eat", "possible health risk", "symptoms ... fever, diarrhoea", "people with weakened
+# immune systems"), which buries the hazard; plus generic US filler, titles, and a couple of brand
+# tokens that slip past company-name stripping. Hazard/allergen/food words are kept on purpose.
+_BOILERPLATE_STOP = {
+    # generic risk-statement filler
+    "risk",
+    "possible",
+    "health",
+    "make",
+    "makes",
+    "making",
+    "made",
+    "unsafe",
+    "eat",
+    "edible",
+    "presence",
+    "present",
+    "presents",
+    "listed",
+    "cause",
+    "caused",
+    "usually",
+    "safety",
+    "contains",
+    "contain",
+    "containing",
+    "constituents",
+    "allergy",
+    "allergies",
+    "intolerance",
+    "potential",
+    "potentially",
+    "packaged",
+    "ingredient",
+    "ingredients",
+    "recalled",
+    "firm",
+    "premium",
+    "select",
+    "high",
+    # symptoms — generic across pathogens, so they swamp the pathogen name
+    "symptoms",
+    "symptom",
+    "diarrhoea",
+    "diarrhea",
+    "abdominal",
+    "cramps",
+    "fever",
+    "pain",
+    "ache",
+    "aches",
+    "temperature",
+    "muscle",
+    "vomiting",
+    "nausea",
+    "sickness",
+    "headache",
+    # affected populations / vulnerability
+    "people",
+    "person",
+    "babies",
+    "baby",
+    "pregnant",
+    "women",
+    "woman",
+    "men",
+    "immune",
+    "weakened",
+    "elderly",
+    "old",
+    "age",
+    "aged",
+    "ages",
+    "vulnerable",
+    "systems",
+    "system",
+    "children",
+    "child",
+    # titles + brand tokens that slip past company-name stripping
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "st",
+    "vikki",
+    "loard",
+}
+_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP | _BOILERPLATE_STOP)
+
+# Keep only alphabetic tokens (≥2 letters) — drops pure numbers, dates, and lot/UPC codes.
+_TOKEN_PATTERN = r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
+
+# max_df trims corpus-ubiquitous filler ("contains", "potential") on real corpora, but a tiny corpus
+# (a test, or a new country with few recalls) would empty out — so only apply it past a doc count.
+_MAX_DF = 0.3
+_MAX_DF_MIN_DOCS = 200
+
+# A term must appear in this many docs to count — higher on real corpora to shed one-off brand
+# tokens, lenient on small ones so a few-doc corpus still clusters.
+_MIN_DF_LARGE = 5
+_LARGE_CORPUS = 500
+
+
+def _strip_company(text: str, company: str | None) -> str:
+    # Drop the recalling firm's name tokens so a big manufacturer can't form its own "theme".
+    if not company:
+        return text
+    names = {word for word in re.findall(r"[a-zA-Z]+", company.lower()) if len(word) > 2}
+    return " ".join(word for word in text.split() if word.lower() not in names)
+
+
+def _compose_text(reason: str, product: str, company: str | None) -> str:
+    reason_text = _strip_company(reason, company)
+    product_text = _strip_company(product, company)
+    return " ".join([reason_text] * _REASON_WEIGHT + [product_text] * _PRODUCT_WEIGHT).strip()
 
 
 @dataclass
@@ -81,6 +315,39 @@ def _compute_neighbors(matrix: csr_matrix, n_neighbors: int) -> list[list[tuple[
     return out
 
 
+def _norm_token(token: str) -> str:
+    # Light singularising for de-duplication only (peanut/peanuts, egg/eggs) — not real stemming.
+    # Guard short words and double-s endings so "less"/"glass"/"gas" survive intact.
+    if len(token) >= 4 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _top_terms(features: np.ndarray, weights: np.ndarray, n_terms: int) -> list[str]:
+    """Rank a topic's terms, dropping redundant ones so no word repeats in the label.
+
+    The reason field is up-weighted by repetition (see `_compose_text`), which manufactures
+    pure-repetition bigrams ("egg egg") and lets one word surface both as a unigram and inside a
+    bigram ("salmonella" + "salmonella contamination"). Both read as noise. Walk the ranked terms
+    and keep one only if every word in it (singularised) is new to the label so far."""
+    chosen: list[str] = []
+    used: set[str] = set()
+    for index in np.argsort(weights)[::-1]:
+        if weights[index] <= 0:  # NMF weights are non-negative; nothing useful past zero
+            break
+        term = str(features[index])
+        tokens = [_norm_token(t) for t in term.split()]
+        if len(tokens) == 2 and tokens[0] == tokens[1]:
+            continue  # "egg egg" — pure repetition artifact of the reason up-weighting
+        if any(token in used for token in tokens):
+            continue  # a word already shown (as a unigram or inside an earlier term)
+        chosen.append(term)
+        used.update(tokens)
+        if len(chosen) >= n_terms:
+            break
+    return chosen
+
+
 def build_analytics(
     texts: list[str],
     *,
@@ -99,12 +366,16 @@ def build_analytics(
         return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors)
 
     corpus = [texts[i] for i in nonempty]
+    # Skip the corpus-frequency cap on tiny corpora (every shared term is a large fraction there).
+    max_df = _MAX_DF if len(corpus) >= _MAX_DF_MIN_DOCS else 1.0
     vectorizer = TfidfVectorizer(
         lowercase=True,
         ngram_range=_NGRAM,
         min_df=min_df,
+        max_df=max_df,
         max_features=_MAX_FEATURES,
-        stop_words="english",
+        stop_words=_STOP,
+        token_pattern=_TOKEN_PATTERN,
     )
     matrix = vectorizer.fit_transform(corpus)
     if matrix.shape[1] == 0:  # vocabulary emptied by min_df / stop-words
@@ -124,8 +395,7 @@ def build_analytics(
     sizes = Counter(topic for topic in topic_ids if topic is not None)
     topics = []
     for component in range(topic_count):
-        order = np.argsort(model.components_[component])[::-1][:n_terms]
-        terms = [str(features[j]) for j in order]
+        terms = _top_terms(features, model.components_[component], n_terms)
         topics.append(
             TopicInfo(
                 id=component,
@@ -142,51 +412,81 @@ def build_analytics(
 
 
 def rebuild_analytics(session: Session) -> dict[str, int]:
-    """Recompute topics + neighbours over every stored recall and replace the materialised tables.
-    Called by scripts/build_analytics.py after ingest. Whole thing is one transaction."""
-    # Only the text columns feed the matrix (the PK loads automatically, and topic_id is written
+    """Recompute topics + neighbours and replace the materialised tables. Themes are computed **per
+    country** (US and UK recall structures differ, and the dashboard is country-scoped), and
+    similarity stays within a country too. Called by scripts/build_analytics.py. One transaction."""
+    # Only the text + country columns feed the work (PKs load automatically; topic_id is written
     # back, not read) — so skip the heavy `raw` JSONB to bound memory over the whole corpus.
     recalls = list(
         session.scalars(
             select(Recall)
-            .options(load_only(Recall.reason_text, Recall.product_description))
-            .order_by(Recall.source, Recall.recall_number)
+            .options(
+                load_only(
+                    Recall.country,
+                    Recall.reason_text,
+                    Recall.product_description,
+                    Recall.company_name,
+                )
+            )
+            .order_by(Recall.country, Recall.source, Recall.recall_number)
         ).all()
     )
-    texts = [f"{r.reason_text or ''} {r.product_description or ''}".strip() for r in recalls]
-    result = build_analytics(texts)
+    # Group by country, preserving the deterministic order above.
+    by_country: dict[str, list[Recall]] = {}
+    for recall in recalls:
+        by_country.setdefault(recall.country, []).append(recall)
 
-    for recall, topic_id in zip(recalls, result.topic_ids, strict=True):
-        recall.topic_id = topic_id
-
+    for recall in recalls:
+        recall.topic_id = None
     session.execute(delete(RecallNeighbor))
     session.execute(delete(RecallTopic))
     session.flush()
-    if result.topics:
-        session.execute(
-            insert(RecallTopic),
-            [
-                {"id": t.id, "label": t.label, "top_terms": t.top_terms, "size": t.size}
-                for t in result.topics
-            ],
-        )
 
+    topic_rows: list[dict[str, object]] = []
     neighbor_rows: list[dict[str, object]] = []
-    for recall, nbrs in zip(recalls, result.neighbors, strict=True):
-        for rank, (index, score) in enumerate(nbrs, start=1):
-            neighbor = recalls[index]
-            neighbor_rows.append(
+    next_topic_id = 0  # surrogate ids, unique across countries so recalls.topic_id stays one int
+    for country in sorted(by_country):
+        group = by_country[country]
+        texts = [_compose_text(r.reason_text, r.product_description, r.company_name) for r in group]
+        # Shed one-off brand tokens on a real corpus; stay lenient so a small one still clusters.
+        min_df = _MIN_DF_LARGE if len(group) >= _LARGE_CORPUS else _MIN_DF
+        result = build_analytics(texts, min_df=min_df)
+
+        local_to_global: dict[int, int] = {}
+        for topic in result.topics:
+            local_to_global[topic.id] = next_topic_id
+            topic_rows.append(
                 {
-                    "source": recall.source,
-                    "recall_number": recall.recall_number,
-                    "rank": rank,
-                    "neighbor_source": neighbor.source,
-                    "neighbor_number": neighbor.recall_number,
-                    "score": round(float(score), 4),
+                    "id": next_topic_id,
+                    "country": country,
+                    "label": topic.label,
+                    "top_terms": topic.top_terms,
+                    "size": topic.size,
                 }
             )
+            next_topic_id += 1
+
+        for recall, topic_id in zip(group, result.topic_ids, strict=True):
+            recall.topic_id = local_to_global[topic_id] if topic_id is not None else None
+
+        for recall, nbrs in zip(group, result.neighbors, strict=True):
+            for rank, (index, score) in enumerate(nbrs, start=1):
+                neighbor = group[index]
+                neighbor_rows.append(
+                    {
+                        "source": recall.source,
+                        "recall_number": recall.recall_number,
+                        "rank": rank,
+                        "neighbor_source": neighbor.source,
+                        "neighbor_number": neighbor.recall_number,
+                        "score": round(float(score), 4),
+                    }
+                )
+
+    if topic_rows:
+        session.execute(insert(RecallTopic), topic_rows)
     for start in range(0, len(neighbor_rows), _DB_CHUNK):
         session.execute(insert(RecallNeighbor), neighbor_rows[start : start + _DB_CHUNK])
 
     session.commit()
-    return {"recalls": len(recalls), "topics": len(result.topics), "neighbors": len(neighbor_rows)}
+    return {"recalls": len(recalls), "topics": len(topic_rows), "neighbors": len(neighbor_rows)}

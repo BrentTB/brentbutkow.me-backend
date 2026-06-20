@@ -1,6 +1,8 @@
 from app.modules.recalls import fsa_uk
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.fsa_uk import FsaRecord, normalize_fsa
 from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.severity import score_severity
 
 # Trimmed from a real FSA Food Alerts API record.
 ALERT = {
@@ -39,6 +41,15 @@ def test_normalize_alert(monkeypatch):
     assert "BBQ" in row["product_description"]
     assert row["category"] == "pathogen"
     assert {"type": "pathogen", "value": "Salmonella"} in row["entities"]
+    # UK alerts carry no US geography, so severity rests on classification + category + entities
+    # (Salmonella is a deadliest-entity bonus). Re-derive from those inputs only.
+    expected_score, expected_label = score_severity(
+        classification="Product Recall",
+        category=RecallCategory.pathogen.value,
+        entities=extract_entities("The products might be contaminated with salmonella."),
+    )
+    assert row["severity_score"] == expected_score
+    assert row["severity_label"] == expected_label
 
 
 def test_classification_maps_alert_types():

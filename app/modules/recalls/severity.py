@@ -59,6 +59,7 @@ _DEADLIEST: frozenset[str] = frozenset(
         "Clostridium botulinum",
         "Salmonella",
         "marine biotoxin",
+        "Cereulide",  # heat-stable emetic toxin (B. cereus) — acute, can be fatal
         "undeclared drug",
     }
 )
@@ -75,7 +76,7 @@ _WIDE_STATE_COUNT = 6
 # Score → band thresholds (inclusive lower bound). Class I always clears 75 via the base alone.
 _SEVERE = 75.0
 _HIGH = 55.0
-_ELEVATED = 35.0
+_MODERATE = 35.0
 
 
 def _breadth_bonus(states: list[str] | None, distribution_pattern: str | None) -> float:
@@ -94,8 +95,8 @@ def _label(score: float) -> str:
         return SeverityLabel.severe.value
     if score >= _HIGH:
         return SeverityLabel.high.value
-    if score >= _ELEVATED:
-        return SeverityLabel.elevated.value
+    if score >= _MODERATE:
+        return SeverityLabel.moderate.value
     return SeverityLabel.low.value
 
 

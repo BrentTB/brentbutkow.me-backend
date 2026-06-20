@@ -155,6 +155,9 @@ def test_topics(monkeypatch):
     assert res.status_code == 200
     assert res.json() == []
     assert res.headers["cache-control"] == "public, max-age=300"
+    # themes can be scoped to a country; an unknown one is rejected by the enum
+    assert client.get("/recalls/topics?country=uk").status_code == 200
+    assert client.get("/recalls/topics?country=zz").status_code == 422
 
 
 def test_similar(monkeypatch):

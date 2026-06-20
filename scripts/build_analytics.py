@@ -21,8 +21,8 @@ def status(session: Session) -> tuple[bool, str]:
             .where(
                 Recall.topic_id.is_(None),
                 or_(
-                    func.coalesce(Recall.reason_text, "") != "",
-                    func.coalesce(Recall.product_description, "") != "",
+                    Recall.reason_text != "",
+                    Recall.product_description != "",
                 ),
             )
         )

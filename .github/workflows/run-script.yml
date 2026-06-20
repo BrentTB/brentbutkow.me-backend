@@ -38,6 +38,10 @@ on:
           - reclassify
           - build_analytics
 
+# Least privilege: this job runs a script against the external DB and only needs to check out the repo.
+permissions:
+  contents: read
+
 jobs:
   run-script:
     runs-on: ubuntu-latest

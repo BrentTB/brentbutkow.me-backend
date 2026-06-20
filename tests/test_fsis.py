@@ -1,6 +1,7 @@
 from app.modules.recalls import fsis
 from app.modules.recalls.fsis import FsisRecord, normalize_fsis
 from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.severity import score_severity
 
 # Trimmed from real FSIS API responses (a recall and a public-health-alert row).
 RECALL = {
@@ -67,6 +68,17 @@ def test_normalize_recall(monkeypatch):
     # Entities come from reason_text only — "Misbranding, Unreported Allergens" names no specific
     # allergen, and "CRAB" in the product description is (correctly) not matched.
     assert row["entities"] == []
+    # Severity must reflect the multi-state geography the normalizer forwards (states + the
+    # full-name distribution pattern), so re-derive from those exact inputs.
+    expected_score, expected_label = score_severity(
+        classification="Class I",
+        category=RecallCategory.allergen.value,
+        entities=[],
+        states=["CA", "NJ", "WA"],
+        distribution_pattern="California, New Jersey, Washington",
+    )
+    assert row["severity_score"] == expected_score
+    assert row["severity_label"] == expected_label
 
 
 def test_normalize_public_health_alert(monkeypatch):

@@ -10,6 +10,7 @@ from app.modules.recalls.severity import score_severity
 # Re-derives category + confidence + entity tags + severity over already-stored recalls, in place,
 # without re-fetching from the sources. Run after training a new model or changing the entity
 # gazetteer / severity rules: `python -m scripts.reclassify`.
+# Recompute-dependency map (what to re-run when an input changes): scripts/backfill_all.py
 def main() -> None:
     session = SessionLocal()
     try:

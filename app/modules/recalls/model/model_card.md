@@ -11,12 +11,12 @@ to the v1 keyword baseline otherwise. There is **no human ground-truth set**, so
 *generalize* this taxonomy rather than beat an independent gold standard, and `category_confidence`
 is the model's predicted probability for the chosen class.
 
-**Training data:** 28542 openFDA food-enforcement recalls.
+**Training data:** 28544 openFDA food-enforcement recalls.
 
-**Held-out accuracy vs weak labels:** 0.988 — how faithfully it reproduces the labeler on
+**Held-out accuracy vs weak labels:** 0.985 — how faithfully it reproduces the labeler on
 a 20% test split.
 
-**Generalization:** 18 of 5139 recalls the weak labeler left as `other` were
+**Generalization:** 18 of 5138 recalls the weak labeler left as `other` were
 reclassified into a concrete category with confidence ≥ 0.6 — signal the labeler
 missed.
 

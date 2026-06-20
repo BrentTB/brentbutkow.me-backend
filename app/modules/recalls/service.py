@@ -57,7 +57,7 @@ _ANOMALY_RECENT_MONTHS = 24
 _SEVERITY_RANK = {
     SeverityLabel.severe.value: 0,
     SeverityLabel.high.value: 1,
-    SeverityLabel.elevated.value: 2,
+    SeverityLabel.moderate.value: 2,
     SeverityLabel.low.value: 3,
 }
 
@@ -180,7 +180,7 @@ def _recall_conditions(
         # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
         conditions.append(Recall.severity_score >= min_severity)
     if severity:
-        # Exact severity band: low / elevated / high / severe.
+        # Exact severity band: low / moderate / high / severe.
         conditions.append(Recall.severity_label == severity)
     if topic is not None:
         # NMF theme — topic 0 is valid, so test against None, not falsiness.
@@ -491,11 +491,12 @@ def get_trend(
     return TrendResult(group=TrendGroup(group), buckets=buckets)
 
 
-def get_topics(session: Session) -> list[TopicOut]:
-    # The materialised NMF themes, largest first; empty topics (no recalls) are hidden.
-    rows = session.scalars(
-        select(RecallTopic).where(RecallTopic.size > 0).order_by(RecallTopic.size.desc())
-    ).all()
+def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
+    # The materialised NMF themes for a country, largest first; empty topics are hidden.
+    stmt = select(RecallTopic).where(RecallTopic.size > 0)
+    if country:
+        stmt = stmt.where(RecallTopic.country == country)
+    rows = session.scalars(stmt.order_by(RecallTopic.size.desc())).all()
     return [
         TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
     ]
@@ -504,12 +505,14 @@ def get_topics(session: Session) -> list[TopicOut]:
 def get_similar(
     session: Session, source: str, recall_number: str, limit: int = 6
 ) -> list[SimilarRecall]:
-    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls.
+    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls. The
+    # stored set is already capped per recall, so fetch them all (not just `limit`) and trim after
+    # dropping deleted ones — limiting the query first could return fewer than `limit` valid rows
+    # when a top-ranked neighbour's recall was removed since the build.
     neighbors = session.scalars(
         select(RecallNeighbor)
         .where(RecallNeighbor.source == source, RecallNeighbor.recall_number == recall_number)
         .order_by(RecallNeighbor.rank)
-        .limit(limit)
     ).all()
     if not neighbors:
         return []
@@ -529,6 +532,8 @@ def get_similar(
             out.append(
                 SimilarRecall(similarity=neighbor.score, recall=RecallOut.model_validate(recall))
             )
+        if len(out) == limit:
+            break
     return out
 
 
@@ -563,21 +568,22 @@ def _run_ingest_job(
         rows = _dedupe(normalize(record) for record in records)
         # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
         # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Look
-        # up only this batch's own composite keys (bounded by the fetch), not the whole source; a
-        # job carries one source, so recall_number alone then dedupes against what came back.
+        # up only this batch's own composite keys (bounded by the fetch), not the whole source, and
+        # compare on the full (source, recall_number) so the count holds for a mixed-source job too.
         keys = [(row["source"], row["recall_number"]) for row in rows]
         existing = (
-            set(
-                session.scalars(
-                    select(Recall.recall_number).where(
+            {
+                (src, num)
+                for src, num in session.execute(
+                    select(Recall.source, Recall.recall_number).where(
                         tuple_(Recall.source, Recall.recall_number).in_(keys)
                     )
                 )
-            )
+            }
             if keys
             else set()
         )
-        new_count = sum(1 for row in rows if row["recall_number"] not in existing)
+        new_count = sum(1 for row in rows if (row["source"], row["recall_number"]) not in existing)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)

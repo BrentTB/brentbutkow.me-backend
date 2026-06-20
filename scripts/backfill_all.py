@@ -1,3 +1,31 @@
+"""Runs the data backfills, skipping any already done (each module reports its own status()).
+
+Recompute-dependency map — what each derived field is built from, and how to re-derive it over the
+existing corpus. New rows get all of this at ingest; these scripts re-stage it for older rows.
+
+  entities                       from reason_text + the gazetteer (entities.py)
+                                 -> scripts.backfill_entities
+  category (+ confidence)        from reason_text + the model (classifier.joblib)
+                                 -> scripts.reclassify
+  severity (score + label)       from classification + category + entities + states +
+                                 distribution_pattern + the rules in severity.py
+                                 -> scripts.backfill_severity
+  topics / topic_id / neighbors  from reason_text + product_description + analytics params
+                                 -> scripts.build_analytics
+
+So when you change ...           re-run ...
+  the reason_text mapping        reclassify (entities+category+severity), then build_analytics
+  the product_description text   build_analytics
+  the entity gazetteer           backfill_entities, then backfill_severity
+  the classifier model           reclassify
+  the severity rules             backfill_severity
+  the analytics params           build_analytics
+
+Severity sits downstream of entities and category, so changing either re-stages severity too;
+reclassify recomputes those three together, build_analytics is always separate, and backfill_all
+auto-detects every case above through each module's status().
+"""
+
 import argparse
 from typing import Protocol
 
