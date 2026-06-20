@@ -106,8 +106,8 @@ def get_recalls(
         default=None,
         description="Filter to a severity band: low, moderate, high, or severe.",
     ),
-    topic: int | None = Query(
-        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
+    topic: str | None = Query(
+        default=None, description="Filter to a theme — a slug from /recalls/topics."
     ),
     sort: RecallSort = Query(
         default=RecallSort.recency,
@@ -218,8 +218,8 @@ def recall_trend(
         default=None,
         description="Filter to a severity band: low, moderate, high, or severe.",
     ),
-    topic: int | None = Query(
-        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
+    topic: str | None = Query(
+        default=None, description="Filter to a theme — a slug from /recalls/topics."
     ),
 ) -> TrendResult:
     _validate_date_range(since, until)
@@ -271,7 +271,7 @@ def recall_companies(
     summary="Recall themes",
     description=(
         "Themes discovered across recalls (NMF over the reason/product text), largest first. "
-        "Scope the list or trend to one with `topic=<id>`."
+        "Scope the list or trend to one with `topic=<slug>`."
     ),
     responses=_RATE_LIMITED,
 )

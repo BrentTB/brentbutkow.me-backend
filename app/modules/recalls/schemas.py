@@ -112,7 +112,11 @@ class RecallListResult(CamelModel):
 
 
 class TopicOut(CamelModel):
-    id: int = Field(description="Topic id (NMF component); also stored on each recall as topicId.")
+    id: int = Field(description="Surrogate topic id; also stored on each recall as topicId.")
+    slug: str = Field(
+        description="Stable key from the terms; use as the `topic` filter (survives a rebuild).",
+        examples=["listeria-deli-meat"],
+    )
     label: str = Field(
         description="Human label — the topic's top terms.", examples=["listeria · deli · meat"]
     )

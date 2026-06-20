@@ -150,7 +150,7 @@ def _recall_conditions(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -182,9 +182,13 @@ def _recall_conditions(
     if severity:
         # Exact severity band: low / moderate / high / severe.
         conditions.append(Recall.severity_label == severity)
-    if topic is not None:
-        # NMF theme — topic 0 is valid, so test against None, not falsiness.
-        conditions.append(Recall.topic_id == topic)
+    if topic:
+        # Resolve the theme slug to its surrogate id(s), scoped to the country when set — slugs are
+        # unique per country, so the same theme in another country is a different row.
+        topic_ids = select(RecallTopic.id).where(RecallTopic.slug == topic)
+        if country:
+            topic_ids = topic_ids.where(RecallTopic.country == country)
+        conditions.append(Recall.topic_id.in_(topic_ids))
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -210,7 +214,7 @@ def list_recalls(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -444,7 +448,7 @@ def get_trend(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -498,7 +502,8 @@ def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
         stmt = stmt.where(RecallTopic.country == country)
     rows = session.scalars(stmt.order_by(RecallTopic.size.desc())).all()
     return [
-        TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
+        TopicOut(id=row.id, slug=row.slug, label=row.label, top_terms=row.top_terms, size=row.size)
+        for row in rows
     ]
 
 

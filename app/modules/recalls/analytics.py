@@ -411,6 +411,21 @@ def build_analytics(
     return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, topics=topics)
 
 
+def _slugify(label: str) -> str:
+    # Stable, readable URL key from the terms, e.g. "Listeria · deli" → "listeria-deli".
+    return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+
+def _unique_slug(label: str, topic_id: int, seen: set[str]) -> str:
+    # Disambiguate the rare case where two topics in one country share a term-slug.
+    base = _slugify(label) or f"theme-{topic_id}"
+    slug, suffix = base, 2
+    while slug in seen:
+        slug, suffix = f"{base}-{suffix}", suffix + 1
+    seen.add(slug)
+    return slug
+
+
 def rebuild_analytics(session: Session) -> dict[str, int]:
     """Recompute topics + neighbours and replace the materialised tables. Themes are computed **per
     country** (US and UK recall structures differ, and the dashboard is country-scoped), and
@@ -453,12 +468,14 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
         result = build_analytics(texts, min_df=min_df)
 
         local_to_global: dict[int, int] = {}
+        seen_slugs: set[str] = set()
         for topic in result.topics:
             local_to_global[topic.id] = next_topic_id
             topic_rows.append(
                 {
                     "id": next_topic_id,
                     "country": country,
+                    "slug": _unique_slug(topic.label, next_topic_id, seen_slugs),
                     "label": topic.label,
                     "top_terms": topic.top_terms,
                     "size": topic.size,

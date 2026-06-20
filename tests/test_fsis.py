@@ -76,6 +76,7 @@ def test_normalize_recall(monkeypatch):
         entities=[],
         states=["CA", "NJ", "WA"],
         distribution_pattern="California, New Jersey, Washington",
+        reason_text="Misbranding, Unreported Allergens",
     )
     assert row["severity_score"] == expected_score
     assert row["severity_label"] == expected_label

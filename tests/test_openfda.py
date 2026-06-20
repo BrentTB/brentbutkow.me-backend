@@ -39,6 +39,7 @@ def test_normalize_maps_openfda_fields_to_domain(monkeypatch):
         entities=extract_entities("Product contains undeclared milk."),
         states=["FL"],
         distribution_pattern=None,
+        reason_text="Product contains undeclared milk.",
     )
     assert result["severity_score"] == expected_score
     assert result["severity_label"] == expected_label

@@ -143,10 +143,9 @@ def test_list_recalls_forwards_topic(monkeypatch):
         return {"items": [], "total": 0}
 
     monkeypatch.setattr(router_module, "list_recalls", fake_list)
-    assert client.get("/recalls?topic=3").status_code == 200
-    assert captured["topic"] == 3
-    # a negative topic id is rejected by the ge=0 bound
-    assert client.get("/recalls?topic=-1").status_code == 422
+    # topic is now a stable slug (string), not the volatile numeric id.
+    assert client.get("/recalls?topic=listeria-deli-meat").status_code == 200
+    assert captured["topic"] == "listeria-deli-meat"
 
 
 def test_topics(monkeypatch):

@@ -19,7 +19,7 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import Recall
+from app.modules.recalls.models import Recall, RecallTopic
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -575,10 +575,11 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     assert summary["topics"] >= 1
     assert summary["neighbors"] > 0
 
-    # Topics are materialised with terms + sizes; every recall is assigned to exactly one.
+    # Topics are materialised with terms + sizes + a stable slug; every recall is assigned to one.
     topics = service.get_topics(session)
     assert topics
     assert all(topic.top_terms for topic in topics)
+    assert all(topic.slug for topic in topics)  # a readable key was generated, not left blank
     assert sum(topic.size for topic in topics) == 6
 
     # The nearest neighbour of one deli-meat Listeria recall is its near-duplicate.
@@ -587,10 +588,12 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     assert similar[0].recall.recall_number == "N-2"
     assert 0 < similar[0].similarity <= 1
 
-    # The topic filter narrows the list to a theme's members.
+    # The topic filter narrows the list to a theme's members — keyed by the stable slug, which is
+    # what a bookmark / shared URL carries (not the volatile surrogate id).
     recall = session.get(Recall, ("fda", "N-1"))
     assert recall.topic_id is not None
-    members = service.list_recalls(session, limit=50, offset=0, topic=recall.topic_id)
+    topic_row = session.get(RecallTopic, recall.topic_id)
+    members = service.list_recalls(session, limit=50, offset=0, topic=topic_row.slug)
     assert "N-1" in {item.recall_number for item in members.items}
 
     # The serialised recall carries its topicId (the field the frontend reads for the theme chip).

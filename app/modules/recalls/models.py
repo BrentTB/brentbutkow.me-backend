@@ -88,6 +88,9 @@ class RecallTopic(Base):
     # stays a single int. `country` scopes the theme list — themes are computed per country.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     country: Mapped[str] = mapped_column(Text, index=True, server_default="us")
+    # Stable, human-readable key derived from the terms (e.g. "listeria-deli-meat"), unique within a
+    # country. The API filters by this instead of `id` so a bookmarked theme survives a rebuild.
+    slug: Mapped[str] = mapped_column(Text, index=True, server_default="")
     label: Mapped[str] = mapped_column(Text)
     top_terms: Mapped[list[str]] = mapped_column(JSONB)
     size: Mapped[int] = mapped_column(Integer)
