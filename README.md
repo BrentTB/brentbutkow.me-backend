@@ -19,7 +19,7 @@ app/
   modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · anomalies · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
   modules/nullspace/ schemas · models · service · router — Null Space game leaderboard (rate-limited, server-side score plausibility checks)
-scripts/           manual ingest (openFDA · FSIS · UK FSA) · backfill · classifier training
+scripts/           per-source ingest + ingest_all · backfill + backfill_all (detects what's needed) · reclassify · classifier training
 tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
 ```
 
@@ -73,13 +73,16 @@ cp .env.example .env               # set DATABASE_URL + INGEST_BEARER_TOKEN
 # point DATABASE_URL at a local Postgres (any instance), create that database, then:
 alembic upgrade head                         # create / update tables (migrations)
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
-python -m scripts.ingest                     # pull the latest openFDA recalls into the DB
+python -m scripts.ingest_fda                 # pull the latest openFDA recalls into the DB
 python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (via curl_cffi)
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
+python -m scripts.ingest_all                 # run all three source ingests in one pass
 python -m scripts.backfill                   # one-time: seed full openFDA history (~26k records)
+python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
+python -m scripts.backfill_entities          # one-time: seed entities over existing recalls (after migrating)
+python -m scripts.backfill_all               # run the still-needed backfills above (--all forces · --check previews)
 python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
 python -m scripts.reclassify                 # re-run model + entities + severity over stored recalls
-python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
@@ -103,7 +106,7 @@ Postgres (`DATABASE_URL` is overridden to the internal `db` service), so it's se
 ```bash
 cp .env.example .env        # first time
 docker compose up --build   # http://localhost:3000/health  +  /docs
-docker compose exec api python -m scripts.ingest     # latest recalls
+docker compose exec api python -m scripts.ingest_all # latest recalls (all sources)
 docker compose exec api python -m scripts.backfill   # one-time: full history (~26k)
 docker compose down         # stop (add -v to also wipe the DB)
 ```

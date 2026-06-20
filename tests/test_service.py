@@ -89,7 +89,7 @@ def _seed_multi_source(session, monkeypatch) -> None:
         monkeypatch,
         [_record("D-1", reason_for_recall="undeclared milk", state="CA", report_date="20240101")],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
     _patch_fsis(
         monkeypatch,
         [
@@ -116,7 +116,7 @@ def _seed_multi_source(session, monkeypatch) -> None:
     service.run_uk_ingest(session)
 
 
-def test_run_ingest_dedupes_batch_and_upserts(session, monkeypatch):
+def test_run_fda_ingest_dedupes_batch_and_upserts(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
         [
@@ -127,9 +127,10 @@ def test_run_ingest_dedupes_batch_and_upserts(session, monkeypatch):
         ],
     )
 
-    result = service.run_ingest(session)
+    result = service.run_fda_ingest(session)
 
     assert result.fetched == 3
+    assert result.new == 2  # fresh DB, so both surviving rows are new
     assert result.upserted == 2
     rows = {r.recall_number: r for r in session.scalars(select(Recall)).all()}
     assert set(rows) == {"R-1", "R-2"}
@@ -137,12 +138,14 @@ def test_run_ingest_dedupes_batch_and_upserts(session, monkeypatch):
     assert rows["R-1"].category == RecallCategory.foreign_material.value
 
 
-def test_run_ingest_is_idempotent_on_conflict(session, monkeypatch):
+def test_run_fda_ingest_is_idempotent_on_conflict(session, monkeypatch):
     _patch_fetch(monkeypatch, [_record("R-1", reason_for_recall="undeclared milk")])
-    service.run_ingest(session)
+    first = service.run_fda_ingest(session)
+    assert first.new == 1  # brand new
 
     _patch_fetch(monkeypatch, [_record("R-1", reason_for_recall="listeria")])
-    service.run_ingest(session)
+    second = service.run_fda_ingest(session)
+    assert second.new == 0  # same identity re-seen → updated, not new
 
     rows = session.scalars(select(Recall)).all()
     assert len(rows) == 1
@@ -179,7 +182,7 @@ def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
             ),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     newest_first = service.list_recalls(session, limit=50, offset=0)
     assert newest_first.total == 3
@@ -227,7 +230,7 @@ def test_search_companies_ranks_by_count_and_matches_substring(session, monkeypa
             _record("C-4", recalling_firm="Acme Foods"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     # Ranked by recall count: "Acme Foods" (2) leads the singletons.
     assert service.search_companies(session)[0] == "Acme Foods"
@@ -252,7 +255,7 @@ def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monk
             ),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     # @@ match: only the listeria records come back, and ts_rank puts F-3 (term in reason + company)
     # ahead of F-1 (single occurrence).
@@ -281,7 +284,7 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
             _record("S-3", reason_for_recall="listeria", report_date="20240301"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     stats = service.get_stats(session)
 
@@ -311,7 +314,7 @@ def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
             _record("E-3", reason_for_recall="possible listeria", report_date="20240301"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     # by_entity unnests the {type, value} array, so a recall naming several entities counts to each.
     by_entity = {(e.type.value, e.label): e.count for e in service.get_stats(session).by_entity}
@@ -338,7 +341,7 @@ def test_get_trend_groups_by_category_and_source(session, monkeypatch):
             _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     total = {b.month: b.count for b in service.get_trend(session, group="total").buckets}
     assert total["2024-01"] == 2 and total["2024-03"] == 1
@@ -363,7 +366,7 @@ def test_get_trend_applies_the_recall_filters(session, monkeypatch):
             _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     # Unfiltered: Jan has 2 (milk + listeria), Mar has 1 (soy).
     total = {b.month: b.count for b in service.get_trend(session).buckets}
@@ -400,6 +403,7 @@ def test_run_fsis_ingest_maps_states_and_upserts(session, monkeypatch):
     result = service.run_fsis_ingest(session)
 
     assert result.fetched == 1
+    assert result.new == 1
     assert result.upserted == 1
     row = session.scalars(select(Recall)).one()
     assert row.source == RecallSource.usda.value
@@ -433,6 +437,7 @@ def test_run_uk_ingest_classifies_and_upserts(session, monkeypatch):
 
     result = service.run_uk_ingest(session)
 
+    assert result.new == 1
     assert result.upserted == 1
     row = session.scalars(select(Recall)).one()
     assert row.source == RecallSource.uk.value
@@ -498,7 +503,7 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
             _record("V-3", reason_for_recall="incorrect label", classification="Class II"),
         ],
     )
-    service.run_ingest(session)
+    service.run_fda_ingest(session)
 
     # The Class I Listeria recall is the most severe, so sort=severity surfaces it first.
     by_severity = service.list_recalls(session, limit=50, offset=0, sort="severity")
@@ -521,3 +526,69 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
     assert counts["severe"] == 1
     assert sum(counts.values()) == 3
     assert [s.label for s in stats.by_severity] == ["severe", "elevated", "low"]
+
+
+def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
+    from app.modules.recalls import analytics
+
+    # Three pairs of near-duplicate recalls so every doc shares ≥2-document-frequency terms with its
+    # partner — the default min_df keeps them, so every recall gets a topic + neighbours.
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "N-1",
+                reason_for_recall="Listeria monocytogenes in deli meat",
+                product_description="sliced deli turkey",
+            ),
+            _record(
+                "N-2",
+                reason_for_recall="Listeria contamination in deli meat",
+                product_description="deli turkey slices",
+            ),
+            _record(
+                "N-3",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="chocolate peanut cookies",
+            ),
+            _record(
+                "N-4",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="peanut cookies pack",
+            ),
+            _record(
+                "N-5",
+                reason_for_recall="metal fragments in frozen pizza",
+                product_description="frozen pizza",
+            ),
+            _record(
+                "N-6",
+                reason_for_recall="metal fragments in frozen pizza",
+                product_description="frozen pizza pack",
+            ),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    summary = analytics.rebuild_analytics(session)
+    assert summary["recalls"] == 6
+    assert summary["topics"] >= 1
+    assert summary["neighbors"] > 0
+
+    # Topics are materialised with terms + sizes; every recall is assigned to exactly one.
+    topics = service.get_topics(session)
+    assert topics
+    assert all(topic.top_terms for topic in topics)
+    assert sum(topic.size for topic in topics) == 6
+
+    # The nearest neighbour of one deli-meat Listeria recall is its near-duplicate.
+    similar = service.get_similar(session, "fda", "N-1", 3)
+    assert similar
+    assert similar[0].recall.recall_number == "N-2"
+    assert 0 < similar[0].similarity <= 1
+
+    # The topic filter narrows the list to a theme's members.
+    recall = session.get(Recall, ("fda", "N-1"))
+    assert recall.topic_id is not None
+    members = service.list_recalls(session, limit=50, offset=0, topic=recall.topic_id)
+    assert "N-1" in {item.recall_number for item in members.items}

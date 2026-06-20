@@ -11,7 +11,7 @@ from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
-from app.modules.recalls.models import IngestRun, Recall
+from app.modules.recalls.models import IngestRun, Recall, RecallNeighbor, RecallTopic
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -28,6 +28,8 @@ from app.modules.recalls.schemas import (
     RecallSort,
     RecallStats,
     SeverityLabel,
+    SimilarRecall,
+    TopicOut,
     TrendBucket,
     TrendGroup,
     TrendResult,
@@ -148,6 +150,7 @@ def _recall_conditions(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -179,6 +182,9 @@ def _recall_conditions(
     if severity:
         # Exact severity band: low / elevated / high / severe.
         conditions.append(Recall.severity_label == severity)
+    if topic is not None:
+        # NMF theme — topic 0 is valid, so test against None, not falsiness.
+        conditions.append(Recall.topic_id == topic)
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -204,6 +210,7 @@ def list_recalls(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -222,6 +229,7 @@ def list_recalls(
         entity=entity,
         min_severity=min_severity,
         severity=severity,
+        topic=topic,
         since=since,
         until=until,
         search=search,
@@ -436,6 +444,7 @@ def get_trend(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
+    topic: int | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -454,6 +463,7 @@ def get_trend(
             entity=entity,
             min_severity=min_severity,
             severity=severity,
+            topic=topic,
             since=since,
             until=until,
             search=search,
@@ -479,6 +489,36 @@ def get_trend(
         buckets = [TrendBucket(month=m, group="total", count=count) for m, count in rows]
 
     return TrendResult(group=TrendGroup(group), buckets=buckets)
+
+
+def get_topics(session: Session) -> list[TopicOut]:
+    # The materialised NMF themes, largest first; empty topics (no recalls) are hidden.
+    rows = session.scalars(
+        select(RecallTopic).where(RecallTopic.size > 0).order_by(RecallTopic.size.desc())
+    ).all()
+    return [
+        TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
+    ]
+
+
+def get_similar(
+    session: Session, source: str, recall_number: str, limit: int = 6
+) -> list[SimilarRecall]:
+    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls.
+    neighbors = session.scalars(
+        select(RecallNeighbor)
+        .where(RecallNeighbor.source == source, RecallNeighbor.recall_number == recall_number)
+        .order_by(RecallNeighbor.rank)
+        .limit(limit)
+    ).all()
+    out: list[SimilarRecall] = []
+    for neighbor in neighbors:
+        recall = session.get(Recall, (neighbor.neighbor_source, neighbor.neighbor_number))
+        if recall is not None:
+            out.append(
+                SimilarRecall(similarity=neighbor.score, recall=RecallOut.model_validate(recall))
+            )
+    return out
 
 
 def search_companies(
@@ -510,13 +550,22 @@ def _run_ingest_job(
     try:
         records = fetch()
         rows = _dedupe(normalize(record) for record in records)
+        # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
+        # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Scope
+        # by the rows' own Recall.source (e.g. "fda") — not `source`, which is the ingest-run label
+        # ("openfda_food"); a job only ever carries one source, so recall_number alone then dedupes.
+        row_sources = {row["source"] for row in rows}
+        existing = set(
+            session.scalars(select(Recall.recall_number).where(Recall.source.in_(row_sources)))
+        )
+        new_count = sum(1 for row in rows if row["recall_number"] not in existing)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)
         run.upserted_count = len(rows)
         run.status = "ok"
         session.commit()
-        return IngestResult(status="ok", fetched=len(records), upserted=len(rows))
+        return IngestResult(status="ok", fetched=len(records), new=new_count, upserted=len(rows))
     except Exception as exc:
         session.rollback()
         run.status = "error"
@@ -529,7 +578,7 @@ def _run_ingest_job(
         raise
 
 
-def run_ingest(session: Session, limit: int = 1000) -> IngestResult:
+def run_fda_ingest(session: Session, limit: int = 1000) -> IngestResult:
     return _run_ingest_job(
         session,
         source="openfda_food",

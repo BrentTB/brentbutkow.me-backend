@@ -134,6 +134,40 @@ def test_list_recalls_forwards_severity(monkeypatch):
     assert client.get("/recalls?severity=critical").status_code == 422
 
 
+def test_list_recalls_forwards_topic(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.clear()
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?topic=3").status_code == 200
+    assert captured["topic"] == 3
+    # a negative topic id is rejected by the ge=0 bound
+    assert client.get("/recalls?topic=-1").status_code == 422
+
+
+def test_topics(monkeypatch):
+    monkeypatch.setattr(router_module, "get_topics", lambda *a, **k: [])
+    res = client.get("/recalls/topics")
+    assert res.status_code == 200
+    assert res.json() == []
+    assert res.headers["cache-control"] == "public, max-age=300"
+
+
+def test_similar(monkeypatch):
+    monkeypatch.setattr(router_module, "get_similar", lambda *a, **k: [])
+    res = client.get("/recalls/fda/F-1/similar")
+    assert res.status_code == 200
+    assert res.json() == []
+    # an unknown source is rejected by the enum
+    assert client.get("/recalls/epa/F-1/similar").status_code == 422
+    # the limit is bounded (1–20)
+    assert client.get("/recalls/fda/F-1/similar?limit=50").status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,
@@ -180,11 +214,13 @@ def test_ingest_requires_bearer():
 
 def test_ingest_with_bearer(monkeypatch):
     monkeypatch.setattr(
-        router_module, "run_ingest", lambda *a, **k: {"status": "ok", "fetched": 3, "upserted": 3}
+        router_module,
+        "run_fda_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 3, "new": 1, "upserted": 3},
     )
     res = client.post("/recalls/ingest/fda", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
-    assert res.json() == {"status": "ok", "fetched": 3, "upserted": 3}
+    assert res.json() == {"status": "ok", "fetched": 3, "new": 1, "upserted": 3}
 
 
 def test_ingest_fsis_requires_bearer():
@@ -195,11 +231,11 @@ def test_ingest_fsis_with_bearer(monkeypatch):
     monkeypatch.setattr(
         router_module,
         "run_fsis_ingest",
-        lambda *a, **k: {"status": "ok", "fetched": 2, "upserted": 2},
+        lambda *a, **k: {"status": "ok", "fetched": 2, "new": 2, "upserted": 2},
     )
     res = client.post("/recalls/ingest/fsis", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
-    assert res.json() == {"status": "ok", "fetched": 2, "upserted": 2}
+    assert res.json() == {"status": "ok", "fetched": 2, "new": 2, "upserted": 2}
 
 
 def test_ingest_uk_requires_bearer():
@@ -210,8 +246,8 @@ def test_ingest_uk_with_bearer(monkeypatch):
     monkeypatch.setattr(
         router_module,
         "run_uk_ingest",
-        lambda *a, **k: {"status": "ok", "fetched": 1, "upserted": 1},
+        lambda *a, **k: {"status": "ok", "fetched": 1, "new": 1, "upserted": 1},
     )
     res = client.post("/recalls/ingest/uk", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
-    assert res.json() == {"status": "ok", "fetched": 1, "upserted": 1}
+    assert res.json() == {"status": "ok", "fetched": 1, "new": 1, "upserted": 1}

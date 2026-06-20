@@ -14,7 +14,7 @@ jobs:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
-          curl --fail --silent --show-error \
+          curl --fail-with-body --silent --show-error \
             -X POST "${API_BASE_URL}/recalls/ingest/fda" \
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
@@ -24,7 +24,7 @@ jobs:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
-          curl --fail --silent --show-error --max-time 300 \
+          curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/fsis" \
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
@@ -34,7 +34,7 @@ jobs:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
-          curl --fail --silent --show-error --max-time 300 \
+          curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/uk" \
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"

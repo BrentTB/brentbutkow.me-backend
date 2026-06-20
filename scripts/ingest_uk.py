@@ -6,7 +6,10 @@ def main() -> None:
     session = SessionLocal()
     try:
         result = run_uk_ingest(session)
-        print(f"UK FSA ingest complete: fetched {result.fetched}, upserted {result.upserted}.")
+        print(
+            f"UK FSA ingest complete: fetched {result.fetched}, "
+            f"{result.new} new, upserted {result.upserted}."
+        )
     finally:
         session.close()
 

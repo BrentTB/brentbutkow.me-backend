@@ -1,0 +1,53 @@
+name: Run script on live DB
+
+# Manual only — never on a schedule. Pick a script from the dropdown and it runs against the live
+# database, so you don't have to run it from your laptop. The daily automated ingest lives in
+# ingest.yml (which hits the API instead); this one runs the scripts/ modules directly.
+#
+# Requires a DATABASE_URL repo secret pointing at the live DB (Render's *external* connection
+# string — the internal one isn't reachable from GitHub's runners). INGEST_BEARER_TOKEN is also
+# required: app config loads it at import even though these scripts don't use it. OPENFDA_API_KEY
+# is optional (raises openFDA rate limits for the FDA ingest/backfill).
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Which scripts.* module to run against the live DB"
+        type: choice
+        required: true
+        default: ingest_all
+        options:
+          - ingest_all
+          - ingest_fda
+          - ingest_fsis
+          - ingest_uk
+          - backfill_all
+          - backfill
+          - backfill_entities
+          - backfill_severity
+          - reclassify
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        # Base deps only (no dev/ml); constraints pin the ML stack to the versions the committed
+        # model pickle was built with, so classify() can load it during ingest/reclassify.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "." -c constraints.txt
+
+      - name: Run scripts.${{ inputs.script }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+          OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+        run: python -m scripts.${{ inputs.script }}

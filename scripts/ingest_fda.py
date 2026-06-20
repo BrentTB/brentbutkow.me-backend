@@ -1,13 +1,13 @@
 from app.db import SessionLocal
-from app.modules.recalls.service import run_fsis_ingest
+from app.modules.recalls.service import run_fda_ingest
 
 
 def main() -> None:
     session = SessionLocal()
     try:
-        result = run_fsis_ingest(session)
+        result = run_fda_ingest(session)
         print(
-            f"FSIS ingest complete: fetched {result.fetched}, "
+            f"FDA ingest complete: fetched {result.fetched}, "
             f"{result.new} new, upserted {result.upserted}."
         )
     finally:

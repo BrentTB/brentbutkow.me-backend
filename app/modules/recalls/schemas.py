@@ -107,6 +107,20 @@ class RecallListResult(CamelModel):
     total: int
 
 
+class TopicOut(CamelModel):
+    id: int = Field(description="Topic id (NMF component); also stored on each recall as topicId.")
+    label: str = Field(
+        description="Human label — the topic's top terms.", examples=["listeria · deli · meat"]
+    )
+    top_terms: list[str] = Field(description="Ranked terms describing the topic.")
+    size: int = Field(description="Number of recalls assigned to this topic.")
+
+
+class SimilarRecall(CamelModel):
+    similarity: float = Field(description="Cosine similarity to the queried recall, in [0, 1].")
+    recall: RecallOut = Field(description="The similar recall.")
+
+
 class CategoryCount(CamelModel):
     category: str
     count: int
@@ -194,4 +208,7 @@ class RecallStats(CamelModel):
 class IngestResult(CamelModel):
     status: str
     fetched: int
+    # Rows that were genuinely new (not already stored), vs. `upserted` which counts every row
+    # written — new and re-seen alike, so it's almost always just the fetched total.
+    new: int
     upserted: int
