@@ -5,6 +5,7 @@ from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_iso_date
 from app.modules.recalls.schemas import RecallClass, RecallCountry, RecallSource
+from app.modules.recalls.severity import score_severity
 
 ENDPOINT = "https://data.food.gov.uk/food-alerts/id"
 _PAGE = 200  # FSA paginates via _limit/_offset
@@ -68,8 +69,16 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
     if not reason_text:
         reason_text = record.title
     category, confidence = classify(reason_text)
+    classification = _classification(record.type)
+    entities = extract_entities(reason_text)
     product = " / ".join(p.productName for p in record.productDetails if p.productName)
     created = parse_iso_date(record.created)
+    # UK alerts carry no US geography, so severity rests on the alert type, cause, and entities.
+    severity_score, severity_label = score_severity(
+        classification=classification,
+        category=category.value,
+        entities=entities,
+    )
     return {
         "source": RecallSource.uk.value,
         "country": RecallCountry.uk.value,
@@ -77,7 +86,7 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
         "source_url": record.alertURL,
         "event_id": None,
         "status": record.status.label if record.status else None,
-        "classification": _classification(record.type),
+        "classification": classification,
         "product_description": product or record.title,
         "reason_text": reason_text,
         "company_name": record.reportingBusiness.commonName if record.reportingBusiness else None,
@@ -89,7 +98,9 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
         "report_date": created,
         "category": category.value,
         "category_confidence": confidence,
-        "entities": extract_entities(reason_text),
+        "severity_score": severity_score,
+        "severity_label": severity_label,
+        "entities": entities,
         "raw": record.model_dump(),
     }
 

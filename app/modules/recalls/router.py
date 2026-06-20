@@ -12,6 +12,7 @@ from app.modules.recalls.schemas import (
     RecallClass,
     RecallCountry,
     RecallListResult,
+    RecallSort,
     RecallSource,
     RecallStats,
     TrendGroup,
@@ -78,6 +79,13 @@ def get_recalls(
             "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
         ),
     ),
+    min_severity: float | None = Query(
+        default=None,
+        alias="minSeverity",
+        ge=0,
+        le=100,
+        description="Only recalls at or above this severity score (0–100).",
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -88,6 +96,10 @@ def get_recalls(
         default=None,
         max_length=200,
         description="Full-text search across product, reason, and company name.",
+    ),
+    sort: RecallSort = Query(
+        default=RecallSort.recency,
+        description="Order: recency (newest first, the default) or severity (most severe first).",
     ),
 ) -> RecallListResult:
     _validate_date_range(since, until)
@@ -104,9 +116,11 @@ def get_recalls(
         state=state,
         company=company,
         entity=entity,
+        min_severity=min_severity,
         since=since,
         until=until,
         search=search,
+        sort=sort.value,
     )
 
 
@@ -168,6 +182,13 @@ def recall_trend(
             "canonical value, e.g. Listeria or peanuts (the values returned in byEntity)."
         ),
     ),
+    min_severity: float | None = Query(
+        default=None,
+        alias="minSeverity",
+        ge=0,
+        le=100,
+        description="Only recalls at or above this severity score (0–100).",
+    ),
     since: date | None = Query(
         default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
     ),
@@ -192,6 +213,7 @@ def recall_trend(
         company=company,
         source=source.value if source else None,
         entity=entity,
+        min_severity=min_severity,
         since=since,
         until=until,
         search=search,

@@ -4,11 +4,12 @@ from app.db import SessionLocal
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.models import Recall
+from app.modules.recalls.severity import score_severity
 
 
-# Re-derives category + confidence + entity tags over already-stored recalls, in place, without
-# re-fetching from the sources. Run after training a new model or changing the entity gazetteer:
-# `python -m scripts.reclassify`.
+# Re-derives category + confidence + entity tags + severity over already-stored recalls, in place,
+# without re-fetching from the sources. Run after training a new model or changing the entity
+# gazetteer / severity rules: `python -m scripts.reclassify`.
 def main() -> None:
     session = SessionLocal()
     try:
@@ -17,9 +18,19 @@ def main() -> None:
         recalls = session.scalars(select(Recall)).all()
         for recall in recalls:
             category, confidence = classify(recall.reason_text)
+            entities = extract_entities(recall.reason_text)
             recall.category = category.value
             recall.category_confidence = confidence
-            recall.entities = extract_entities(recall.reason_text)
+            recall.entities = entities
+            # Severity depends on classification + category + entities + geography, so re-derive it
+            # here too (with the freshly computed category/entities) to keep the row consistent.
+            recall.severity_score, recall.severity_label = score_severity(
+                classification=recall.classification,
+                category=category.value,
+                entities=entities,
+                states=recall.states,
+                distribution_pattern=recall.distribution_pattern,
+            )
         session.commit()
         print(f"Reclassified {len(recalls)} recalls.")
     finally:

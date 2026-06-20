@@ -99,6 +99,26 @@ def test_list_recalls_forwards_entity(monkeypatch):
     assert client.get("/recalls?entity=" + "x" * 101).status_code == 422
 
 
+def test_list_recalls_forwards_sort_and_min_severity(monkeypatch):
+    captured: dict = {}
+
+    def fake_list(*a, **k):
+        captured.clear()
+        captured.update(k)
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(router_module, "list_recalls", fake_list)
+    assert client.get("/recalls?sort=severity&minSeverity=70").status_code == 200
+    assert captured["sort"] == "severity"
+    assert captured["min_severity"] == 70
+    # sort defaults to recency when omitted
+    assert client.get("/recalls").status_code == 200
+    assert captured["sort"] == "recency"
+    # an unknown sort is rejected by the enum; out-of-range severity by the 0–100 bound
+    assert client.get("/recalls?sort=oldest").status_code == 422
+    assert client.get("/recalls?minSeverity=150").status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,
@@ -108,6 +128,7 @@ def test_stats(monkeypatch):
             "by_category": [],
             "by_month": [],
             "by_classification": [],
+            "by_severity": [],
             "by_state": [],
             "by_company": [],
             "by_source": [],

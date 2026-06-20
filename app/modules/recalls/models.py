@@ -42,6 +42,11 @@ class Recall(Base):
     report_date: Mapped[date | None] = mapped_column(Date, index=True)
     category: Mapped[str] = mapped_column(Text, index=True)
     category_confidence: Mapped[float] = mapped_column(Float)
+    # Composite 0–100 severity (severity.py) + its band. Indexed: severity_score backs the
+    # `sort=severity` ordering and the `minSeverity` filter. New rows get both at ingest; the
+    # server defaults only seed pre-existing rows until scripts/backfill_severity.py runs.
+    severity_score: Mapped[float] = mapped_column(Float, index=True, server_default=text("0"))
+    severity_label: Mapped[str] = mapped_column(Text, server_default=text("'low'"))
     # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
     # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
     # so it can't use the index).

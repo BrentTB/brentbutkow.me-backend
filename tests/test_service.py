@@ -481,3 +481,37 @@ def test_get_stats_by_source_state_and_country_scope(session, monkeypatch):
     uk_stats = service.get_stats(session, country="uk")
     assert uk_stats.total == 1
     assert {s.label for s in uk_stats.by_source} == {"uk"}
+
+
+def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            # Class III allergen → low; Class I Listeria → severe; Class II mislabel → elevated.
+            _record("V-1", reason_for_recall="undeclared milk", classification="Class III"),
+            _record(
+                "V-2",
+                reason_for_recall="Listeria monocytogenes contamination",
+                classification="Class I",
+                state="CA",
+            ),
+            _record("V-3", reason_for_recall="incorrect label", classification="Class II"),
+        ],
+    )
+    service.run_ingest(session)
+
+    # The Class I Listeria recall is the most severe, so sort=severity surfaces it first.
+    by_severity = service.list_recalls(session, limit=50, offset=0, sort="severity")
+    assert by_severity.items[0].recall_number == "V-2"
+    assert by_severity.items[0].severity_label == "severe"
+
+    # min_severity floors the list to the high-severity recall(s).
+    floored = service.list_recalls(session, limit=50, offset=0, min_severity=70)
+    assert {i.recall_number for i in floored.items} == {"V-2"}
+
+    # stats expose a worst-first by_severity breakdown that sums back to the corpus.
+    stats = service.get_stats(session)
+    counts = {s.label: s.count for s in stats.by_severity}
+    assert counts["severe"] == 1
+    assert sum(counts.values()) == 3
+    assert [s.label for s in stats.by_severity] == ["severe", "elevated", "low"]

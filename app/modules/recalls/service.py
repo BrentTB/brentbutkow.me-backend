@@ -25,7 +25,9 @@ from app.modules.recalls.schemas import (
     MonthCount,
     RecallListResult,
     RecallOut,
+    RecallSort,
     RecallStats,
+    SeverityLabel,
     TrendBucket,
     TrendGroup,
     TrendResult,
@@ -48,6 +50,14 @@ _COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
 _ANOMALY_TOP_ENTITIES = 20
 _ANOMALY_LIMIT = 8
 _ANOMALY_RECENT_MONTHS = 24
+
+# Severity bands surface worst-first in the stats breakdown (label is text, so we order it here).
+_SEVERITY_RANK = {
+    SeverityLabel.severe.value: 0,
+    SeverityLabel.high.value: 1,
+    SeverityLabel.elevated.value: 2,
+    SeverityLabel.low.value: 3,
+}
 
 
 def _continuous_months(months: list[str]) -> list[str]:
@@ -136,6 +146,7 @@ def _recall_conditions(
     state: str | None = None,
     company: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -161,6 +172,9 @@ def _recall_conditions(
     if entity:
         # `entities` is the array of {type, value}; match if any element has this value (GIN @>).
         conditions.append(Recall.entities.contains([{"value": entity}]))
+    if min_severity is not None:
+        # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
+        conditions.append(Recall.severity_score >= min_severity)
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -184,9 +198,11 @@ def list_recalls(
     state: str | None = None,
     company: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
+    sort: str | None = None,
 ) -> RecallListResult:
     # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
     search = search.strip() if search else None
@@ -199,6 +215,7 @@ def list_recalls(
         state=state,
         company=company,
         entity=entity,
+        min_severity=min_severity,
         since=since,
         until=until,
         search=search,
@@ -210,12 +227,15 @@ def list_recalls(
         stmt = stmt.where(condition)
         count_stmt = count_stmt.where(condition)
 
-    # Rank by text relevance when searching, then fall back to most-recent-first.
+    # Rank by text relevance when searching, then by severity if asked, then most-recent-first so
+    # ties always resolve to a stable, sensible order.
     ordering = []
     if search:
         ordering.append(
             func.ts_rank(Recall.search_vector, func.websearch_to_tsquery("english", search)).desc()
         )
+    if sort == RecallSort.severity.value:
+        ordering.append(Recall.severity_score.desc().nulls_last())
     ordering.append(Recall.report_date.desc().nulls_last())
     rows = session.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     total = session.scalar(count_stmt) or 0
@@ -260,6 +280,13 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .order_by(Recall.classification)
         )
     ).all()
+    # Counts per severity band, ordered worst-first in Python (the label is text, not ordinal).
+    by_severity = sorted(
+        session.execute(
+            scoped(select(Recall.severity_label, func.count()).group_by(Recall.severity_label))
+        ).all(),
+        key=lambda row: _SEVERITY_RANK.get(row[0], len(_SEVERITY_RANK)),
+    )
     # Count each affected state by unnesting the `states` array, so a multi-state FSIS recall
     # counts toward every state it touches. Bounded set (~50) — the leaderboard slices it.
     states_elem = func.jsonb_array_elements_text(Recall.states).table_valued(
@@ -378,6 +405,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         by_classification=[
             LabelCount(label=label, count=count) for label, count in by_classification
         ],
+        by_severity=[LabelCount(label=label, count=count) for label, count in by_severity],
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         by_source=[LabelCount(label=label, count=count) for label, count in by_source],
@@ -400,6 +428,7 @@ def get_trend(
     company: str | None = None,
     source: str | None = None,
     entity: str | None = None,
+    min_severity: float | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -416,6 +445,7 @@ def get_trend(
             company=company,
             source=source,
             entity=entity,
+            min_severity=min_severity,
             since=since,
             until=until,
             search=search,

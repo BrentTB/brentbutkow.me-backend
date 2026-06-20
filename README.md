@@ -28,9 +28,9 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&since&until&search` | paginated list → `{ items, total }` |
-| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
-| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&minSeverity&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
+| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&minSeverity&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
@@ -45,7 +45,12 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source` ∈ `fda · usda · uk`.
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
-canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Public reads are
+canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
+carries a `severityScore` (0–100) and `severityLabel` ∈ `low · elevated · high · severe` — a
+transparent composite of classification, cause, the deadliest named entities, and geographic breadth
+that puts US classes and UK alert types on one scale (see `app/modules/recalls/severity.py`);
+`minSeverity` filters to recalls at or above a score, `sort=severity` orders by it, and `bySeverity`
+breaks the corpus down by band. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
 10/min per IP. Interactive docs at `/docs`.
 
@@ -73,7 +78,8 @@ python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
 python -m scripts.backfill                   # one-time: seed full openFDA history (~26k records)
 python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
-python -m scripts.reclassify                 # re-run the trained model over stored recalls (after training)
+python -m scripts.reclassify                 # re-run model + entities + severity over stored recalls
+python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format

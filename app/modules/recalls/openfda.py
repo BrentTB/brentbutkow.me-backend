@@ -8,6 +8,7 @@ from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_class
 from app.modules.recalls.schemas import RecallCountry, RecallSource
+from app.modules.recalls.severity import score_severity
 
 ENDPOINT = "https://api.fda.gov/food/enforcement.json"
 
@@ -45,6 +46,16 @@ def _parse_date(raw: str | None) -> date | None:
 def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
     reason_text = record.reason_for_recall or ""
     category, confidence = classify(reason_text)
+    classification = parse_class(record.classification)
+    states = [record.state] if record.state else None
+    entities = extract_entities(reason_text)
+    severity_score, severity_label = score_severity(
+        classification=classification,
+        category=category.value,
+        entities=entities,
+        states=states,
+        distribution_pattern=record.distribution_pattern,
+    )
     return {
         "source": RecallSource.fda.value,
         "country": RecallCountry.us.value,
@@ -52,18 +63,20 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
         "source_url": None,
         "event_id": record.event_id,
         "status": record.status,
-        "classification": parse_class(record.classification),
+        "classification": classification,
         "product_description": record.product_description or "",
         "reason_text": reason_text,
         "company_name": record.recalling_firm,
         "state": record.state,
-        "states": [record.state] if record.state else None,
+        "states": states,
         "distribution_pattern": record.distribution_pattern,
         "recall_initiation_date": _parse_date(record.recall_initiation_date),
         "report_date": _parse_date(record.report_date),
         "category": category.value,
         "category_confidence": confidence,
-        "entities": extract_entities(reason_text),
+        "severity_score": severity_score,
+        "severity_label": severity_label,
+        "entities": entities,
         "raw": record.model_dump(),
     }
 

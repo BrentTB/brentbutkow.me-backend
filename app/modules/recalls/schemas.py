@@ -46,6 +46,19 @@ class EntityType(StrEnum):
     contaminant = "contaminant"
 
 
+class SeverityLabel(StrEnum):
+    # Bands over the 0–100 severity_score — see app/modules/recalls/severity.py for the thresholds.
+    low = "low"
+    elevated = "elevated"
+    high = "high"
+    severe = "severe"
+
+
+class RecallSort(StrEnum):
+    recency = "recency"  # most recent report_date first (the default)
+    severity = "severity"  # highest severity_score first, then most recent
+
+
 class RecallEntity(CamelModel):
     type: EntityType = Field(description="Entity kind: allergen, pathogen, hazard, or contaminant.")
     value: str = Field(description="Canonical entity name.", examples=["peanuts", "Listeria"])
@@ -74,6 +87,15 @@ class RecallOut(CamelModel):
     report_date: date | None = Field(description="When it was reported.")
     category: RecallCategory = Field(description="Predicted cause category from the classifier.")
     category_confidence: float = Field(description="Classifier confidence in [0, 1].")
+    severity_score: float = Field(
+        description=(
+            "Composite 0–100 severity, blending the recall's classification, cause category, the "
+            "deadliest named entities, and geographic breadth onto one US/UK-comparable scale."
+        )
+    )
+    severity_label: SeverityLabel = Field(
+        description="Banded severity: low, elevated, high, or severe."
+    )
     entities: list[RecallEntity] = Field(
         default_factory=list,
         description="Allergens, pathogens, hazards, and contaminants found in the reason.",
@@ -160,6 +182,7 @@ class RecallStats(CamelModel):
     by_category: list[CategoryCount]
     by_month: list[MonthCount]
     by_classification: list[LabelCount]
+    by_severity: list[LabelCount]
     by_state: list[LabelCount]
     by_company: list[LabelCount]
     by_source: list[LabelCount]
