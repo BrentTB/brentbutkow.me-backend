@@ -32,7 +32,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
 | GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
-| GET | `/recalls/topics` | themes discovered across recalls (NMF over reason/product text), largest first → `TopicOut[]` |
+| GET | `/recalls/topics?country` | per-country themes (NMF over reason/product text), largest first → `TopicOut[]` |
 | GET | `/recalls/{source}/{recallNumber}/similar?limit` | recalls most similar by reason/product text (precomputed cosine neighbours) → `SimilarRecall[]` |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
@@ -53,7 +53,7 @@ transparent composite of classification, cause, the deadliest named entities, an
 that puts US classes and UK alert types on one scale (see `app/modules/recalls/severity.py`);
 `severity` filters to one band, `minSeverity` to recalls at or above a score, `sort=severity` orders
 by it, and `bySeverity` breaks the corpus down by band. `topic` scopes to a theme and each recall carries its
-`topicId`; `/recalls/topics` lists the themes and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
+`topicId`; `/recalls/topics?country` lists that country's themes (NMF runs per country) and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
 — both materialised offline by `scripts/build_analytics.py` from one shared TF-IDF matrix (NMF themes
 + cosine similarity; see `app/modules/recalls/analytics.py`). Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to

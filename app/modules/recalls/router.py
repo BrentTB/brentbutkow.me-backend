@@ -278,9 +278,10 @@ def recall_companies(
 def recall_topics(
     response: Response,
     session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope themes to a country."),
 ) -> list[TopicOut]:
     response.headers["Cache-Control"] = "public, max-age=300"
-    return get_topics(session)
+    return get_topics(session, country.value if country else None)
 
 
 @router.get(

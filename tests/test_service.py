@@ -596,3 +596,7 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     # The serialised recall carries its topicId (the field the frontend reads for the theme chip).
     n1 = next(item for item in members.items if item.recall_number == "N-1")
     assert n1.topic_id == recall.topic_id
+
+    # Themes are per-country: the seeded FDA recalls have US themes, and the UK has none here.
+    assert service.get_topics(session, country="us")
+    assert service.get_topics(session, country="uk") == []

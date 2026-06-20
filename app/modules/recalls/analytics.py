@@ -142,51 +142,72 @@ def build_analytics(
 
 
 def rebuild_analytics(session: Session) -> dict[str, int]:
-    """Recompute topics + neighbours over every stored recall and replace the materialised tables.
-    Called by scripts/build_analytics.py after ingest. Whole thing is one transaction."""
-    # Only the text columns feed the matrix (the PK loads automatically, and topic_id is written
+    """Recompute topics + neighbours and replace the materialised tables. Themes are computed **per
+    country** (US and UK recall structures differ, and the dashboard is country-scoped), and
+    similarity stays within a country too. Called by scripts/build_analytics.py. One transaction."""
+    # Only the text + country columns feed the work (PKs load automatically; topic_id is written
     # back, not read) — so skip the heavy `raw` JSONB to bound memory over the whole corpus.
     recalls = list(
         session.scalars(
             select(Recall)
-            .options(load_only(Recall.reason_text, Recall.product_description))
-            .order_by(Recall.source, Recall.recall_number)
+            .options(load_only(Recall.country, Recall.reason_text, Recall.product_description))
+            .order_by(Recall.country, Recall.source, Recall.recall_number)
         ).all()
     )
-    texts = [f"{r.reason_text or ''} {r.product_description or ''}".strip() for r in recalls]
-    result = build_analytics(texts)
+    # Group by country, preserving the deterministic order above.
+    by_country: dict[str, list[Recall]] = {}
+    for recall in recalls:
+        by_country.setdefault(recall.country, []).append(recall)
 
-    for recall, topic_id in zip(recalls, result.topic_ids, strict=True):
-        recall.topic_id = topic_id
-
+    for recall in recalls:
+        recall.topic_id = None
     session.execute(delete(RecallNeighbor))
     session.execute(delete(RecallTopic))
     session.flush()
-    if result.topics:
-        session.execute(
-            insert(RecallTopic),
-            [
-                {"id": t.id, "label": t.label, "top_terms": t.top_terms, "size": t.size}
-                for t in result.topics
-            ],
-        )
 
+    topic_rows: list[dict[str, object]] = []
     neighbor_rows: list[dict[str, object]] = []
-    for recall, nbrs in zip(recalls, result.neighbors, strict=True):
-        for rank, (index, score) in enumerate(nbrs, start=1):
-            neighbor = recalls[index]
-            neighbor_rows.append(
+    next_topic_id = 0  # surrogate ids, unique across countries so recalls.topic_id stays one int
+    for country in sorted(by_country):
+        group = by_country[country]
+        texts = [f"{r.reason_text or ''} {r.product_description or ''}".strip() for r in group]
+        result = build_analytics(texts)
+
+        local_to_global: dict[int, int] = {}
+        for topic in result.topics:
+            local_to_global[topic.id] = next_topic_id
+            topic_rows.append(
                 {
-                    "source": recall.source,
-                    "recall_number": recall.recall_number,
-                    "rank": rank,
-                    "neighbor_source": neighbor.source,
-                    "neighbor_number": neighbor.recall_number,
-                    "score": round(float(score), 4),
+                    "id": next_topic_id,
+                    "country": country,
+                    "label": topic.label,
+                    "top_terms": topic.top_terms,
+                    "size": topic.size,
                 }
             )
+            next_topic_id += 1
+
+        for recall, topic_id in zip(group, result.topic_ids, strict=True):
+            recall.topic_id = local_to_global[topic_id] if topic_id is not None else None
+
+        for recall, nbrs in zip(group, result.neighbors, strict=True):
+            for rank, (index, score) in enumerate(nbrs, start=1):
+                neighbor = group[index]
+                neighbor_rows.append(
+                    {
+                        "source": recall.source,
+                        "recall_number": recall.recall_number,
+                        "rank": rank,
+                        "neighbor_source": neighbor.source,
+                        "neighbor_number": neighbor.recall_number,
+                        "score": round(float(score), 4),
+                    }
+                )
+
+    if topic_rows:
+        session.execute(insert(RecallTopic), topic_rows)
     for start in range(0, len(neighbor_rows), _DB_CHUNK):
         session.execute(insert(RecallNeighbor), neighbor_rows[start : start + _DB_CHUNK])
 
     session.commit()
-    return {"recalls": len(recalls), "topics": len(result.topics), "neighbors": len(neighbor_rows)}
+    return {"recalls": len(recalls), "topics": len(topic_rows), "neighbors": len(neighbor_rows)}

@@ -491,11 +491,12 @@ def get_trend(
     return TrendResult(group=TrendGroup(group), buckets=buckets)
 
 
-def get_topics(session: Session) -> list[TopicOut]:
-    # The materialised NMF themes, largest first; empty topics (no recalls) are hidden.
-    rows = session.scalars(
-        select(RecallTopic).where(RecallTopic.size > 0).order_by(RecallTopic.size.desc())
-    ).all()
+def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
+    # The materialised NMF themes for a country, largest first; empty topics are hidden.
+    stmt = select(RecallTopic).where(RecallTopic.size > 0)
+    if country:
+        stmt = stmt.where(RecallTopic.country == country)
+    rows = session.scalars(stmt.order_by(RecallTopic.size.desc())).all()
     return [
         TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
     ]

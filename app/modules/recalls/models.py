@@ -84,8 +84,10 @@ class IngestRun(Base):
 class RecallTopic(Base):
     __tablename__ = "recall_topics"
 
-    # id is the NMF component index (assigned, not autoincremented) — matches recalls.topic_id.
+    # Surrogate id assigned by the rebuild across every country's topic set, so recalls.topic_id
+    # stays a single int. `country` scopes the theme list — themes are computed per country.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    country: Mapped[str] = mapped_column(Text, index=True, server_default="us")
     label: Mapped[str] = mapped_column(Text)
     top_terms: Mapped[list[str]] = mapped_column(JSONB)
     size: Mapped[int] = mapped_column(Integer)
