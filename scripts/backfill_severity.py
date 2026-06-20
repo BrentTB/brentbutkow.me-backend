@@ -1,10 +1,25 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.modules.recalls.models import Recall
 from app.modules.recalls.severity import score_severity
 
+NAME = "severity"
+
 _BATCH = 1000
+
+
+def status(session: Session) -> tuple[bool, str]:
+    # Real scores are ≥ 22 (severity.py), so score == 0 is exactly the migration's server default —
+    # a pre-severity row this pass hasn't touched yet.
+    pending = (
+        session.scalar(select(func.count()).select_from(Recall).where(Recall.severity_score == 0))
+        or 0
+    )
+    if pending:
+        return True, f"{pending} row(s) still at the score=0 migration default"
+    return False, "all rows have a real severity score"
 
 
 # One-time (re-runnable) pass: compute severity_score + severity_label for every stored recall from

@@ -17,15 +17,26 @@ on:
         required: true
         default: ingest_all
         options:
+          # Ingest — pull new recalls from the sources. Cadence: DAILY. Normally automated by
+          # ingest.yml (which hits the API); run here to catch up a missed day or force a refresh.
+          # ingest_all runs all three sources then rebuilds analytics; the others are single-source.
           - ingest_all
           - ingest_fda
           - ingest_fsis
           - ingest_uk
+          # Backfill — one-time seeding of already-stored rows. Cadence: ONCE on first setup, and
+          # again right after a migration adds a derived column. New rows self-populate at ingest, so
+          # these don't repeat. backfill_all runs only the ones still needed (status-gated).
           - backfill_all
-          - backfill
-          - backfill_entities
-          - backfill_severity
+          - backfill_fda # full openFDA history (~26k rows) — the initial corpus seed
+          - backfill_entities # gazetteer entities over existing rows (after the entities migration)
+          - backfill_severity # severity score/label over existing rows (after the severity migration)
+          # Rebuild derived data over the whole stored corpus. Cadence: AS NEEDED, not scheduled.
+          # reclassify: after training a new model or changing the gazetteer / severity rules.
+          # build_analytics: refresh themes + similar-recall neighbours — ingest_all already does this
+          # daily, so run standalone only after a one-off ingest or an analytics-param change.
           - reclassify
+          - build_analytics
 
 jobs:
   run-script:

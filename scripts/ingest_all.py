@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 from app.db import SessionLocal
+from app.modules.recalls.analytics import rebuild_analytics
 from app.modules.recalls.schemas import IngestResult
 from app.modules.recalls.service import run_fda_ingest, run_fsis_ingest, run_uk_ingest
 
@@ -31,9 +32,28 @@ def main() -> None:
     finally:
         session.close()
 
+    # Themes + similar-recall neighbours are a whole-corpus rebuild, so refresh them once here after
+    # the per-source ingests — not per row. Isolated like a source: a failure is flagged but leaves
+    # the freshly-ingested recalls intact.
+    try:
+        analytics_session = SessionLocal()
+        try:
+            summary = rebuild_analytics(analytics_session)
+            print(
+                f"Analytics: {summary['topics']} topics, "
+                f"{summary['neighbors']} neighbour links over {summary['recalls']} recalls."
+            )
+        finally:
+            analytics_session.close()
+    except Exception as exc:
+        failures.append("analytics")
+        print(f"Analytics: FAILED — {exc}")
+
     if failures:
-        raise SystemExit(f"Ingest finished with {len(failures)} failure(s): {', '.join(failures)}.")
-    print("All ingests complete.")
+        raise SystemExit(
+            f"Pipeline finished with {len(failures)} failure(s): {', '.join(failures)}."
+        )
+    print("All ingests complete, analytics rebuilt.")
 
 
 if __name__ == "__main__":

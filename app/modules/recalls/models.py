@@ -47,6 +47,9 @@ class Recall(Base):
     # server defaults only seed pre-existing rows until scripts/backfill_severity.py runs.
     severity_score: Mapped[float] = mapped_column(Float, index=True, server_default=text("0"))
     severity_label: Mapped[str] = mapped_column(Text, server_default=text("'low'"))
+    # NMF topic assigned by scripts/build_analytics.py (recall_topics.id). Indexed for the `topic`
+    # filter. NULL until the analytics build runs (and for rows with no usable text).
+    topic_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
     # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
     # so it can't use the index).
@@ -74,3 +77,28 @@ class IngestRun(Base):
     upserted_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(Text)
     error_text: Mapped[str | None] = mapped_column(Text)
+
+
+# Derived analytics, materialized offline by scripts/build_analytics.py from one shared TF-IDF
+# matrix. Served as cheap indexed reads — the model is never loaded at request time.
+class RecallTopic(Base):
+    __tablename__ = "recall_topics"
+
+    # id is the NMF component index (assigned, not autoincremented) — matches recalls.topic_id.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    label: Mapped[str] = mapped_column(Text)
+    top_terms: Mapped[list[str]] = mapped_column(JSONB)
+    size: Mapped[int] = mapped_column(Integer)
+
+
+class RecallNeighbor(Base):
+    __tablename__ = "recall_neighbors"
+
+    # The recall whose neighbors these are (FK-ish to recalls' composite PK), its rank-ordered
+    # nearest neighbors by cosine similarity over the TF-IDF matrix. Top-K rows per recall.
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    recall_number: Mapped[str] = mapped_column(Text, primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    neighbor_source: Mapped[str] = mapped_column(Text)
+    neighbor_number: Mapped[str] = mapped_column(Text)
+    score: Mapped[float] = mapped_column(Float)

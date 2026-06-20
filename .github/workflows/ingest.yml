@@ -38,3 +38,32 @@ jobs:
             -X POST "${API_BASE_URL}/recalls/ingest/uk" \
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
+
+  # Themes + similar-recall neighbours are a whole-corpus rebuild (TF-IDF + NMF), too heavy to run in
+  # the API process — so this runs scripts.build_analytics directly against the live DB on the runner,
+  # after the ingests above land their new recalls. Needs a DATABASE_URL repo secret pointing at the
+  # *external* Postgres connection string (same secret run-script.yml uses).
+  rebuild-analytics:
+    needs: ingest
+    if: ${{ always() }} # rebuild even if a source ingest failed — the others may have added recalls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        # Base deps only (no dev/ml); constraints pin the ML stack to the versions the committed
+        # model pickle was built with, matching run-script.yml.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "." -c constraints.txt
+
+      - name: Rebuild analytics over the live DB
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+        run: python -m scripts.build_analytics

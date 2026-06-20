@@ -4,7 +4,7 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from scripts import backfill, backfill_entities, backfill_severity
+from scripts import backfill_entities, backfill_fda, backfill_severity, build_analytics
 
 
 class _Backfill(Protocol):
@@ -17,10 +17,10 @@ class _Backfill(Protocol):
     def main(self) -> None: ...
 
 
-# Each backfill module owns its own "do I still need to run?" logic (its `status`), so adding a new
-# backfill is just dropping in a scripts/backfill_*.py with NAME + status() + main() and adding it to
-# this list — no changes to the others.
-_BACKFILLS: list[_Backfill] = [backfill, backfill_severity, backfill_entities]
+# Each backfill module owns its own "do I still need to run?" logic (its `status`), so adding a
+# backfill is just a new scripts/backfill_*.py with NAME + status() + main(), then a line here.
+# build_analytics runs last — it's a whole-corpus rebuild, so it wants the rows seeded first.
+_BACKFILLS: list[_Backfill] = [backfill_fda, backfill_severity, backfill_entities, build_analytics]
 
 
 # Runs the data backfills, skipping any whose own status reports it's already done. `--all` forces
@@ -48,7 +48,7 @@ def main() -> None:
         return
 
     ran = 0
-    for bf, needed, reason in plan:
+    for bf, needed, _reason in plan:
         if args.all or needed:
             print(f"\n=== {bf.NAME} ===")
             bf.main()
