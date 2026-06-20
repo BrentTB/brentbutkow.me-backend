@@ -48,7 +48,7 @@ Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source`
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
-carries a `severityScore` (0–100) and `severityLabel` ∈ `low · elevated · high · severe` — a
+carries a `severityScore` (0–100) and `severityLabel` ∈ `low · moderate · high · severe` — a
 transparent composite of classification, cause, the deadliest named entities, and geographic breadth
 that puts US classes and UK alert types on one scale (see `app/modules/recalls/severity.py`);
 `severity` filters to one band, `minSeverity` to recalls at or above a score, `sort=severity` orders

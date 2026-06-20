@@ -104,7 +104,7 @@ def get_recalls(
     ),
     severity: SeverityLabel | None = Query(
         default=None,
-        description="Filter to a severity band: low, elevated, high, or severe.",
+        description="Filter to a severity band: low, moderate, high, or severe.",
     ),
     topic: int | None = Query(
         default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
@@ -216,7 +216,7 @@ def recall_trend(
     ),
     severity: SeverityLabel | None = Query(
         default=None,
-        description="Filter to a severity band: low, elevated, high, or severe.",
+        description="Filter to a severity band: low, moderate, high, or severe.",
     ),
     topic: int | None = Query(
         default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."

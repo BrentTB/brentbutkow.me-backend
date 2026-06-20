@@ -57,7 +57,7 @@ _ANOMALY_RECENT_MONTHS = 24
 _SEVERITY_RANK = {
     SeverityLabel.severe.value: 0,
     SeverityLabel.high.value: 1,
-    SeverityLabel.elevated.value: 2,
+    SeverityLabel.moderate.value: 2,
     SeverityLabel.low.value: 3,
 }
 
@@ -180,7 +180,7 @@ def _recall_conditions(
         # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
         conditions.append(Recall.severity_score >= min_severity)
     if severity:
-        # Exact severity band: low / elevated / high / severe.
+        # Exact severity band: low / moderate / high / severe.
         conditions.append(Recall.severity_label == severity)
     if topic is not None:
         # NMF theme — topic 0 is valid, so test against None, not falsiness.
