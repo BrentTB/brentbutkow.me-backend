@@ -28,12 +28,13 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
-| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | GET | `/recalls/topics?country` | per-country themes (NMF over reason/product text), largest first → `TopicOut[]` |
 | GET | `/recalls/{source}/{recallNumber}/similar?limit` | recalls most similar by reason/product text (precomputed cosine neighbours) → `SimilarRecall[]` |
+| GET | `/recalls/events?country&outbreaksOnly` | recall clusters — recalls grouped into one incident (shared pathogen within a time window, or same FDA event); outbreaks first → `EventOut[]` |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
 | POST | `/recalls/ingest/uk` | **bearer-only** — fetches UK FSA, upserts, records an ingest run |
@@ -59,7 +60,12 @@ breaks the corpus down by band. `topic` scopes to a theme by its **stable slug**
 where the surrogate id would not; each recall also carries its `topicId`. `/recalls/topics?country`
 lists that country's themes (NMF runs per country) and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
 — both materialised offline by `scripts/build_analytics.py` from one shared TF-IDF matrix (NMF themes
-+ cosine similarity; see `app/modules/recalls/analytics.py`). Public reads are
++ cosine similarity; see `app/modules/recalls/analytics.py`). `event` likewise scopes to an
+**event/outbreak cluster** by its stable slug and each recall carries its `eventClusterId`;
+`/recalls/events?country` lists a country's clusters — recalls grouped into one incident by a shared
+pathogen within a time window or the same FDA event, with the multi-recall pathogen-driven ones
+flagged as outbreaks — materialised by `scripts/build_events.py` (connected components over the
+similarity graph; see `app/modules/recalls/events.py`). Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
 10/min per IP. Interactive docs at `/docs`.
 

@@ -11,7 +11,7 @@ from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
-from app.modules.recalls.models import IngestRun, Recall, RecallNeighbor, RecallTopic
+from app.modules.recalls.models import IngestRun, Recall, RecallEvent, RecallNeighbor, RecallTopic
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -20,6 +20,7 @@ from app.modules.recalls.schemas import (
     AnomalyScope,
     CategoryCount,
     EntityCount,
+    EventOut,
     IngestResult,
     LabelCount,
     MonthCount,
@@ -151,6 +152,7 @@ def _recall_conditions(
     min_severity: float | None = None,
     severity: str | None = None,
     topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -189,6 +191,12 @@ def _recall_conditions(
         if country:
             topic_ids = topic_ids.where(RecallTopic.country == country)
         conditions.append(Recall.topic_id.in_(topic_ids))
+    if event:
+        # Same pattern for the event/outbreak cluster slug → its surrogate id(s), country-scoped.
+        event_ids = select(RecallEvent.id).where(RecallEvent.slug == event)
+        if country:
+            event_ids = event_ids.where(RecallEvent.country == country)
+        conditions.append(Recall.event_cluster_id.in_(event_ids))
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -215,6 +223,7 @@ def list_recalls(
     min_severity: float | None = None,
     severity: str | None = None,
     topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -234,6 +243,7 @@ def list_recalls(
         min_severity=min_severity,
         severity=severity,
         topic=topic,
+        event=event,
         since=since,
         until=until,
         search=search,
@@ -449,6 +459,7 @@ def get_trend(
     min_severity: float | None = None,
     severity: str | None = None,
     topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -468,6 +479,7 @@ def get_trend(
             min_severity=min_severity,
             severity=severity,
             topic=topic,
+            event=event,
             since=since,
             until=until,
             search=search,
@@ -503,6 +515,37 @@ def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
     rows = session.scalars(stmt.order_by(RecallTopic.size.desc())).all()
     return [
         TopicOut(id=row.id, slug=row.slug, label=row.label, top_terms=row.top_terms, size=row.size)
+        for row in rows
+    ]
+
+
+def get_events(
+    session: Session, country: str | None = None, *, outbreaks_only: bool = False
+) -> list[EventOut]:
+    # Materialised event/outbreak clusters for a country, outbreaks first then by recall count, so
+    # the dashboard headlines the high-signal incidents.
+    stmt = select(RecallEvent)
+    if country:
+        stmt = stmt.where(RecallEvent.country == country)
+    if outbreaks_only:
+        stmt = stmt.where(RecallEvent.is_outbreak.is_(True))
+    rows = session.scalars(
+        stmt.order_by(RecallEvent.is_outbreak.desc(), RecallEvent.recall_count.desc())
+    ).all()
+    return [
+        EventOut(
+            id=row.id,
+            slug=row.slug,
+            label=row.label,
+            is_outbreak=row.is_outbreak,
+            dominant_entity=row.dominant_entity,
+            recall_count=row.recall_count,
+            company_count=row.company_count,
+            state_count=row.state_count,
+            first_date=row.first_date,
+            last_date=row.last_date,
+            severity_max=row.severity_max,
+        )
         for row in rows
     ]
 

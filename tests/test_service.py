@@ -603,3 +603,61 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     # Themes are per-country: the seeded FDA recalls have US themes, and the UK has none here.
     assert service.get_topics(session, country="us")
     assert service.get_topics(session, country="uk") == []
+
+
+def test_events_clustering_filter_and_serialisation(session, monkeypatch):
+    from app.modules.recalls import analytics, events
+
+    # Three Listeria deli-meat recalls sharing an FDA event — one outbreak (≥3 + shared pathogen);
+    # the peanut recall is unrelated and stays a singleton.
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "E-1",
+                reason_for_recall="Listeria monocytogenes in deli meat",
+                product_description="sliced deli turkey",
+                event_id="EV-1",
+                report_date="20260101",
+            ),
+            _record(
+                "E-2",
+                reason_for_recall="Listeria contamination in deli meat",
+                product_description="deli turkey slices",
+                event_id="EV-1",
+                report_date="20260115",
+            ),
+            _record(
+                "E-3",
+                reason_for_recall="Listeria found in sliced deli meat",
+                product_description="turkey deli slices",
+                event_id="EV-1",
+                report_date="20260128",
+            ),
+            _record(
+                "E-4",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="peanut cookies",
+                report_date="20260101",
+            ),
+        ],
+    )
+    service.run_fda_ingest(session)
+    analytics.rebuild_analytics(session)  # events reuse the materialised neighbour graph
+    summary = events.rebuild_events(session)
+    assert summary["events"] >= 1
+    assert summary["outbreaks"] >= 1
+
+    outbreak = next(e for e in service.get_events(session) if e.is_outbreak)
+    assert outbreak.dominant_entity == "Listeria"
+    assert outbreak.recall_count == 3
+    assert outbreak.slug  # a stable, readable key was generated
+    assert service.get_events(session, outbreaks_only=True)  # the outbreaks-only scope returns it
+
+    # The `event` filter narrows the list to the cluster's members by stable slug.
+    members = service.list_recalls(session, limit=50, offset=0, event=outbreak.slug)
+    assert {item.recall_number for item in members.items} == {"E-1", "E-2", "E-3"}
+
+    # The serialised recall carries its eventClusterId (the field the frontend reads).
+    e1 = next(item for item in members.items if item.recall_number == "E-1")
+    assert e1.event_cluster_id is not None

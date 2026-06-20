@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 from app.db import SessionLocal
 from app.modules.recalls.analytics import rebuild_analytics
+from app.modules.recalls.events import rebuild_events
 from app.modules.recalls.schemas import IngestResult
 from app.modules.recalls.service import run_fda_ingest, run_fsis_ingest, run_uk_ingest
 
@@ -49,11 +50,30 @@ def main() -> None:
         failures.append("analytics")
         print(f"Analytics: FAILED — {exc}")
 
+    # Event/outbreak clusters reuse the neighbour graph above, so they run *after* analytics — and
+    # only if it succeeded, since stale neighbours would cluster the new recalls wrongly.
+    if "analytics" in failures:
+        print("Events: SKIPPED — analytics rebuild failed (events reuse the neighbour graph).")
+    else:
+        try:
+            events_session = SessionLocal()
+            try:
+                summary = rebuild_events(events_session)
+                print(
+                    f"Events: {summary['events']} clusters "
+                    f"({summary['outbreaks']} outbreaks) over {summary['recalls']} recalls."
+                )
+            finally:
+                events_session.close()
+        except Exception as exc:
+            failures.append("events")
+            print(f"Events: FAILED — {exc}")
+
     if failures:
         raise SystemExit(
             f"Pipeline finished with {len(failures)} failure(s): {', '.join(failures)}."
         )
-    print("All ingests complete, analytics rebuilt.")
+    print("All ingests complete, analytics + events rebuilt.")
 
 
 if __name__ == "__main__":
