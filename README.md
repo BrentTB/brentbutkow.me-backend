@@ -52,8 +52,8 @@ carries a `severityScore` (0–100) and `severityLabel` ∈ `low · elevated · 
 transparent composite of classification, cause, the deadliest named entities, and geographic breadth
 that puts US classes and UK alert types on one scale (see `app/modules/recalls/severity.py`);
 `severity` filters to one band, `minSeverity` to recalls at or above a score, `sort=severity` orders
-by it, and `bySeverity` breaks the corpus down by band. `topic` scopes to a theme; `/recalls/topics`
-lists the themes and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
+by it, and `bySeverity` breaks the corpus down by band. `topic` scopes to a theme and each recall carries its
+`topicId`; `/recalls/topics` lists the themes and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
 — both materialised offline by `scripts/build_analytics.py` from one shared TF-IDF matrix (NMF themes
 + cosine similarity; see `app/modules/recalls/analytics.py`). Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to

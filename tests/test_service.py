@@ -492,7 +492,7 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
         [
-            # Class III allergen → low; Class I Listeria → severe; Class II mislabel → elevated.
+            # Class III allergen → low; Class I Listeria → severe; Class II mislabel → moderate.
             _record("V-1", reason_for_recall="undeclared milk", classification="Class III"),
             _record(
                 "V-2",
@@ -517,15 +517,15 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
     # the exact-band filter returns only recalls in that band.
     severe = service.list_recalls(session, limit=50, offset=0, severity="severe")
     assert {i.recall_number for i in severe.items} == {"V-2"}
-    elevated = service.list_recalls(session, limit=50, offset=0, severity="elevated")
-    assert {i.recall_number for i in elevated.items} == {"V-3"}
+    moderate = service.list_recalls(session, limit=50, offset=0, severity="moderate")
+    assert {i.recall_number for i in moderate.items} == {"V-3"}
 
     # stats expose a worst-first by_severity breakdown that sums back to the corpus.
     stats = service.get_stats(session)
     counts = {s.label: s.count for s in stats.by_severity}
     assert counts["severe"] == 1
     assert sum(counts.values()) == 3
-    assert [s.label for s in stats.by_severity] == ["severe", "elevated", "low"]
+    assert [s.label for s in stats.by_severity] == ["severe", "moderate", "low"]
 
 
 def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
@@ -592,3 +592,7 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     assert recall.topic_id is not None
     members = service.list_recalls(session, limit=50, offset=0, topic=recall.topic_id)
     assert "N-1" in {item.recall_number for item in members.items}
+
+    # The serialised recall carries its topicId (the field the frontend reads for the theme chip).
+    n1 = next(item for item in members.items if item.recall_number == "N-1")
+    assert n1.topic_id == recall.topic_id

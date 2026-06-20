@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -7,19 +7,34 @@ from app.modules.recalls.severity import score_severity
 
 NAME = "severity"
 
+# Recompute-dependency map (what to re-run when an input changes): scripts/backfill_all.py
 _BATCH = 1000
+
+# How many rows to re-score when deciding whether the backfill is still due (see status).
+_PROBE_SAMPLE = 500
 
 
 def status(session: Session) -> tuple[bool, str]:
-    # Real scores are ≥ 22 (severity.py), so score == 0 is exactly the migration's server default —
-    # a pre-severity row this pass hasn't touched yet.
-    pending = (
-        session.scalar(select(func.count()).select_from(Recall).where(Recall.severity_score == 0))
-        or 0
-    )
-    if pending:
-        return True, f"{pending} row(s) still at the score=0 migration default"
-    return False, "all rows have a real severity score"
+    # Severity is derived from classification + category + entities + states + distribution_pattern,
+    # so it goes stale when any of those change under it (e.g. an entities backfill adds the
+    # deadliest-pathogen bonus). A score==0 check only catches never-scored rows, so instead probe:
+    # re-score a sample and compare to what's stored. Real scores are never 0, so this still flags
+    # rows left at the migration default. (Re-scoring is read-only here.)
+    sample = session.scalars(select(Recall).limit(_PROBE_SAMPLE)).all()
+    stale = 0
+    for recall in sample:
+        score, label = score_severity(
+            classification=recall.classification,
+            category=recall.category,
+            entities=recall.entities,
+            states=recall.states,
+            distribution_pattern=recall.distribution_pattern,
+        )
+        if label != recall.severity_label or abs(score - recall.severity_score) > 0.05:
+            stale += 1
+    if stale:
+        return True, f"{stale} of {len(sample)} sampled rows have a stale severity score"
+    return False, f"{len(sample)} sampled rows checked; severity is current"
 
 
 # One-time (re-runnable) pass: compute severity_score + severity_label for every stored recall from

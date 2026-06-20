@@ -49,7 +49,7 @@ class EntityType(StrEnum):
 class SeverityLabel(StrEnum):
     # Bands over the 0–100 severity_score — see app/modules/recalls/severity.py for the thresholds.
     low = "low"
-    elevated = "elevated"
+    moderate = "moderate"
     high = "high"
     severe = "severe"
 
@@ -94,7 +94,11 @@ class RecallOut(CamelModel):
         )
     )
     severity_label: SeverityLabel = Field(
-        description="Banded severity: low, elevated, high, or severe."
+        description="Banded severity: low, moderate, high, or severe."
+    )
+    topic_id: int | None = Field(
+        default=None,
+        description="NMF theme id (recall_topics.id); null until the analytics build runs.",
     )
     entities: list[RecallEntity] = Field(
         default_factory=list,

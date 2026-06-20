@@ -7,25 +7,27 @@ from app.modules.recalls.models import Recall
 
 NAME = "entities"
 
+# Recompute-dependency map (what to re-run when an input changes): scripts/backfill_all.py
 _BATCH = 1000
+
+# How many empty-entity rows to re-extract when deciding whether the backfill is still due (status).
+_PROBE_SAMPLE = 500
 
 
 def status(session: Session) -> tuple[bool, str]:
-    # An empty array is a legitimate result — most recalls name no allergen/pathogen/hazard — so a
-    # partial empty count is expected, not a backlog. Only "every row empty" means it never ran;
-    # once it has, new rows self-populate at ingest and re-running won't shrink the count.
-    total = session.scalar(select(func.count()).select_from(Recall)) or 0
-    empty = (
-        session.scalar(
-            select(func.count())
-            .select_from(Recall)
-            .where(func.jsonb_array_length(Recall.entities) == 0)
-        )
-        or 0
-    )
-    if total and empty == total:
-        return True, "no row has any extracted entities yet"
-    return False, f"extraction has run ({empty}/{total} rows legitimately have none)"
+    # An empty entities array is ambiguous: the recall may genuinely name nothing, or extraction
+    # never ran for it (rows seeded before the feature, or before a gazetteer change) — a plain
+    # empty-count can't tell those apart. So probe: re-extract a sample of the empty rows; if any
+    # would gain entities, those rows are stale and the backfill is due. (Read-only re-extraction.)
+    sample = session.scalars(
+        select(Recall.reason_text)
+        .where(func.jsonb_array_length(Recall.entities) == 0)
+        .limit(_PROBE_SAMPLE)
+    ).all()
+    stale = sum(1 for reason_text in sample if extract_entities(reason_text))
+    if stale:
+        return True, f"{stale} of {len(sample)} sampled empty rows would gain entities"
+    return False, f"{len(sample)} sampled empty rows checked; none would gain entities"
 
 
 # One-time (re-runnable) pass: extract entities from every stored recall's reason_text. New rows
