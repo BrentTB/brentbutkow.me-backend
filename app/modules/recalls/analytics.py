@@ -1,6 +1,6 @@
 """Offline analytics over the recall corpus — themes (NMF topics) + similarity (cosine neighbours).
 
-One shared TF-IDF matrix over each recall's reason (weighted ~1.5×) + a heavily-stripped product
+One shared TF-IDF matrix over each recall's reason (weighted ~2×) + a heavily-stripped product
 description powers both: NMF factorises it into interpretable topics (each labelled by its top terms
 — no model, no LLM at read time), and the L2-normalised rows give cosine similarity for "related
 recalls". Packaging boilerplate, numbers/dates, and company names are dropped so themes land on
@@ -315,6 +315,39 @@ def _compute_neighbors(matrix: csr_matrix, n_neighbors: int) -> list[list[tuple[
     return out
 
 
+def _norm_token(token: str) -> str:
+    # Light singularising for de-duplication only (peanut/peanuts, egg/eggs) — not real stemming.
+    # Guard short words and double-s endings so "less"/"glass"/"gas" survive intact.
+    if len(token) >= 4 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _top_terms(features: np.ndarray, weights: np.ndarray, n_terms: int) -> list[str]:
+    """Rank a topic's terms, dropping redundant ones so no word repeats in the label.
+
+    The reason field is up-weighted by repetition (see `_compose_text`), which manufactures
+    pure-repetition bigrams ("egg egg") and lets one word surface both as a unigram and inside a
+    bigram ("salmonella" + "salmonella contamination"). Both read as noise. Walk the ranked terms
+    and keep one only if every word in it (singularised) is new to the label so far."""
+    chosen: list[str] = []
+    used: set[str] = set()
+    for index in np.argsort(weights)[::-1]:
+        if weights[index] <= 0:  # NMF weights are non-negative; nothing useful past zero
+            break
+        term = str(features[index])
+        tokens = [_norm_token(t) for t in term.split()]
+        if len(tokens) == 2 and tokens[0] == tokens[1]:
+            continue  # "egg egg" — pure repetition artifact of the reason up-weighting
+        if any(token in used for token in tokens):
+            continue  # a word already shown (as a unigram or inside an earlier term)
+        chosen.append(term)
+        used.update(tokens)
+        if len(chosen) >= n_terms:
+            break
+    return chosen
+
+
 def build_analytics(
     texts: list[str],
     *,
@@ -362,8 +395,7 @@ def build_analytics(
     sizes = Counter(topic for topic in topic_ids if topic is not None)
     topics = []
     for component in range(topic_count):
-        order = np.argsort(model.components_[component])[::-1][:n_terms]
-        terms = [str(features[j]) for j in order]
+        terms = _top_terms(features, model.components_[component], n_terms)
         topics.append(
             TopicInfo(
                 id=component,
