@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy.orm import Session
 
 from app.auth import require_bearer
@@ -296,8 +296,10 @@ def recall_topics(
 )
 def recall_similar(
     source: RecallSource,
-    recall_number: str,
     response: Response,
+    recall_number: str = Path(
+        max_length=64, description="The recall's identifier within its source."
+    ),
     session: Session = Depends(get_session),
     limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),
 ) -> list[SimilarRecall]:

@@ -4,8 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.modules.recalls import openfda
+from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.openfda import OpenFdaRecord, OpenFdaResponse, normalize_recall
 from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.severity import score_severity
 
 
 def test_normalize_maps_openfda_fields_to_domain(monkeypatch):
@@ -29,6 +31,17 @@ def test_normalize_maps_openfda_fields_to_domain(monkeypatch):
     assert result["report_date"] == date(2016, 11, 2)
     assert result["category"] == RecallCategory.allergen.value
     assert result["category_confidence"] == 0.9
+    # Severity is wired through with the recall's own fields — re-derive from the same inputs the
+    # normalizer should forward (classification + category + entities + the single-state geography).
+    expected_score, expected_label = score_severity(
+        classification="Class II",
+        category=RecallCategory.allergen.value,
+        entities=extract_entities("Product contains undeclared milk."),
+        states=["FL"],
+        distribution_pattern=None,
+    )
+    assert result["severity_score"] == expected_score
+    assert result["severity_label"] == expected_label
 
 
 def test_normalize_handles_missing_and_invalid_values(monkeypatch):

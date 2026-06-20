@@ -9,7 +9,7 @@ from app.modules.recalls.service import run_fda_ingest
 NAME = "openFDA history seed"
 
 # Seed as much history as openFDA's skip cap allows in one pass (~26k records).
-# Run once: `python -m scripts.backfill`. The daily ingest keeps it current afterward.
+# Run once: `python -m scripts.backfill_fda`. The daily ingest keeps it current afterward.
 BACKFILL_LIMIT = MAX_SKIP + MAX_LIMIT_PER_REQUEST
 
 

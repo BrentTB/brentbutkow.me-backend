@@ -5,6 +5,10 @@ on:
     - cron: "24 4 * * *" # 04:24 UTC daily - not on the hour, to avoid github load dropping scheduled job
   workflow_dispatch: {}
 
+# Least privilege: these jobs hit an external API / external DB and only need to check out the repo.
+permissions:
+  contents: read
+
 jobs:
   ingest:
     runs-on: ubuntu-latest

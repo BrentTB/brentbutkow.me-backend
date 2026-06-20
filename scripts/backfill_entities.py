@@ -22,6 +22,7 @@ def status(session: Session) -> tuple[bool, str]:
     sample = session.scalars(
         select(Recall.reason_text)
         .where(func.jsonb_array_length(Recall.entities) == 0)
+        .order_by(Recall.report_date.desc())  # deterministic, newest-first probe
         .limit(_PROBE_SAMPLE)
     ).all()
     stale = sum(1 for reason_text in sample if extract_entities(reason_text))

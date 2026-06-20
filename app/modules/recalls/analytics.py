@@ -270,9 +270,9 @@ def _strip_company(text: str, company: str | None) -> str:
     return " ".join(word for word in text.split() if word.lower() not in names)
 
 
-def _compose_text(reason: str | None, product: str | None, company: str | None) -> str:
-    reason_text = _strip_company(reason or "", company)
-    product_text = _strip_company(product or "", company)
+def _compose_text(reason: str, product: str, company: str | None) -> str:
+    reason_text = _strip_company(reason, company)
+    product_text = _strip_company(product, company)
     return " ".join([reason_text] * _REASON_WEIGHT + [product_text] * _PRODUCT_WEIGHT).strip()
 
 

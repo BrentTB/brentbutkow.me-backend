@@ -59,6 +59,7 @@ _DEADLIEST: frozenset[str] = frozenset(
         "Clostridium botulinum",
         "Salmonella",
         "marine biotoxin",
+        "Cereulide",  # heat-stable emetic toxin (B. cereus) — acute, can be fatal
         "undeclared drug",
     }
 )

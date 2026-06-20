@@ -505,12 +505,14 @@ def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
 def get_similar(
     session: Session, source: str, recall_number: str, limit: int = 6
 ) -> list[SimilarRecall]:
-    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls.
+    # Precomputed nearest neighbours for one recall, rank-ordered, hydrated to full recalls. The
+    # stored set is already capped per recall, so fetch them all (not just `limit`) and trim after
+    # dropping deleted ones — limiting the query first could return fewer than `limit` valid rows
+    # when a top-ranked neighbour's recall was removed since the build.
     neighbors = session.scalars(
         select(RecallNeighbor)
         .where(RecallNeighbor.source == source, RecallNeighbor.recall_number == recall_number)
         .order_by(RecallNeighbor.rank)
-        .limit(limit)
     ).all()
     if not neighbors:
         return []
@@ -530,6 +532,8 @@ def get_similar(
             out.append(
                 SimilarRecall(similarity=neighbor.score, recall=RecallOut.model_validate(recall))
             )
+        if len(out) == limit:
+            break
     return out
 
 
@@ -564,21 +568,22 @@ def _run_ingest_job(
         rows = _dedupe(normalize(record) for record in records)
         # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
         # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Look
-        # up only this batch's own composite keys (bounded by the fetch), not the whole source; a
-        # job carries one source, so recall_number alone then dedupes against what came back.
+        # up only this batch's own composite keys (bounded by the fetch), not the whole source, and
+        # compare on the full (source, recall_number) so the count holds for a mixed-source job too.
         keys = [(row["source"], row["recall_number"]) for row in rows]
         existing = (
-            set(
-                session.scalars(
-                    select(Recall.recall_number).where(
+            {
+                (src, num)
+                for src, num in session.execute(
+                    select(Recall.source, Recall.recall_number).where(
                         tuple_(Recall.source, Recall.recall_number).in_(keys)
                     )
                 )
-            )
+            }
             if keys
             else set()
         )
-        new_count = sum(1 for row in rows if row["recall_number"] not in existing)
+        new_count = sum(1 for row in rows if (row["source"], row["recall_number"]) not in existing)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
         run.fetched_count = len(records)

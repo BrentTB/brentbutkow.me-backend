@@ -20,7 +20,10 @@ def status(session: Session) -> tuple[bool, str]:
     # deadliest-pathogen bonus). A score==0 check only catches never-scored rows, so instead probe:
     # re-score a sample and compare to what's stored. Real scores are never 0, so this still flags
     # rows left at the migration default. (Re-scoring is read-only here.)
-    sample = session.scalars(select(Recall).limit(_PROBE_SAMPLE)).all()
+    # Newest first so the probe is deterministic and weighted to recently-ingested rows.
+    sample = session.scalars(
+        select(Recall).order_by(Recall.report_date.desc()).limit(_PROBE_SAMPLE)
+    ).all()
     stale = 0
     for recall in sample:
         score, label = score_severity(
