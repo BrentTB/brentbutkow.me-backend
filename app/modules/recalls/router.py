@@ -13,6 +13,7 @@ from app.modules.recalls.schemas import (
     RecallClass,
     RecallCountry,
     RecallListResult,
+    RecallOut,
     RecallSort,
     RecallSource,
     RecallStats,
@@ -24,6 +25,7 @@ from app.modules.recalls.schemas import (
 )
 from app.modules.recalls.service import (
     get_events,
+    get_recall,
     get_similar,
     get_stats,
     get_topics,
@@ -317,6 +319,28 @@ def recall_events(
 ) -> list[EventOut]:
     response.headers["Cache-Control"] = "public, max-age=300"
     return get_events(session, country.value if country else None, outbreaks_only=outbreaks_only)
+
+
+@router.get(
+    "/{source}/{recall_number}",
+    response_model=RecallOut,
+    summary="Get one recall",
+    description="A single recall by its source + identifier - backs the recall detail page.",
+    responses={**_RATE_LIMITED, 404: {"description": "No recall with that source + number."}},
+)
+def recall_detail(
+    source: RecallSource,
+    response: Response,
+    recall_number: str = Path(
+        max_length=64, description="The recall's identifier within its source."
+    ),
+    session: Session = Depends(get_session),
+) -> RecallOut:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    recall = get_recall(session, source.value, recall_number)
+    if recall is None:
+        raise HTTPException(status_code=404, detail="Recall not found.")
+    return recall
 
 
 @router.get(

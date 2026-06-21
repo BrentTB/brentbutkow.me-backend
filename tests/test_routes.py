@@ -203,6 +203,43 @@ def test_similar(monkeypatch):
     assert client.get("/recalls/fda/F-1/similar?limit=50").status_code == 422
 
 
+def test_recall_detail(monkeypatch):
+    from app.modules.recalls.schemas import RecallOut
+
+    recall = RecallOut(
+        country="us",
+        source="fda",
+        recall_number="F-1",
+        source_url=None,
+        status=None,
+        classification=None,
+        product_description="Test cookies",
+        reason_text="Undeclared peanut",
+        company_name="Acme Foods",
+        state=None,
+        states=None,
+        distribution_pattern=None,
+        recall_initiation_date=None,
+        report_date=None,
+        category="allergen",
+        category_confidence=1.0,
+        severity_score=70.0,
+        severity_label="high",
+    )
+    monkeypatch.setattr(router_module, "get_recall", lambda *a, **k: recall)
+    res = client.get("/recalls/fda/F-1")
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == "public, max-age=300"
+    assert res.json()["recallNumber"] == "F-1"  # camelCase serialisation, like every DTO
+
+    # No such recall → 404, not an empty 200.
+    monkeypatch.setattr(router_module, "get_recall", lambda *a, **k: None)
+    assert client.get("/recalls/fda/NOPE").status_code == 404
+
+    # An unknown source is rejected by the enum before the handler runs.
+    assert client.get("/recalls/epa/F-1").status_code == 422
+
+
 def test_stats(monkeypatch):
     monkeypatch.setattr(
         router_module,
