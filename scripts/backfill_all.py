@@ -12,6 +12,8 @@ existing corpus. New rows get all of this at ingest; these scripts re-stage it f
                                  -> scripts.backfill_severity
   topics / topic_id / neighbors  from reason_text + product_description + analytics params
                                  -> scripts.build_analytics
+  events / event_cluster_id      from the neighbour graph + shared pathogens within a time window
+                                 -> scripts.build_events   (runs after build_analytics)
 
 So when you change ...           re-run ...
   the reason_text mapping        reclassify (entities+category+severity), then build_analytics
@@ -19,7 +21,8 @@ So when you change ...           re-run ...
   the entity gazetteer           backfill_entities, then backfill_severity
   the classifier model           reclassify
   the severity rules             backfill_severity
-  the analytics params           build_analytics
+  the analytics params           build_analytics, then build_events
+  the clustering params          build_events
 
 Severity sits downstream of entities and category, so changing either re-stages severity too;
 reclassify recomputes those three together, build_analytics is always separate, and backfill_all
@@ -32,7 +35,13 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from scripts import backfill_entities, backfill_fda, backfill_severity, build_analytics
+from scripts import (
+    backfill_entities,
+    backfill_fda,
+    backfill_severity,
+    build_analytics,
+    build_events,
+)
 
 
 class _Backfill(Protocol):
@@ -47,8 +56,15 @@ class _Backfill(Protocol):
 
 # Each backfill module owns its own "do I still need to run?" logic (its `status`), so adding a
 # backfill is just a new scripts/backfill_*.py with NAME + status() + main(), then a line here.
-# build_analytics runs last — it's a whole-corpus rebuild, so it wants the rows seeded first.
-_BACKFILLS: list[_Backfill] = [backfill_fda, backfill_severity, backfill_entities, build_analytics]
+# build_analytics then build_events run last — whole-corpus rebuilds that want the rows seeded
+# first, and build_events reuses the neighbour graph build_analytics produces.
+_BACKFILLS: list[_Backfill] = [
+    backfill_fda,
+    backfill_severity,
+    backfill_entities,
+    build_analytics,
+    build_events,
+]
 
 
 # Runs the data backfills, skipping any whose own status reports it's already done. `--all` forces

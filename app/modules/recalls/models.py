@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Computed, Date, DateTime, Float, Integer, Text, func, text
+from sqlalchemy import Boolean, Computed, Date, DateTime, Float, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,10 @@ class Recall(Base):
     # NMF topic assigned by scripts/build_analytics.py (recall_topics.id). Indexed for the `topic`
     # filter. NULL until the analytics build runs (and for rows with no usable text).
     topic_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Event cluster from build_events.py (recall_events.id) — the incident this recall belongs to.
+    # Distinct from `event_id` (FDA's raw field). Indexed for the `event` filter; NULL until the
+    # events build runs and for recalls that join no multi-recall cluster.
+    event_cluster_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
     # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
     # so it can't use the index).
@@ -88,6 +92,9 @@ class RecallTopic(Base):
     # stays a single int. `country` scopes the theme list — themes are computed per country.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     country: Mapped[str] = mapped_column(Text, index=True, server_default="us")
+    # Stable, human-readable key derived from the terms (e.g. "listeria-deli-meat"), unique within a
+    # country. The API filters by this instead of `id` so a bookmarked theme survives a rebuild.
+    slug: Mapped[str] = mapped_column(Text, index=True, server_default="")
     label: Mapped[str] = mapped_column(Text)
     top_terms: Mapped[list[str]] = mapped_column(JSONB)
     size: Mapped[int] = mapped_column(Integer)
@@ -104,3 +111,28 @@ class RecallNeighbor(Base):
     neighbor_source: Mapped[str] = mapped_column(Text)
     neighbor_number: Mapped[str] = mapped_column(Text)
     score: Mapped[float] = mapped_column(Float)
+
+
+# Recall clusters ("events"/"outbreaks"), materialized offline by scripts/build_events.py from the
+# similarity graph (recall_neighbors) + shared pathogens within a time window. Cheap indexed reads.
+class RecallEvent(Base):
+    __tablename__ = "recall_events"
+
+    # Surrogate id assigned across every country's clusters, so recalls.event_cluster_id stays one
+    # int. `country` scopes the list — clustering runs per country.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    country: Mapped[str] = mapped_column(Text, index=True, server_default="us")
+    # Stable, readable per-country key (e.g. "listeria-2026-03") — the API filters by it so a
+    # bookmarked outbreak survives a rebuild, like recall_topics.slug.
+    slug: Mapped[str] = mapped_column(Text, index=True, server_default="")
+    label: Mapped[str] = mapped_column(Text)
+    # The high-signal subset (multi-recall, pathogen-driven, cross-company/time-concentrated); other
+    # clusters are plain events (e.g. one firm's multi-product cascade).
+    is_outbreak: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    dominant_entity: Mapped[str | None] = mapped_column(Text)
+    recall_count: Mapped[int] = mapped_column(Integer)
+    company_count: Mapped[int] = mapped_column(Integer)
+    state_count: Mapped[int] = mapped_column(Integer)
+    first_date: Mapped[date | None] = mapped_column(Date)
+    last_date: Mapped[date | None] = mapped_column(Date)
+    severity_max: Mapped[float] = mapped_column(Float, server_default=text("0"))

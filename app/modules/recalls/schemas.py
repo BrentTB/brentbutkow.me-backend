@@ -90,7 +90,8 @@ class RecallOut(CamelModel):
     severity_score: float = Field(
         description=(
             "Composite 0–100 severity, blending the recall's classification, cause category, the "
-            "deadliest named entities, and geographic breadth onto one US/UK-comparable scale."
+            "deadliest named entities, allergen risk tier, reported harm, and geographic breadth "
+            "onto one US/UK-comparable scale."
         )
     )
     severity_label: SeverityLabel = Field(
@@ -99,6 +100,10 @@ class RecallOut(CamelModel):
     topic_id: int | None = Field(
         default=None,
         description="NMF theme id (recall_topics.id); null until the analytics build runs.",
+    )
+    event_cluster_id: int | None = Field(
+        default=None,
+        description="Event/outbreak cluster id (recall_events.id); null until events are built.",
     )
     entities: list[RecallEntity] = Field(
         default_factory=list,
@@ -112,12 +117,37 @@ class RecallListResult(CamelModel):
 
 
 class TopicOut(CamelModel):
-    id: int = Field(description="Topic id (NMF component); also stored on each recall as topicId.")
+    id: int = Field(description="Surrogate topic id; also stored on each recall as topicId.")
+    slug: str = Field(
+        description="Stable key from the terms; use as the `topic` filter (survives a rebuild).",
+        examples=["listeria-deli-meat"],
+    )
     label: str = Field(
         description="Human label — the topic's top terms.", examples=["listeria · deli · meat"]
     )
     top_terms: list[str] = Field(description="Ranked terms describing the topic.")
     size: int = Field(description="Number of recalls assigned to this topic.")
+
+
+class EventOut(CamelModel):
+    id: int = Field(description="Surrogate cluster id; also on each recall as eventClusterId.")
+    slug: str = Field(
+        description="Stable key (entity + first month); use as the `event` filter.",
+        examples=["listeria-2026-03"],
+    )
+    label: str = Field(description="Human label.", examples=["Listeria · 7 recalls"])
+    is_outbreak: bool = Field(
+        description="True for the high-signal subset: multi-recall and pathogen-driven."
+    )
+    dominant_entity: str | None = Field(
+        default=None, description="The cluster's main hazard (pathogen/allergen), if any."
+    )
+    recall_count: int = Field(description="Recalls in the cluster.")
+    company_count: int = Field(description="Distinct companies involved.")
+    state_count: int = Field(description="Distinct US states affected (0 for UK).")
+    first_date: date | None = Field(default=None, description="Earliest member report date.")
+    last_date: date | None = Field(default=None, description="Latest member report date.")
+    severity_max: float = Field(description="Highest member severity score (0–100).")
 
 
 class SimilarRecall(CamelModel):
@@ -182,6 +212,8 @@ class TrendGroup(StrEnum):
     total = "total"
     category = "category"
     source = "source"
+    severity = "severity"
+    classification = "classification"
 
 
 class TrendBucket(CamelModel):

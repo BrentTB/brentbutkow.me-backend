@@ -19,7 +19,7 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import Recall
+from app.modules.recalls.models import Recall, RecallTopic
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -332,12 +332,22 @@ def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
     }
 
 
-def test_get_trend_groups_by_category_and_source(session, monkeypatch):
+def test_get_trend_groups_by_dimension(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
         [
-            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
-            _record("T-2", reason_for_recall="listeria", report_date="20240115"),
+            _record(
+                "T-1",
+                reason_for_recall="undeclared milk",
+                classification="Class I",
+                report_date="20240101",
+            ),
+            _record(
+                "T-2",
+                reason_for_recall="listeria",
+                classification="Class II",
+                report_date="20240115",
+            ),
             _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
         ],
     )
@@ -355,6 +365,23 @@ def test_get_trend_groups_by_category_and_source(session, monkeypatch):
 
     src = {(b.month, b.group): b.count for b in service.get_trend(session, group="source").buckets}
     assert src[("2024-01", "fda")] == 2
+
+    # Severity bands: the Class I allergen + Class II listeria land severe; unclassified soy is
+    # moderate (category-only base).
+    sev = {
+        (b.month, b.group): b.count for b in service.get_trend(session, group="severity").buckets
+    }
+    assert sev[("2024-01", "severe")] == 2
+    assert sev[("2024-03", "moderate")] == 1
+
+    # Classification — the nullable column is coalesced so unclassified soy gets its own segment.
+    cls = {
+        (b.month, b.group): b.count
+        for b in service.get_trend(session, group="classification").buckets
+    }
+    assert cls[("2024-01", "Class I")] == 1
+    assert cls[("2024-01", "Class II")] == 1
+    assert cls[("2024-03", "Unclassified")] == 1
 
 
 def test_get_trend_applies_the_recall_filters(session, monkeypatch):
@@ -575,10 +602,11 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     assert summary["topics"] >= 1
     assert summary["neighbors"] > 0
 
-    # Topics are materialised with terms + sizes; every recall is assigned to exactly one.
+    # Topics are materialised with terms + sizes + a stable slug; every recall is assigned to one.
     topics = service.get_topics(session)
     assert topics
     assert all(topic.top_terms for topic in topics)
+    assert all(topic.slug for topic in topics)  # a readable key was generated, not left blank
     assert sum(topic.size for topic in topics) == 6
 
     # The nearest neighbour of one deli-meat Listeria recall is its near-duplicate.
@@ -587,10 +615,12 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     assert similar[0].recall.recall_number == "N-2"
     assert 0 < similar[0].similarity <= 1
 
-    # The topic filter narrows the list to a theme's members.
+    # The topic filter narrows the list to a theme's members — keyed by the stable slug, which is
+    # what a bookmark / shared URL carries (not the volatile surrogate id).
     recall = session.get(Recall, ("fda", "N-1"))
     assert recall.topic_id is not None
-    members = service.list_recalls(session, limit=50, offset=0, topic=recall.topic_id)
+    topic_row = session.get(RecallTopic, recall.topic_id)
+    members = service.list_recalls(session, limit=50, offset=0, topic=topic_row.slug)
     assert "N-1" in {item.recall_number for item in members.items}
 
     # The serialised recall carries its topicId (the field the frontend reads for the theme chip).
@@ -600,3 +630,61 @@ def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     # Themes are per-country: the seeded FDA recalls have US themes, and the UK has none here.
     assert service.get_topics(session, country="us")
     assert service.get_topics(session, country="uk") == []
+
+
+def test_events_clustering_filter_and_serialisation(session, monkeypatch):
+    from app.modules.recalls import analytics, events
+
+    # Three Listeria deli-meat recalls sharing an FDA event — one outbreak (≥3 + shared pathogen);
+    # the peanut recall is unrelated and stays a singleton.
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "E-1",
+                reason_for_recall="Listeria monocytogenes in deli meat",
+                product_description="sliced deli turkey",
+                event_id="EV-1",
+                report_date="20260101",
+            ),
+            _record(
+                "E-2",
+                reason_for_recall="Listeria contamination in deli meat",
+                product_description="deli turkey slices",
+                event_id="EV-1",
+                report_date="20260115",
+            ),
+            _record(
+                "E-3",
+                reason_for_recall="Listeria found in sliced deli meat",
+                product_description="turkey deli slices",
+                event_id="EV-1",
+                report_date="20260128",
+            ),
+            _record(
+                "E-4",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="peanut cookies",
+                report_date="20260101",
+            ),
+        ],
+    )
+    service.run_fda_ingest(session)
+    analytics.rebuild_analytics(session)  # events reuse the materialised neighbour graph
+    summary = events.rebuild_events(session)
+    assert summary["events"] >= 1
+    assert summary["outbreaks"] >= 1
+
+    outbreak = next(e for e in service.get_events(session) if e.is_outbreak)
+    assert outbreak.dominant_entity == "Listeria"
+    assert outbreak.recall_count == 3
+    assert outbreak.slug  # a stable, readable key was generated
+    assert service.get_events(session, outbreaks_only=True)  # the outbreaks-only scope returns it
+
+    # The `event` filter narrows the list to the cluster's members by stable slug.
+    members = service.list_recalls(session, limit=50, offset=0, event=outbreak.slug)
+    assert {item.recall_number for item in members.items} == {"E-1", "E-2", "E-3"}
+
+    # The serialised recall carries its eventClusterId (the field the frontend reads).
+    e1 = next(item for item in members.items if item.recall_number == "E-1")
+    assert e1.event_cluster_id is not None

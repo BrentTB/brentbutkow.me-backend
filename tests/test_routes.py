@@ -143,10 +143,11 @@ def test_list_recalls_forwards_topic(monkeypatch):
         return {"items": [], "total": 0}
 
     monkeypatch.setattr(router_module, "list_recalls", fake_list)
-    assert client.get("/recalls?topic=3").status_code == 200
-    assert captured["topic"] == 3
-    # a negative topic id is rejected by the ge=0 bound
-    assert client.get("/recalls?topic=-1").status_code == 422
+    # topic + event are stable slugs (strings), not volatile numeric ids.
+    assert client.get("/recalls?topic=listeria-deli-meat").status_code == 200
+    assert captured["topic"] == "listeria-deli-meat"
+    assert client.get("/recalls?event=listeria-2026-03").status_code == 200
+    assert captured["event"] == "listeria-2026-03"
 
 
 def test_topics(monkeypatch):
@@ -158,6 +159,37 @@ def test_topics(monkeypatch):
     # themes can be scoped to a country; an unknown one is rejected by the enum
     assert client.get("/recalls/topics?country=uk").status_code == 200
     assert client.get("/recalls/topics?country=zz").status_code == 422
+
+
+def test_events(monkeypatch):
+    from app.modules.recalls.schemas import EventOut
+
+    event = EventOut(
+        id=1,
+        slug="listeria-2026-03",
+        label="Listeria · 7 recalls",
+        is_outbreak=True,
+        dominant_entity="Listeria",
+        recall_count=7,
+        company_count=3,
+        state_count=4,
+        severity_max=92.0,
+    )
+    monkeypatch.setattr(router_module, "get_events", lambda *a, **k: [event])
+    res = client.get("/recalls/events")
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == "public, max-age=300"
+    body = res.json()
+    # EventOut serialises camelCase, like every other DTO.
+    assert body[0]["isOutbreak"] is True
+    assert body[0]["dominantEntity"] == "Listeria"
+    assert body[0]["recallCount"] == 7
+
+    # The camelCase `outbreaksOnly` query param maps onto the service's outbreaks_only kwarg.
+    captured: dict = {}
+    monkeypatch.setattr(router_module, "get_events", lambda *a, **k: captured.update(k) or [])
+    assert client.get("/recalls/events?outbreaksOnly=true").status_code == 200
+    assert captured["outbreaks_only"] is True
 
 
 def test_similar(monkeypatch):

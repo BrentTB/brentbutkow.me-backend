@@ -31,6 +31,7 @@ def main() -> None:
                 entities=entities,
                 states=recall.states,
                 distribution_pattern=recall.distribution_pattern,
+                reason_text=recall.reason_text,
             )
         session.commit()
         print(f"Reclassified {len(recalls)} recalls.")

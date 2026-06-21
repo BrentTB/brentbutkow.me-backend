@@ -35,8 +35,11 @@ on:
           # reclassify: after training a new model or changing the gazetteer / severity rules.
           # build_analytics: refresh themes + similar-recall neighbours — ingest_all already does this
           # daily, so run standalone only after a one-off ingest or an analytics-param change.
+          # build_events: refresh event/outbreak clusters — also daily via ingest_all; run standalone
+          # only after build_analytics (it reuses the neighbours) or a clustering-param change.
           - reclassify
           - build_analytics
+          - build_events
 
 # Least privilege: this job runs a script against the external DB and only needs to check out the repo.
 permissions:

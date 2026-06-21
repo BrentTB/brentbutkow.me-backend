@@ -388,27 +388,53 @@ def build_analytics(
 
     assignments = weights.argmax(axis=1)
     rowsums = weights.sum(axis=1)
+    topic_terms = [
+        _top_terms(features, model.components_[component], n_terms)
+        for component in range(topic_count)
+    ]
+
     for position, original in enumerate(nonempty):
-        if rowsums[position] > 0:  # an all-zero row has no real topic
-            topic_ids[original] = int(assignments[position])
+        if rowsums[position] <= 0:
+            continue  # an all-zero row has no real topic
+        component = int(assignments[position])
+        # Only keep the assignment when the recall actually contains one of the topic's *label*
+        # terms. NMF's argmax otherwise files low-signal recalls (e.g. a kombucha bottle-cap recall)
+        # under whichever topic loads least-badly, giving a "curry · chicken · powder" chip with no
+        # visible connection to the recall. No match → no theme, rather than a misleading one.
+        label = topic_terms[component][:3]
+        if any(term in corpus[position].lower() for term in label):
+            topic_ids[original] = component
 
     sizes = Counter(topic for topic in topic_ids if topic is not None)
-    topics = []
-    for component in range(topic_count):
-        terms = _top_terms(features, model.components_[component], n_terms)
-        topics.append(
-            TopicInfo(
-                id=component,
-                label=" · ".join(terms[:3]),
-                top_terms=terms,
-                size=int(sizes.get(component, 0)),
-            )
+    topics = [
+        TopicInfo(
+            id=component,
+            label=" · ".join(topic_terms[component][:3]),
+            top_terms=topic_terms[component],
+            size=int(sizes.get(component, 0)),
         )
+        for component in range(topic_count)
+    ]
 
     corpus_neighbors = _compute_neighbors(matrix, n_neighbors)
     for position, original in enumerate(nonempty):
         neighbors[original] = [(nonempty[j], score) for j, score in corpus_neighbors[position]]
     return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, topics=topics)
+
+
+def _slugify(label: str) -> str:
+    # Stable, readable URL key from the terms, e.g. "Listeria · deli" → "listeria-deli".
+    return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+
+def _unique_slug(label: str, topic_id: int, seen: set[str]) -> str:
+    # Disambiguate the rare case where two topics in one country share a term-slug.
+    base = _slugify(label) or f"theme-{topic_id}"
+    slug, suffix = base, 2
+    while slug in seen:
+        slug, suffix = f"{base}-{suffix}", suffix + 1
+    seen.add(slug)
+    return slug
 
 
 def rebuild_analytics(session: Session) -> dict[str, int]:
@@ -453,12 +479,14 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
         result = build_analytics(texts, min_df=min_df)
 
         local_to_global: dict[int, int] = {}
+        seen_slugs: set[str] = set()
         for topic in result.topics:
             local_to_global[topic.id] = next_topic_id
             topic_rows.append(
                 {
                     "id": next_topic_id,
                     "country": country,
+                    "slug": _unique_slug(topic.label, next_topic_id, seen_slugs),
                     "label": topic.label,
                     "top_terms": topic.top_terms,
                     "size": topic.size,

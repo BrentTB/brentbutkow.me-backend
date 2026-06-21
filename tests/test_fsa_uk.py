@@ -47,6 +47,7 @@ def test_normalize_alert(monkeypatch):
         classification="Product Recall",
         category=RecallCategory.pathogen.value,
         entities=extract_entities("The products might be contaminated with salmonella."),
+        reason_text="The products might be contaminated with salmonella.",
     )
     assert row["severity_score"] == expected_score
     assert row["severity_label"] == expected_label

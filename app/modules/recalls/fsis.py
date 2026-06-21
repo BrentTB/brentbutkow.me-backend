@@ -134,6 +134,7 @@ def normalize_fsis(record: FsisRecord) -> NormalizedRecall:
         entities=entities,
         states=states,
         distribution_pattern=distribution_pattern,
+        reason_text=reason_text,
     )
     return {
         "source": RecallSource.usda.value,

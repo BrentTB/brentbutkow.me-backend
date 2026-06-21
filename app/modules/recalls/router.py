@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_bearer
 from app.db import get_session
 from app.modules.recalls.schemas import (
+    EventOut,
     IngestResult,
     RecallCategory,
     RecallClass,
@@ -22,6 +23,7 @@ from app.modules.recalls.schemas import (
     TrendResult,
 )
 from app.modules.recalls.service import (
+    get_events,
     get_similar,
     get_stats,
     get_topics,
@@ -106,8 +108,11 @@ def get_recalls(
         default=None,
         description="Filter to a severity band: low, moderate, high, or severe.",
     ),
-    topic: int | None = Query(
-        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
+    topic: str | None = Query(
+        default=None, description="Filter to a theme — a slug from /recalls/topics."
+    ),
+    event: str | None = Query(
+        default=None, description="Filter to an event/outbreak — a slug from /recalls/events."
     ),
     sort: RecallSort = Query(
         default=RecallSort.recency,
@@ -131,6 +136,7 @@ def get_recalls(
         min_severity=min_severity,
         severity=severity.value if severity else None,
         topic=topic,
+        event=event,
         since=since,
         until=until,
         search=search,
@@ -169,7 +175,8 @@ def recall_trend(
     session: Session = Depends(get_session),
     country: RecallCountry | None = Query(default=None, description="Scope to a country."),
     group: TrendGroup = Query(
-        default=TrendGroup.total, description="Group by: total, category, or source."
+        default=TrendGroup.total,
+        description="Group by: total, category, source, severity, or classification.",
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
@@ -218,8 +225,11 @@ def recall_trend(
         default=None,
         description="Filter to a severity band: low, moderate, high, or severe.",
     ),
-    topic: int | None = Query(
-        default=None, ge=0, description="Filter to a theme — a topicId from /recalls/topics."
+    topic: str | None = Query(
+        default=None, description="Filter to a theme — a slug from /recalls/topics."
+    ),
+    event: str | None = Query(
+        default=None, description="Filter to an event/outbreak — a slug from /recalls/events."
     ),
 ) -> TrendResult:
     _validate_date_range(since, until)
@@ -237,6 +247,7 @@ def recall_trend(
         min_severity=min_severity,
         severity=severity.value if severity else None,
         topic=topic,
+        event=event,
         since=since,
         until=until,
         search=search,
@@ -271,7 +282,7 @@ def recall_companies(
     summary="Recall themes",
     description=(
         "Themes discovered across recalls (NMF over the reason/product text), largest first. "
-        "Scope the list or trend to one with `topic=<id>`."
+        "Scope the list or trend to one with `topic=<slug>`."
     ),
     responses=_RATE_LIMITED,
 )
@@ -282,6 +293,29 @@ def recall_topics(
 ) -> list[TopicOut]:
     response.headers["Cache-Control"] = "public, max-age=300"
     return get_topics(session, country.value if country else None)
+
+
+@router.get(
+    "/events",
+    response_model=list[EventOut],
+    summary="Recall events & outbreaks",
+    description=(
+        "Recall clusters — recalls grouped into one incident (a shared pathogen within a time "
+        "window, or the same FDA event). Outbreaks (multi-recall, pathogen-driven) come first. "
+        "Scope the list or trend to one with `event=<slug>`."
+    ),
+    responses=_RATE_LIMITED,
+)
+def recall_events(
+    response: Response,
+    session: Session = Depends(get_session),
+    country: RecallCountry | None = Query(default=None, description="Scope events to a country."),
+    outbreaks_only: bool = Query(
+        default=False, alias="outbreaksOnly", description="Return only the high-signal outbreaks."
+    ),
+) -> list[EventOut]:
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return get_events(session, country.value if country else None, outbreaks_only=outbreaks_only)
 
 
 @router.get(

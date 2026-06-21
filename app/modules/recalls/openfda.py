@@ -55,6 +55,7 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
         entities=entities,
         states=states,
         distribution_pattern=record.distribution_pattern,
+        reason_text=reason_text,
     )
     return {
         "source": RecallSource.fda.value,

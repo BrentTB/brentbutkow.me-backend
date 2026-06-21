@@ -71,3 +71,11 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: python -m scripts.build_analytics
+
+      - name: Rebuild events over the live DB
+        # Event/outbreak clusters reuse the neighbour graph the previous step builds, so they run
+        # right after it (same job → the analytics rebuild has already committed).
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+        run: python -m scripts.build_events

@@ -32,6 +32,7 @@ def status(session: Session) -> tuple[bool, str]:
             entities=recall.entities,
             states=recall.states,
             distribution_pattern=recall.distribution_pattern,
+            reason_text=recall.reason_text,
         )
         if label != recall.severity_label or abs(score - recall.severity_score) > 0.05:
             stale += 1
@@ -56,6 +57,7 @@ def main() -> None:
                 entities=recall.entities,
                 states=recall.states,
                 distribution_pattern=recall.distribution_pattern,
+                reason_text=recall.reason_text,
             )
             recall.severity_score = score
             recall.severity_label = label

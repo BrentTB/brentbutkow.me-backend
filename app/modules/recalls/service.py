@@ -11,7 +11,7 @@ from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
-from app.modules.recalls.models import IngestRun, Recall, RecallNeighbor, RecallTopic
+from app.modules.recalls.models import IngestRun, Recall, RecallEvent, RecallNeighbor, RecallTopic
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -20,6 +20,7 @@ from app.modules.recalls.schemas import (
     AnomalyScope,
     CategoryCount,
     EntityCount,
+    EventOut,
     IngestResult,
     LabelCount,
     MonthCount,
@@ -150,7 +151,8 @@ def _recall_conditions(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -182,9 +184,19 @@ def _recall_conditions(
     if severity:
         # Exact severity band: low / moderate / high / severe.
         conditions.append(Recall.severity_label == severity)
-    if topic is not None:
-        # NMF theme — topic 0 is valid, so test against None, not falsiness.
-        conditions.append(Recall.topic_id == topic)
+    if topic:
+        # Resolve the theme slug to its surrogate id(s), scoped to the country when set — slugs are
+        # unique per country, so the same theme in another country is a different row.
+        topic_ids = select(RecallTopic.id).where(RecallTopic.slug == topic)
+        if country:
+            topic_ids = topic_ids.where(RecallTopic.country == country)
+        conditions.append(Recall.topic_id.in_(topic_ids))
+    if event:
+        # Same pattern for the event/outbreak cluster slug → its surrogate id(s), country-scoped.
+        event_ids = select(RecallEvent.id).where(RecallEvent.slug == event)
+        if country:
+            event_ids = event_ids.where(RecallEvent.country == country)
+        conditions.append(Recall.event_cluster_id.in_(event_ids))
     if since:
         conditions.append(Recall.report_date >= since)
     if until:
@@ -210,7 +222,8 @@ def list_recalls(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
@@ -230,6 +243,7 @@ def list_recalls(
         min_severity=min_severity,
         severity=severity,
         topic=topic,
+        event=event,
         since=since,
         until=until,
         search=search,
@@ -444,13 +458,14 @@ def get_trend(
     entity: str | None = None,
     min_severity: float | None = None,
     severity: str | None = None,
-    topic: int | None = None,
+    topic: str | None = None,
+    event: str | None = None,
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
 ) -> TrendResult:
-    # Monthly counts, optionally split by category or source, scoped by the same filters as the
-    # recall list — so the chart and the list below it always describe the same set of recalls.
+    # Monthly counts, optionally split by category / source / severity / classification, scoped by
+    # the same filters as the recall list — so the chart and the list always describe the same set.
     where = [
         Recall.report_date.is_not(None),
         *_recall_conditions(
@@ -464,6 +479,7 @@ def get_trend(
             min_severity=min_severity,
             severity=severity,
             topic=topic,
+            event=event,
             since=since,
             until=until,
             search=search,
@@ -473,6 +489,9 @@ def get_trend(
     dimension = {
         TrendGroup.category.value: Recall.category,
         TrendGroup.source.value: Recall.source,
+        TrendGroup.severity.value: Recall.severity_label,
+        # classification is nullable — label the unset rows so they form their own segment.
+        TrendGroup.classification.value: func.coalesce(Recall.classification, "Unclassified"),
     }.get(group)
     if dimension is not None:
         rows = session.execute(
@@ -498,7 +517,39 @@ def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
         stmt = stmt.where(RecallTopic.country == country)
     rows = session.scalars(stmt.order_by(RecallTopic.size.desc())).all()
     return [
-        TopicOut(id=row.id, label=row.label, top_terms=row.top_terms, size=row.size) for row in rows
+        TopicOut(id=row.id, slug=row.slug, label=row.label, top_terms=row.top_terms, size=row.size)
+        for row in rows
+    ]
+
+
+def get_events(
+    session: Session, country: str | None = None, *, outbreaks_only: bool = False
+) -> list[EventOut]:
+    # Materialised event/outbreak clusters for a country, outbreaks first then by recall count, so
+    # the dashboard headlines the high-signal incidents.
+    stmt = select(RecallEvent)
+    if country:
+        stmt = stmt.where(RecallEvent.country == country)
+    if outbreaks_only:
+        stmt = stmt.where(RecallEvent.is_outbreak.is_(True))
+    rows = session.scalars(
+        stmt.order_by(RecallEvent.is_outbreak.desc(), RecallEvent.recall_count.desc())
+    ).all()
+    return [
+        EventOut(
+            id=row.id,
+            slug=row.slug,
+            label=row.label,
+            is_outbreak=row.is_outbreak,
+            dominant_entity=row.dominant_entity,
+            recall_count=row.recall_count,
+            company_count=row.company_count,
+            state_count=row.state_count,
+            first_date=row.first_date,
+            last_date=row.last_date,
+            severity_max=row.severity_max,
+        )
+        for row in rows
     ]
 
 

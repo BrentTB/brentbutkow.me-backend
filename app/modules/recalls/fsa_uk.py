@@ -73,11 +73,13 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
     entities = extract_entities(reason_text)
     product = " / ".join(p.productName for p in record.productDetails if p.productName)
     created = parse_iso_date(record.created)
-    # UK alerts carry no US geography, so severity rests on the alert type, cause, and entities.
+    # UK alerts carry no US geography, so severity rests on the alert type, cause, entities, the
+    # allergen risk tier, and any reported harm in the risk statement.
     severity_score, severity_label = score_severity(
         classification=classification,
         category=category.value,
         entities=entities,
+        reason_text=reason_text,
     )
     return {
         "source": RecallSource.uk.value,
