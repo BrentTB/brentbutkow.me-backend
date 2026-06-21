@@ -1,9 +1,9 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.models import Recall
+from scripts._common import backfill_recalls
 
 NAME = "entities"
 
@@ -31,27 +31,14 @@ def status(session: Session) -> tuple[bool, str]:
     return False, f"{len(sample)} sampled empty rows checked; none would gain entities"
 
 
+def _backfill(recall: Recall) -> None:
+    recall.entities = extract_entities(recall.reason_text)
+
+
 # One-time (re-runnable) pass: extract entities from every stored recall's reason_text. New rows
 # get entities at ingest via the normalizers — this seeds the existing backfill.
 def main() -> None:
-    # SessionLocal's expire_on_commit=False default keeps loaded rows usable across batch commits.
-    session = SessionLocal()
-    try:
-        # Skip the heavy `raw` JSONB (unused here) so the full-corpus load stays light. RISK: this
-        # still materialises every row via `.all()` — bounded, not unbounded; near ~100k+ rows
-        # stream instead (yield_per=_BATCH; this loop already commits per batch). defer(raw), not
-        # load_only, keeps every other column eager so a new field access can't trigger an N+1; if a
-        # change here ever needs `raw`, drop the defer.
-        recalls = session.scalars(select(Recall).options(defer(Recall.raw))).all()
-        for index, recall in enumerate(recalls, start=1):
-            recall.entities = extract_entities(recall.reason_text)
-            if index % _BATCH == 0:
-                session.commit()
-                print(f"  {index}/{len(recalls)}…")
-        session.commit()
-        print(f"Backfilled entities for {len(recalls)} recalls.")
-    finally:
-        session.close()
+    backfill_recalls(_backfill, label="Backfilled entities for", batch=_BATCH)
 
 
 if __name__ == "__main__":

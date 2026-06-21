@@ -496,17 +496,20 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
 def rebuild_stats(session: Session) -> dict[str, int]:
     """Materialize the stats payload for each dashboard country into `recall_stats`.
 
-    Delete-then-insert in one transaction (like `rebuild_analytics`). The payload is stored as
-    `model_dump(mode="json")` so datetimes (last_ingest_at) serialize into JSONB; `get_stats`
-    reverses it with `model_validate` (CamelModel has populate_by_name, so snake-case round-trips).
+    Compute every payload first, then delete + insert in one transaction, so a failure mid-compute
+    never touches the stored rows — the old cache survives untouched and `get_stats` keeps serving
+    it. The payload is stored as `model_dump(mode="json")` so datetimes (last_ingest_at) serialize
+    into JSONB; `get_stats` reverses it with `model_validate` (CamelModel has populate_by_name, so
+    snake-case round-trips).
     """
-    session.execute(delete(RecallStatsCache))
-    session.flush()
     now = datetime.now(UTC)
     countries = list(_COUNTRY_SOURCES)  # the per-country scopes the dashboard requests: us, uk
+    payloads = {
+        country: compute_stats(session, country).model_dump(mode="json") for country in countries
+    }
+    session.execute(delete(RecallStatsCache))
     for country in countries:
-        payload = compute_stats(session, country).model_dump(mode="json")
-        session.add(RecallStatsCache(country=country, payload=payload, computed_at=now))
+        session.add(RecallStatsCache(country=country, payload=payloads[country], computed_at=now))
     session.commit()
     return {"countries": len(countries)}
 

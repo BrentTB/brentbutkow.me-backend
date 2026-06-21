@@ -67,7 +67,12 @@ class Recall(Base):
     )
     raw: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # onupdate bumps this on every write (ingest upsert, reclassify, the severity/entity backfills),
+    # so it's a reliable "the corpus changed" signal scripts/build_stats.py uses to decide when the
+    # materialized stats are stale. (onupdate is applied at flush, not DDL, so no migration.)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class IngestRun(Base):

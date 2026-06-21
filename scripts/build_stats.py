@@ -2,24 +2,24 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.modules.recalls.models import IngestRun, RecallStatsCache
+from app.modules.recalls.models import Recall, RecallStatsCache
 from app.modules.recalls.service import rebuild_stats
 
 NAME = "stats"
 
 
 def status(session: Session) -> tuple[bool, str]:
-    # The /recalls/stats payload is materialized per country and refreshed at ingest, not per row.
-    # Stale when never built, or when a successful ingest landed after the last build — new recalls
-    # would change the aggregates, anomalies, and forecast the row holds.
+    # The /recalls/stats payload aggregates the whole recalls corpus, so it goes stale whenever a
+    # recall changes — a new ingest, but also a standalone reclassify or a severity/entity backfill
+    # that rewrites the columns the aggregates, anomalies, and forecast are built from. Every such
+    # write bumps Recall.updated_at (onupdate), so compare the newest row to the last build: a row
+    # updated after computed_at means the materialized payload lags the data.
     built_at = session.scalar(select(func.max(RecallStatsCache.computed_at)))
     if built_at is None:
         return True, "stats not materialized yet"
-    last_ok_ingest = session.scalar(
-        select(func.max(IngestRun.finished_at)).where(IngestRun.status == "ok")
-    )
-    if last_ok_ingest is not None and last_ok_ingest > built_at:
-        return True, "recalls ingested since the last stats build"
+    last_change = session.scalar(select(func.max(Recall.updated_at)))
+    if last_change is not None and last_change > built_at:
+        return True, "recalls changed since the last stats build"
     return False, "stats materialized"
 
 

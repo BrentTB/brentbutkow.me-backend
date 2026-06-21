@@ -8,7 +8,7 @@ reachable Postgres, keeping the default `pytest` run database-free.
 """
 
 import os
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -19,7 +19,7 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import IngestRun, Recall, RecallStatsCache, RecallTopic
+from app.modules.recalls.models import Recall, RecallStatsCache, RecallTopic
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -440,12 +440,11 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
     service.rebuild_stats(session)
     assert build_stats.status(session)[0] is False  # fresh
 
-    # A successful ingest finishing after the build marks the cache stale again.
-    session.add(
-        IngestRun(
-            source="openfda_food", status="ok", finished_at=datetime.now(UTC) + timedelta(days=1)
-        )
-    )
+    # Any recall changing after the build marks the cache stale — not just an ingest, but a
+    # standalone reclassify or backfill that rewrites a derived column. updated_at (onupdate) moves
+    # past computed_at, which is the signal status() reads.
+    recall = session.scalars(select(Recall)).first()
+    recall.category = RecallCategory.allergen.value
     session.commit()
     assert build_stats.status(session)[0] is True
 
