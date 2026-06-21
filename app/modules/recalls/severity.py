@@ -93,7 +93,8 @@ _ALLERGEN_LOW_PENALTY = 12.0
 # reported illnesses/reactions), not the *potential* harm ("can cause", "symptoms include") every
 # risk statement carries. Country-neutral: it lets a serious recall in either corpus reach the top
 # band on evidence, not just on its classification. Negation ("no illnesses reported" — the usual
-# recall boilerplate) vetoes it, so a precautionary recall isn't escalated.
+# recall boilerplate) vetoes it per-sentence, so a precautionary recall isn't escalated while a real
+# "an outbreak sickened many; no deaths reported" still is.
 _HARM_OCCURRED = re.compile(
     r"\b(?:"
     r"deaths?|died|fatalit(?:y|ies)|"
@@ -114,6 +115,9 @@ _HARM_NEGATED = re.compile(
     re.IGNORECASE,
 )
 _HARM_BONUS = 14.0
+# Negation only vetoes within the sentence that asserts the harm — a reassurance in a later sentence
+# ("No deaths have been reported.") must not suppress an earlier "an outbreak sickened many".
+_SENTENCE_SPLIT = re.compile(r"[.!?]+\s+|\n+")
 
 # Geographic breadth — a nationwide recall exposes far more people than a single-state one. The
 # nationwide test is word-bounded so "international" (which contains "national") can't trip it.
@@ -153,11 +157,14 @@ def _allergen_adjust(entities: list[Entity]) -> float:
 
 
 def _harm_bonus(reason_text: str | None) -> float:
-    if not reason_text or not _HARM_OCCURRED.search(reason_text):
+    if not reason_text:
         return 0.0
-    if _HARM_NEGATED.search(reason_text):
-        return 0.0
-    return _HARM_BONUS
+    # Escalate if any sentence asserts harm without a negation in that same sentence; a negated
+    # clause elsewhere (the boilerplate "no deaths reported") no longer vetoes the whole text.
+    for sentence in _SENTENCE_SPLIT.split(reason_text):
+        if _HARM_OCCURRED.search(sentence) and not _HARM_NEGATED.search(sentence):
+            return _HARM_BONUS
+    return 0.0
 
 
 def _breadth_bonus(states: list[str] | None, distribution_pattern: str | None) -> float:

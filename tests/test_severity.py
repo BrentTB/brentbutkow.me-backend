@@ -200,6 +200,23 @@ def test_reported_harm_escalates_but_potential_harm_does_not():
     assert cls_ii("No illnesses have been reported to date.") == base
 
 
+def test_harm_negation_is_scoped_to_its_own_sentence():
+    def cls_ii(reason: str) -> float:
+        score, _ = score_severity(
+            classification=RecallClass.class_ii.value,
+            category=RecallCategory.pathogen.value,
+            entities=[],
+            reason_text=reason,
+        )
+        return score
+
+    base = cls_ii("A precautionary recall.")
+    # Harm in one sentence + a reassurance in a *later* one still asserts real harm — must escalate.
+    assert cls_ii("An outbreak has sickened many people. No deaths have been reported.") > base
+    # A negation in the same sentence as the only harm phrase is precautionary — stays at base.
+    assert cls_ii("No outbreak of illness has been reported.") == base
+
+
 def test_class_i_stays_severe_despite_a_de_escalating_signal():
     # Content modulates but never demotes the regulator's top classification.
     score, label = score_severity(
