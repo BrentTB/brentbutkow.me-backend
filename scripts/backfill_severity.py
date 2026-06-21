@@ -1,5 +1,5 @@
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.db import SessionLocal
 from app.modules.recalls.models import Recall
@@ -49,7 +49,12 @@ def main() -> None:
     # SessionLocal's expire_on_commit=False default keeps loaded rows usable across batch commits.
     session = SessionLocal()
     try:
-        recalls = session.scalars(select(Recall)).all()
+        # Skip the heavy `raw` JSONB (unused here) so the full-corpus load stays light. RISK: this
+        # still materialises every row via `.all()` — bounded, not unbounded; near ~100k+ rows
+        # stream instead (yield_per=_BATCH; this loop already commits per batch). defer(raw), not
+        # load_only, keeps every other column eager so a new field access can't trigger an N+1; if a
+        # change here ever needs `raw`, drop the defer.
+        recalls = session.scalars(select(Recall).options(defer(Recall.raw))).all()
         for index, recall in enumerate(recalls, start=1):
             score, label = score_severity(
                 classification=recall.classification,

@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.orm import defer
 
 from app.db import SessionLocal
 from app.modules.recalls.classifier import classify
@@ -16,7 +17,12 @@ def main() -> None:
     try:
         # All-or-nothing: every row is updated in one transaction, so a failure mid-run rolls the
         # whole batch back rather than leaving the table half-reclassified. Fine at ~26k rows.
-        recalls = session.scalars(select(Recall)).all()
+        # Skip the heavy `raw` JSONB (unused here) so the load stays light. RISK: this materialises
+        # every row via `.all()` AND holds them dirty until the single commit — bounded, not
+        # unbounded; a memory cliff near ~100k+ rows. Fix: stream (yield_per) + commit per batch,
+        # trading the all-or-nothing atomicity above for bounded memory. defer(raw), not load_only,
+        # keeps other columns eager so a new field access can't trigger an N+1; need `raw`? drop it.
+        recalls = session.scalars(select(Recall).options(defer(Recall.raw))).all()
         for recall in recalls:
             category, confidence = classify(recall.reason_text)
             entities = extract_entities(recall.reason_text)
