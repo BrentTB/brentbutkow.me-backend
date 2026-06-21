@@ -4,7 +4,12 @@ from app.db import SessionLocal
 from app.modules.recalls.analytics import rebuild_analytics
 from app.modules.recalls.events import rebuild_events
 from app.modules.recalls.schemas import IngestResult
-from app.modules.recalls.service import run_fda_ingest, run_fsis_ingest, run_uk_ingest
+from app.modules.recalls.service import (
+    rebuild_stats,
+    run_fda_ingest,
+    run_fsis_ingest,
+    run_uk_ingest,
+)
 
 # Every source the daily ingest covers, in run order — mirrors .github/workflows/ingest.yml.
 _INGESTS: tuple[tuple[str, Callable[..., IngestResult]], ...] = (
@@ -69,11 +74,26 @@ def main() -> None:
             failures.append("events")
             print(f"Events: FAILED — {exc}")
 
+    # Materialize the /recalls/stats payload so the request path reads a row instead of recomputing
+    # the aggregations + anomaly scan + forecast. Independent of analytics/events (it reads only
+    # `recalls`), so it runs regardless of their outcome — and last, so a stats failure can't shadow
+    # the freshly-ingested recalls.
+    try:
+        stats_session = SessionLocal()
+        try:
+            summary = rebuild_stats(stats_session)
+            print(f"Stats: materialized {summary['countries']} country payloads.")
+        finally:
+            stats_session.close()
+    except Exception as exc:
+        failures.append("stats")
+        print(f"Stats: FAILED — {exc}")
+
     if failures:
         raise SystemExit(
             f"Pipeline finished with {len(failures)} failure(s): {', '.join(failures)}."
         )
-    print("All ingests complete, analytics + events rebuilt.")
+    print("All ingests complete, analytics + events + stats rebuilt.")
 
 
 if __name__ == "__main__":

@@ -79,3 +79,13 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: python -m scripts.build_events
+
+      - name: Rebuild stats over the live DB
+        # Materializes the /recalls/stats payload per country so the API reads a row instead of
+        # recomputing the aggregations + anomaly scan + forecast. Independent of analytics/events
+        # (it reads only `recalls`), so it runs last and regardless of their outcome.
+        if: ${{ always() }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+        run: python -m scripts.build_stats

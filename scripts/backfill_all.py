@@ -14,6 +14,8 @@ existing corpus. New rows get all of this at ingest; these scripts re-stage it f
                                  -> scripts.build_analytics
   events / event_cluster_id      from the neighbour graph + shared pathogens within a time window
                                  -> scripts.build_events   (runs after build_analytics)
+  stats payload (recall_stats)   the materialized /recalls/stats per country — recall aggregates +
+                                 anomalies + forecast (all derived) -> scripts.build_stats
 
 So when you change ...           re-run ...
   the reason_text mapping        reclassify (entities+category+severity), then build_analytics
@@ -41,6 +43,7 @@ from scripts import (
     backfill_severity,
     build_analytics,
     build_events,
+    build_stats,
 )
 
 
@@ -57,13 +60,15 @@ class _Backfill(Protocol):
 # Each backfill module owns its own "do I still need to run?" logic (its `status`), so adding a
 # backfill is just a new scripts/backfill_*.py with NAME + status() + main(), then a line here.
 # build_analytics then build_events run last — whole-corpus rebuilds that want the rows seeded
-# first, and build_events reuses the neighbour graph build_analytics produces.
+# first, and build_events reuses the neighbour graph build_analytics produces. build_stats runs
+# after them: it materializes the stats payload from the (now fully derived) recalls.
 _BACKFILLS: list[_Backfill] = [
     backfill_fda,
     backfill_severity,
     backfill_entities,
     build_analytics,
     build_events,
+    build_stats,
 ]
 
 

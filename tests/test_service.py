@@ -8,7 +8,7 @@ reachable Postgres, keeping the default `pytest` run database-free.
 """
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -19,7 +19,7 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import Recall, RecallTopic
+from app.modules.recalls.models import IngestRun, Recall, RecallStatsCache, RecallTopic
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -27,6 +27,7 @@ from app.modules.recalls.schemas import (
     RecallCountry,
     RecallSource,
 )
+from scripts import build_stats
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -362,6 +363,91 @@ def test_get_stats_forecasts_overall_volume(session, monkeypatch):
         assert 0 <= point.lower <= point.predicted <= point.upper
     # A flat 3/month history projects flat at ~3.
     assert abs(forecast[0].predicted - 3.0) < 0.5
+
+
+def test_rebuild_stats_materializes_a_row_per_country(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("US-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+    _patch_fsa(
+        monkeypatch,
+        [
+            _fsa_record(
+                "UK-1",
+                title="alert",
+                type=["https://data.food.gov.uk/food-alerts/def/PRIN"],
+                created="2024-03-01",
+            )
+        ],
+    )
+    service.run_uk_ingest(session)
+
+    summary = service.rebuild_stats(session)
+
+    assert summary == {"countries": 2}
+    cached = {row.country for row in session.scalars(select(RecallStatsCache)).all()}
+    assert cached == {"us", "uk"}
+    # The stored JSONB payload reconstructs into the same RecallStats shape get_stats returns.
+    assert service.get_stats(session, "us").total == 1
+    assert service.get_stats(session, "uk").total == 1
+    # Reading the materialized row returns exactly what a live recompute would (clean round-trip +
+    # deterministic ordering), so materialization never changes the API response.
+    assert (
+        service.get_stats(session, "us").model_dump()
+        == service.compute_stats(session, "us").model_dump()
+    )
+
+
+def test_get_stats_serves_the_materialized_row_not_a_live_recompute(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("S-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+    service.rebuild_stats(session)
+
+    # Add a recall *after* the build — the materialized row must not reflect it.
+    _patch_fetch(monkeypatch, [_record("S-2", reason_for_recall="listeria")])
+    service.run_fda_ingest(session)
+
+    assert service.get_stats(session, "us").total == 1  # stale value, served from the cache row
+    assert service.compute_stats(session, "us").total == 2  # live, reflects the new recall
+
+
+def test_get_stats_falls_back_to_live_compute_without_a_row(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+
+    # No rebuild_stats yet → no cache row → get_stats computes live rather than erroring.
+    assert service.get_stats(session, "us").total == 1
+
+
+def test_get_stats_country_none_is_always_live(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+    service.rebuild_stats(session)
+
+    _patch_fetch(monkeypatch, [_record("F-2", reason_for_recall="listeria")])
+    service.run_fda_ingest(session)
+
+    # us is cached (stale at 1), but the None/"all" scope is never materialized → always live.
+    assert service.get_stats(session, "us").total == 1
+    assert service.get_stats(session, None).total == 2
+
+
+def test_build_stats_status_reports_staleness(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+
+    assert build_stats.status(session)[0] is True  # never materialized
+
+    service.rebuild_stats(session)
+    assert build_stats.status(session)[0] is False  # fresh
+
+    # A successful ingest finishing after the build marks the cache stale again.
+    session.add(
+        IngestRun(
+            source="openfda_food", status="ok", finished_at=datetime.now(UTC) + timedelta(days=1)
+        )
+    )
+    session.commit()
+    assert build_stats.status(session)[0] is True
 
 
 def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):

@@ -136,3 +136,18 @@ class RecallEvent(Base):
     first_date: Mapped[date | None] = mapped_column(Date)
     last_date: Mapped[date | None] = mapped_column(Date)
     severity_max: Mapped[float] = mapped_column(Float, server_default=text("0"))
+
+
+# The whole /recalls/stats payload, materialized per country by scripts/build_stats.py after each
+# ingest. get_stats reads this row instead of recomputing ~8 aggregations + the anomaly scan + the
+# forecast on every request; it falls back to a live compute when a row is absent (see service.py).
+class RecallStatsCache(Base):
+    __tablename__ = "recall_stats"
+
+    # One row per scope ("us" / "uk") — the country values the dashboard requests. The serialized
+    # RecallStats lives in `payload`; `computed_at` lets a build decide whether it's stale.
+    country: Mapped[str] = mapped_column(Text, primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSONB)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
