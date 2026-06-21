@@ -37,9 +37,12 @@ on:
           # daily, so run standalone only after a one-off ingest or an analytics-param change.
           # build_events: refresh event/outbreak clusters — also daily via ingest_all; run standalone
           # only after build_analytics (it reuses the neighbours) or a clustering-param change.
+          # build_stats: re-materialize the /recalls/stats payload — also daily via ingest_all; run
+          # standalone after a one-off ingest so the cached stats aren't left stale until tomorrow.
           - reclassify
           - build_analytics
           - build_events
+          - build_stats
 
 # Least privilege: this job runs a script against the external DB and only needs to check out the repo.
 permissions:

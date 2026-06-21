@@ -69,9 +69,11 @@ similarity graph; see `app/modules/recalls/events.py`). `stats.anomalies` flags 
 *already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
 looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,
 from a self-built multiplicative seasonal model (a 12-month seasonal index + linear trend fit in log
-space, pure numpy computed on read; empty when history is too short). `scripts/anomaly_methodology.py` and
+space, pure numpy; empty when history is too short). `scripts/anomaly_methodology.py` and
 `scripts/forecast_methodology.py` validate both offline against statsmodels (STL · Holt-Winters) under
-the `ml` extra. Public reads are
+the `ml` extra. The whole `/recalls/stats` payload (these aggregations + anomalies + forecast) is
+**materialised per country** by `scripts/build_stats.py` after each ingest — the request path reads
+one row instead of recomputing it, with a live fallback when a row is absent. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
 10/min per IP. Interactive docs at `/docs`.
 
@@ -97,7 +99,7 @@ uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /
 python -m scripts.ingest_fda                 # pull the latest openFDA recalls into the DB
 python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (via curl_cffi)
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
-python -m scripts.ingest_all                 # run all three source ingests, then rebuild analytics
+python -m scripts.ingest_all                 # run all three source ingests, then rebuild analytics + events + stats
 python -m scripts.backfill_fda               # one-time: seed full openFDA history (~26k records)
 python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 python -m scripts.backfill_entities          # one-time: seed entities over existing recalls (after migrating)
@@ -105,6 +107,7 @@ python -m scripts.backfill_all               # run the still-needed backfills ab
 python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
 python -m scripts.reclassify                 # re-run model + entities + severity over stored recalls
 python -m scripts.build_analytics            # rebuild themes + similar-recall neighbours (after ingest)
+python -m scripts.build_stats                # re-materialise the /recalls/stats payload per country
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format

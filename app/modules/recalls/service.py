@@ -2,7 +2,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
@@ -12,7 +12,14 @@ from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.forecast import forecast_series
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
-from app.modules.recalls.models import IngestRun, Recall, RecallEvent, RecallNeighbor, RecallTopic
+from app.modules.recalls.models import (
+    IngestRun,
+    Recall,
+    RecallEvent,
+    RecallNeighbor,
+    RecallStatsCache,
+    RecallTopic,
+)
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -279,16 +286,26 @@ def _entities_unnest() -> TableValuedAlias:
     return func.jsonb_array_elements(Recall.entities).table_valued("value", joins_implicitly=True)
 
 
-def get_stats(session: Session, country: str | None = None) -> RecallStats:
+def compute_stats(session: Session, country: str | None = None) -> RecallStats:
+    """Compute the full stats payload live from `recalls` — the expensive path.
+
+    Runs ~8 aggregations + the anomaly scan over many series + the forecast. In production this is
+    materialized per country (see `rebuild_stats`) and served by `get_stats` as a single row read;
+    it is called directly only by the offline rebuild and as `get_stats`'s fallback.
+    """
+
     def scoped(stmt):
         # US and UK are shown separately, so every aggregation is scoped to the chosen country.
         return stmt.where(Recall.country == country) if country else stmt
 
+    # A secondary sort on the label breaks count ties so each leaderboard is ordered the same way
+    # run-to-run — the materialized payload then equals a live recompute, and the `limit`ed
+    # breakdowns below pick a deterministic top-N instead of an arbitrary one among tied rows.
     by_category = session.execute(
         scoped(
             select(Recall.category, func.count())
             .group_by(Recall.category)
-            .order_by(func.count().desc())
+            .order_by(func.count().desc(), Recall.category)
         )
     ).all()
 
@@ -328,7 +345,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .select_from(Recall, states_elem)
             .where(func.jsonb_typeof(Recall.states) == "array")
             .group_by(states_elem.c.value)
-            .order_by(func.count().desc())
+            .order_by(func.count().desc(), states_elem.c.value)
         )
     ).all()
     by_company = session.execute(
@@ -336,7 +353,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             select(Recall.company_name, func.count())
             .where(Recall.company_name.is_not(None))
             .group_by(Recall.company_name)
-            .order_by(func.count().desc())
+            .order_by(func.count().desc(), Recall.company_name)
             .limit(_TOP_N)
         )
     ).all()
@@ -344,7 +361,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         scoped(
             select(Recall.source, func.count())
             .group_by(Recall.source)
-            .order_by(func.count().desc())
+            .order_by(func.count().desc(), Recall.source)
         )
     ).all()
     # Count each (type, value), so a recall touching several allergens counts toward each.
@@ -357,7 +374,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             .select_from(Recall, entity_elem)
             .where(func.jsonb_typeof(Recall.entities) == "array")
             .group_by(entity_type, entity_value)
-            .order_by(func.count().desc())
+            .order_by(func.count().desc(), entity_type, entity_value)
         )
     ).all()
 
@@ -458,6 +475,43 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
         forecast=forecast,
         last_ingest_at=last_ingest_at,
     )
+
+
+def get_stats(session: Session, country: str | None = None) -> RecallStats:
+    """Return the stats payload, served from the materialized `recall_stats` row when present.
+
+    `rebuild_stats` precomputes a row per dashboard country after each ingest, so the request path
+    reads one row instead of recomputing everything `compute_stats` does. Falls back to a live
+    `compute_stats` for the country=None ("all") view — which the dashboard never requests, so it
+    isn't materialized — and for any country whose row hasn't been built yet (e.g. a freshly
+    migrated DB). A missing row therefore degrades to slow, never to an error.
+    """
+    if country is not None:
+        row = session.get(RecallStatsCache, country)
+        if row is not None:
+            return RecallStats.model_validate(row.payload)
+    return compute_stats(session, country)
+
+
+def rebuild_stats(session: Session) -> dict[str, int]:
+    """Materialize the stats payload for each dashboard country into `recall_stats`.
+
+    Compute every payload first, then delete + insert in one transaction, so a failure mid-compute
+    never touches the stored rows — the old cache survives untouched and `get_stats` keeps serving
+    it. The payload is stored as `model_dump(mode="json")` so datetimes (last_ingest_at) serialize
+    into JSONB; `get_stats` reverses it with `model_validate` (CamelModel has populate_by_name, so
+    snake-case round-trips).
+    """
+    now = datetime.now(UTC)
+    countries = list(_COUNTRY_SOURCES)  # the per-country scopes the dashboard requests: us, uk
+    payloads = {
+        country: compute_stats(session, country).model_dump(mode="json") for country in countries
+    }
+    session.execute(delete(RecallStatsCache))
+    for country in countries:
+        session.add(RecallStatsCache(country=country, payload=payloads[country], computed_at=now))
+    session.commit()
+    return {"countries": len(countries)}
 
 
 def get_trend(

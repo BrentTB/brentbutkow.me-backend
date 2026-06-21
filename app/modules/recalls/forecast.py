@@ -37,7 +37,10 @@ _SEASONAL_MIN_CYCLES = 2
 _BAND_Z = 1.0
 
 
-class ForecastPoint(TypedDict):
+# The forecaster's raw output shape — plain dicts, kept distinct from the API's ForecastPoint schema
+# (schemas.py) so the model layer stays free of any serialization concern. compute_stats maps these
+# into the schema for the response.
+class ForecastResult(TypedDict):
     month: str
     predicted: float
     lower: float
@@ -50,7 +53,7 @@ def forecast_series(
     horizon: int = 3,
     period: int = 12,
     min_history: int = 24,
-) -> list[ForecastPoint]:
+) -> list[ForecastResult]:
     """Project the next `horizon` months of `series` with a seasonal-plus-trend model.
 
     `series` is chronological `(month, count)` on a continuous monthly index (gaps filled with 0) —
@@ -96,7 +99,7 @@ def forecast_series(
     fitted = np.expm1(level + slope * t + seasonal[calendar])
     sigma = float(np.std(counts - fitted, ddof=1)) if n > 2 else float(np.std(counts - fitted))
 
-    out: list[ForecastPoint] = []
+    out: list[ForecastResult] = []
     last_month = months[-1]
     for step in range(1, horizon + 1):
         future_month = _add_months(last_month, step)
