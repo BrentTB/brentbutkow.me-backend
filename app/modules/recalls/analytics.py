@@ -388,22 +388,33 @@ def build_analytics(
 
     assignments = weights.argmax(axis=1)
     rowsums = weights.sum(axis=1)
+    topic_terms = [
+        _top_terms(features, model.components_[component], n_terms)
+        for component in range(topic_count)
+    ]
+
     for position, original in enumerate(nonempty):
-        if rowsums[position] > 0:  # an all-zero row has no real topic
-            topic_ids[original] = int(assignments[position])
+        if rowsums[position] <= 0:
+            continue  # an all-zero row has no real topic
+        component = int(assignments[position])
+        # Only keep the assignment when the recall actually contains one of the topic's *label*
+        # terms. NMF's argmax otherwise files low-signal recalls (e.g. a kombucha bottle-cap recall)
+        # under whichever topic loads least-badly, giving a "curry · chicken · powder" chip with no
+        # visible connection to the recall. No match → no theme, rather than a misleading one.
+        label = topic_terms[component][:3]
+        if any(term in corpus[position].lower() for term in label):
+            topic_ids[original] = component
 
     sizes = Counter(topic for topic in topic_ids if topic is not None)
-    topics = []
-    for component in range(topic_count):
-        terms = _top_terms(features, model.components_[component], n_terms)
-        topics.append(
-            TopicInfo(
-                id=component,
-                label=" · ".join(terms[:3]),
-                top_terms=terms,
-                size=int(sizes.get(component, 0)),
-            )
+    topics = [
+        TopicInfo(
+            id=component,
+            label=" · ".join(topic_terms[component][:3]),
+            top_terms=topic_terms[component],
+            size=int(sizes.get(component, 0)),
         )
+        for component in range(topic_count)
+    ]
 
     corpus_neighbors = _compute_neighbors(matrix, n_neighbors)
     for position, original in enumerate(nonempty):
