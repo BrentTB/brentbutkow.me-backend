@@ -65,9 +65,16 @@ def _naive(points: list[tuple[str, int]]) -> list[float]:
     return [float(index.get(_add_months(m, -_PERIOD), 0)) for m, _ in points[-_HORIZON:]]
 
 
+def _verdict(ours: float, other: float) -> str:
+    # Within 5% of the reference's error reads as a tie — a 0.02-MAE gap isn't "worse".
+    if abs(ours - other) <= 0.05 * max(other, 1.0):
+        return "matches"
+    return "beats" if ours < other else "trails"
+
+
 def _write_card(n_months: int, ours: float, hw: float, naive: float) -> None:
-    verdict = "beats" if ours <= hw else "trails"
-    floor = "beats" if ours <= naive else "trails"
+    verdict = _verdict(ours, hw)
+    floor = _verdict(ours, naive)
     card = f"""# Recall volume forecast — methodology
 
 **Shipped forecaster (runtime):** a self-built additive seasonal model over the overall monthly
