@@ -1,8 +1,9 @@
 """Validate the shipped seasonal forecaster against statsmodels Holt-Winters, offline.
 
-The runtime forecaster (app/modules/recalls/forecast.py) is a cheap, dependency-light additive
-seasonal model (numpy only). This script fits statsmodels' Exponential Smoothing (Holt-Winters,
-additive trend + seasonal) on the same overall monthly series, backtests both over a held-out tail
+The runtime forecaster (app/modules/recalls/forecast.py) is a cheap, dependency-light multiplicative
+seasonal model fit in log space (numpy only). This script fits statsmodels' Exponential Smoothing
+(Holt-Winters, additive trend + seasonal) on the same overall monthly series, backtests both over
+a held-out tail
 against a naive same-month-last-year baseline, and writes a methodology card next to the
 classifier's model card. Run with the `ml` extra installed:
 
@@ -60,7 +61,9 @@ def _holt_winters(points: list[tuple[str, int]]) -> list[float]:
 
 
 def _naive(points: list[tuple[str, int]]) -> list[float]:
-    # The dumb floor: predict each held-out month as its value one year earlier.
+    # The dumb floor: predict each held-out month as its value one year earlier. The history gate in
+    # main() guarantees ≥ 12 months precede every held-out month, so the `0` default never engages —
+    # it's a guard against a real prior-year value being absent, not a silent zero baseline.
     index = {m: c for m, c in points}
     return [float(index.get(_add_months(m, -_PERIOD), 0)) for m, _ in points[-_HORIZON:]]
 
@@ -100,8 +103,12 @@ forecast at all rather than a confident-looking bad line.
 
 def main() -> None:
     series = _overall_series()
-    if len(series) < _MIN_HISTORY + _HORIZON + 1:
-        need = _MIN_HISTORY + _HORIZON + 1
+    # Two binding constraints on history: the runtime forecaster needs `_MIN_HISTORY` months after
+    # its in-progress drop, and additive Holt-Winters needs strictly more than 2 seasonal cycles of
+    # *training* data (`points[:-_HORIZON]` must exceed `2·_PERIOD`, else statsmodels raises). Gate
+    # on whichever is larger so the offline fit never lands exactly on the 2-cycle boundary.
+    need = max(_MIN_HISTORY, 2 * _PERIOD + 1) + _HORIZON + 1
+    if len(series) < need:
         print(f"Not enough history to backtest ({len(series)} months; need ≥ {need}).")
         return
     points = series[:-1]  # drop the in-progress final month, as the runtime forecaster does

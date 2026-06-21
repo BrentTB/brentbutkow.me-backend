@@ -150,7 +150,8 @@ def get_recalls(
     summary="Aggregate stats",
     description=(
         "Totals, counts by category, month, classification, state, company, source, and entity, "
-        "plus anomaly callouts and the last successful ingest time."
+        "plus anomaly callouts, a short-horizon volume forecast, and the last successful ingest "
+        "time."
     ),
     responses=_RATE_LIMITED,
 )

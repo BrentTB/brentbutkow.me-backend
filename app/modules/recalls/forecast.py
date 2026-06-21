@@ -28,6 +28,8 @@ import numpy as np
 
 # A 12-month seasonal index needs ≥ 2 full cycles to be stable; with fewer we fall back to a
 # trend-only forecast (seasonal component left at zero) rather than fitting noise into the calendar.
+# At the default min_history (24 = 2·period) every produced forecast already clears this, so the
+# fallback only engages if a caller lowers min_history below 2·period; otherwise it's defensive.
 _SEASONAL_MIN_CYCLES = 2
 
 # Band half-width in residual-sigma units — a ~1σ "typical forecast error" envelope, not a formal
@@ -119,6 +121,6 @@ def _month_number(month: str) -> int:
 
 
 def _add_months(month: str, n: int) -> str:
-    """`YYYY-MM` exactly `n` months after `month` (n ≥ 0)."""
+    """`YYYY-MM` exactly `n` months after `month` (`n` may be negative to step backwards)."""
     total = (int(month[:4]) * 12 + int(month[5:7]) - 1) + n
     return f"{total // 12:04d}-{total % 12 + 1:02d}"
