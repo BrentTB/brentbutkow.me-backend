@@ -198,7 +198,8 @@ def cluster_events(
 
 
 def _to_input(recall: Recall) -> EventInput:
-    entities = recall.entities or []
+    # Skip any stored entity missing its value/type so one malformed row can't abort the rebuild.
+    entities = [e for e in (recall.entities or []) if e.get("value") and e.get("type")]
     return EventInput(
         pathogens=frozenset(e["value"] for e in entities if e["type"] == _PATHOGEN),
         entities=tuple(e["value"] for e in entities),

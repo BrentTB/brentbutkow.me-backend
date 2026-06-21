@@ -158,6 +158,7 @@ def test_topics(monkeypatch):
     assert res.headers["cache-control"] == "public, max-age=300"
     # themes can be scoped to a country; an unknown one is rejected by the enum
     assert client.get("/recalls/topics?country=uk").status_code == 200
+    assert client.get("/recalls/topics?country=zz").status_code == 422
 
 
 def test_events(monkeypatch):
@@ -189,7 +190,6 @@ def test_events(monkeypatch):
     monkeypatch.setattr(router_module, "get_events", lambda *a, **k: captured.update(k) or [])
     assert client.get("/recalls/events?outbreaksOnly=true").status_code == 200
     assert captured["outbreaks_only"] is True
-    assert client.get("/recalls/topics?country=zz").status_code == 422
 
 
 def test_similar(monkeypatch):

@@ -90,7 +90,8 @@ class RecallOut(CamelModel):
     severity_score: float = Field(
         description=(
             "Composite 0–100 severity, blending the recall's classification, cause category, the "
-            "deadliest named entities, and geographic breadth onto one US/UK-comparable scale."
+            "deadliest named entities, allergen risk tier, reported harm, and geographic breadth "
+            "onto one US/UK-comparable scale."
         )
     )
     severity_label: SeverityLabel = Field(
