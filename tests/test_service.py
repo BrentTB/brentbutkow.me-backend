@@ -332,12 +332,22 @@ def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
     }
 
 
-def test_get_trend_groups_by_category_and_source(session, monkeypatch):
+def test_get_trend_groups_by_dimension(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
         [
-            _record("T-1", reason_for_recall="undeclared milk", report_date="20240101"),
-            _record("T-2", reason_for_recall="listeria", report_date="20240115"),
+            _record(
+                "T-1",
+                reason_for_recall="undeclared milk",
+                classification="Class I",
+                report_date="20240101",
+            ),
+            _record(
+                "T-2",
+                reason_for_recall="listeria",
+                classification="Class II",
+                report_date="20240115",
+            ),
             _record("T-3", reason_for_recall="undeclared soy", report_date="20240301"),
         ],
     )
@@ -355,6 +365,23 @@ def test_get_trend_groups_by_category_and_source(session, monkeypatch):
 
     src = {(b.month, b.group): b.count for b in service.get_trend(session, group="source").buckets}
     assert src[("2024-01", "fda")] == 2
+
+    # Severity bands: the Class I allergen + Class II listeria land severe; unclassified soy is
+    # moderate (category-only base).
+    sev = {
+        (b.month, b.group): b.count for b in service.get_trend(session, group="severity").buckets
+    }
+    assert sev[("2024-01", "severe")] == 2
+    assert sev[("2024-03", "moderate")] == 1
+
+    # Classification — the nullable column is coalesced so unclassified soy gets its own segment.
+    cls = {
+        (b.month, b.group): b.count
+        for b in service.get_trend(session, group="classification").buckets
+    }
+    assert cls[("2024-01", "Class I")] == 1
+    assert cls[("2024-01", "Class II")] == 1
+    assert cls[("2024-03", "Unclassified")] == 1
 
 
 def test_get_trend_applies_the_recall_filters(session, monkeypatch):

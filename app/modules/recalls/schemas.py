@@ -211,6 +211,8 @@ class TrendGroup(StrEnum):
     total = "total"
     category = "category"
     source = "source"
+    severity = "severity"
+    classification = "classification"
 
 
 class TrendBucket(CamelModel):

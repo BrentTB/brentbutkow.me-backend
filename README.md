@@ -30,7 +30,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | GET | `/health` | liveness (no DB hit) |
 | GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
-| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` or `source` → `{ group, buckets }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | GET | `/recalls/topics?country` | per-country themes (NMF over reason/product text), largest first → `TopicOut[]` |
 | GET | `/recalls/{source}/{recallNumber}/similar?limit` | recalls most similar by reason/product text (precomputed cosine neighbours) → `SimilarRecall[]` |

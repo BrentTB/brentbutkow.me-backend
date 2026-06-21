@@ -464,8 +464,8 @@ def get_trend(
     until: date | None = None,
     search: str | None = None,
 ) -> TrendResult:
-    # Monthly counts, optionally split by category or source, scoped by the same filters as the
-    # recall list — so the chart and the list below it always describe the same set of recalls.
+    # Monthly counts, optionally split by category / source / severity / classification, scoped by
+    # the same filters as the recall list — so the chart and the list always describe the same set.
     where = [
         Recall.report_date.is_not(None),
         *_recall_conditions(
@@ -489,6 +489,9 @@ def get_trend(
     dimension = {
         TrendGroup.category.value: Recall.category,
         TrendGroup.source.value: Recall.source,
+        TrendGroup.severity.value: Recall.severity_label,
+        # classification is nullable — label the unset rows so they form their own segment.
+        TrendGroup.classification.value: func.coalesce(Recall.classification, "Unclassified"),
     }.get(group)
     if dimension is not None:
         rows = session.execute(

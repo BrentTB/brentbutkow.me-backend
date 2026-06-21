@@ -175,7 +175,8 @@ def recall_trend(
     session: Session = Depends(get_session),
     country: RecallCountry | None = Query(default=None, description="Scope to a country."),
     group: TrendGroup = Query(
-        default=TrendGroup.total, description="Group by: total, category, or source."
+        default=TrendGroup.total,
+        description="Group by: total, category, source, severity, or classification.",
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
