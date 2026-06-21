@@ -208,6 +208,13 @@ class Anomaly(CamelModel):
     )
 
 
+class ForecastPoint(CamelModel):
+    month: str = Field(description="Projected month (YYYY-MM).", examples=["2026-07"])
+    predicted: float = Field(description="Projected recall count for the month (≥ 0).")
+    lower: float = Field(description="Lower edge of the ~1σ typical-error band (≥ 0).")
+    upper: float = Field(description="Upper edge of the ~1σ typical-error band.")
+
+
 class TrendGroup(StrEnum):
     total = "total"
     category = "category"
@@ -238,6 +245,13 @@ class RecallStats(CamelModel):
     by_source: list[LabelCount]
     by_entity: list[EntityCount]
     anomalies: list[Anomaly]
+    forecast: list[ForecastPoint] = Field(
+        default_factory=list,
+        description=(
+            "Short-horizon projection of overall monthly volume with a band; empty when history is "
+            "too short to forecast. A projection, not a record of what happened (see anomalies)."
+        ),
+    )
     last_ingest_at: datetime | None
 
 

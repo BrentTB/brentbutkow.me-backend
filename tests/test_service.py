@@ -152,6 +152,36 @@ def test_run_fda_ingest_is_idempotent_on_conflict(session, monkeypatch):
     assert rows[0].category == RecallCategory.pathogen.value
 
 
+def test_run_fda_ingest_counts_new_across_chunk_boundary(session, monkeypatch):
+    # Regression: the new-vs-stored existence lookup must be chunked like the upsert. A single
+    # row-wise IN over a full-history backfill's ~26k keys overflows Postgres' max_stack_depth,
+    # and the chunked replacement must still union correctly across slices — so use a batch that
+    # spans several _UPSERT_CHUNK boundaries and overlaps the stored set only partway.
+    chunk = service._UPSERT_CHUNK
+    size = 2 * chunk + 100  # >2 chunks, so both the upsert and the lookup span multiple slices
+
+    first_batch = [_record(f"N-{i}", reason_for_recall="undeclared milk") for i in range(size)]
+    _patch_fetch(monkeypatch, first_batch)
+    first = service.run_fda_ingest(session)
+    assert first.fetched == size
+    assert first.new == size  # fresh DB → every key is new
+    assert first.upserted == size
+
+    # Shift the window forward by one chunk: the lower part overlaps stored keys, the upper part is
+    # genuinely new. Exactly `chunk` keys (N-{size}..) sit past the first batch, and the lookup over
+    # all `size` keys must span multiple slices to find the overlap.
+    second_batch = [
+        _record(f"N-{i}", reason_for_recall="listeria") for i in range(chunk, chunk + size)
+    ]
+    _patch_fetch(monkeypatch, second_batch)
+    second = service.run_fda_ingest(session)
+    assert second.fetched == size
+    assert second.new == chunk  # only keys beyond the first batch are unseen
+
+    # Union of both windows: N-0 .. N-{2*chunk+size-1}.
+    assert len(session.scalars(select(Recall)).all()) == chunk + size
+
+
 def test_list_recalls_filters_orders_and_paginates(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
@@ -303,6 +333,35 @@ def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     assert stats.last_ingest_at is not None
     # Too little history to baseline against → no false anomalies, but the field is present.
     assert stats.anomalies == []
+    # Likewise too short to forecast: no projection rather than a bad line (still present, empty).
+    assert stats.forecast == []
+
+
+def test_get_stats_forecasts_overall_volume(session, monkeypatch):
+    # ≥ 2 years of monthly history → the seasonal forecaster projects the next 3 months on read.
+    records = []
+    year, month = 2023, 1
+    for i in range(28):  # 2023-01 .. 2025-04
+        stamp = f"{year}{month:02d}01"
+        for k in range(3):  # a few recalls a month so counts aren't trivially zero
+            records.append(
+                _record(f"F-{i}-{k}", reason_for_recall="undeclared milk", report_date=stamp)
+            )
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+    _patch_fetch(monkeypatch, records)
+    service.run_fda_ingest(session)
+
+    forecast = service.get_stats(session).forecast
+
+    assert len(forecast) == 3
+    # The horizon starts at the month after the last fully-present one (2025-03).
+    assert forecast[0].month == "2025-04"
+    for point in forecast:
+        assert 0 <= point.lower <= point.predicted <= point.upper
+    # A flat 3/month history projects flat at ~3.
+    assert abs(forecast[0].predicted - 3.0) < 0.5
 
 
 def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
