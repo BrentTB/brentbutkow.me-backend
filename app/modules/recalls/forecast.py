@@ -5,17 +5,21 @@ predict*), this projects what's *coming*: the next few months of overall recall 
 confidence band. Same honesty constraints as the rest of Recall Radar — deterministic, explainable,
 no LLM and no pretrained model, just arithmetic over the series.
 
-The model is an additive decomposition cheap enough for the request path:
+The model is a **multiplicative** seasonal decomposition cheap enough for the request path. We fit
+in log space (``log1p``), so an additive seasonal-plus-trend fit there is multiplicative back in
+counts — a seasonal lift scales with the level (a busy December adds a *fraction* more, not a fixed
+count), which fits volume that has grown several-fold far better than a fixed offset (a rolling
+backtest picked this over the additive form). In log space:
 
-* a **12-month seasonal index** — the average deviation of each calendar month from the local trend,
-  so a reliably busy March lifts every projected March; and
+* a **12-month seasonal index** — the average log-deviation of each calendar month from the local
+  trend, so a reliably busy March lifts every projected March; and
 * a **linear level + slope** fit by least squares on the deseasonalised series.
 
-A forecast is ``level + slope·t + seasonal[month]``, floored at zero. The band comes from the
-in-sample residual spread (std of actual − fitted) and widens with the horizon (``√h``), so a
-three-months-out point is honestly less certain than next month's. statsmodels Holt-Winters is used
-offline (scripts/forecast_methodology.py) only to validate this self-built forecaster — it is never
-imported on the request path, exactly as STL stays offline for the anomaly detector.
+A forecast is ``expm1(level + slope·t + seasonal[month])``, floored at zero. The band comes from the
+in-sample residual spread *in counts* (std of actual − fitted) and widens with the horizon (``√h``),
+so a three-months-out point is honestly less certain than next month's. statsmodels Holt-Winters is
+used offline (scripts/forecast_methodology.py) only to validate this self-built forecaster — it is
+never imported on the request path, exactly as STL stays offline for the anomaly detector.
 """
 
 from typing import TypedDict
@@ -67,24 +71,27 @@ def forecast_series(
     n = len(counts)
     t = np.arange(n, dtype=float)
     calendar = np.array([_month_number(month) - 1 for month in months])  # 0..11
+    # Fit in log space so seasonality is multiplicative (scales with the level), not a fixed offset.
+    log_counts = np.log1p(counts)
 
     # Seasonal index: detrend with a rough line, average the residual per calendar month, then
     # centre it so it's a pure offset (sums to ~0) that doesn't double-count the level/trend.
     seasonal = np.zeros(period)
     if n >= _SEASONAL_MIN_CYCLES * period:
-        rough = np.polyfit(t, counts, 1)
-        detrended = counts - (rough[1] + rough[0] * t)
+        rough = np.polyfit(t, log_counts, 1)
+        detrended = log_counts - (rough[1] + rough[0] * t)
         for cal in range(period):
             month_values = detrended[calendar == cal]
             if month_values.size:
                 seasonal[cal] = month_values.mean()
         seasonal -= seasonal.mean()
 
-    # Level + slope on the deseasonalised series, then the in-sample residual spread for the band.
-    deseasonalised = counts - seasonal[calendar]
+    # Level + slope on the deseasonalised (log) series. Reconstruct fitted values back in counts
+    # (expm1) so the residual spread — and therefore the band — stays in recalls/month.
+    deseasonalised = log_counts - seasonal[calendar]
     fit = np.polyfit(t, deseasonalised, 1)
     slope, level = float(fit[0]), float(fit[1])
-    fitted = level + slope * t + seasonal[calendar]
+    fitted = np.expm1(level + slope * t + seasonal[calendar])
     sigma = float(np.std(counts - fitted, ddof=1)) if n > 2 else float(np.std(counts - fitted))
 
     out: list[ForecastPoint] = []
@@ -93,7 +100,7 @@ def forecast_series(
         future_month = _add_months(last_month, step)
         future_t = (n - 1) + step
         cal = _month_number(future_month) - 1
-        predicted = max(0.0, level + slope * future_t + float(seasonal[cal]))
+        predicted = max(0.0, float(np.expm1(level + slope * future_t + float(seasonal[cal]))))
         band = _BAND_Z * sigma * (step**0.5)  # honest widening: further out, less certain
         out.append(
             {

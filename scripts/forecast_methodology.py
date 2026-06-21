@@ -77,11 +77,11 @@ def _write_card(n_months: int, ours: float, hw: float, naive: float) -> None:
     floor = _verdict(ours, naive)
     card = f"""# Recall volume forecast — methodology
 
-**Shipped forecaster (runtime):** a self-built additive seasonal model over the overall monthly
-recall count — a 12-month seasonal index plus a linear level/slope on the deseasonalised series,
-projected {_HORIZON} months ahead with a ~1σ band that widens with the horizon. Pure numpy, so it
-runs on every `/recalls/stats` call with no extra dependency. The in-progress final month is dropped
-before fitting, exactly as the anomaly detector does.
+**Shipped forecaster (runtime):** a self-built multiplicative seasonal model over the overall
+monthly recall count — a 12-month seasonal index plus a linear level/slope, fit in log space so a
+seasonal swing scales with the level. Projected {_HORIZON} months ahead with a ~1σ band that widens
+with the horizon. Pure numpy, so it runs on every `/recalls/stats` call with no extra dependency.
+The in-progress final month is dropped before fitting, exactly as the anomaly detector does.
 
 **Offline reference — Holt-Winters:** statsmodels Exponential Smoothing (additive trend + seasonal,
 annual period) — a mature, seasonality-aware forecaster. It needs ≥ 2 seasonal cycles and a heavier

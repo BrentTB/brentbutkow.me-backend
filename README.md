@@ -68,8 +68,8 @@ flagged as outbreaks — materialised by `scripts/build_events.py` (connected co
 similarity graph; see `app/modules/recalls/events.py`). `stats.anomalies` flags months that
 *already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
 looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,
-from a self-built seasonal model (12-month seasonal index + linear trend, pure numpy computed on read;
-empty when history is too short). `scripts/anomaly_methodology.py` and
+from a self-built multiplicative seasonal model (a 12-month seasonal index + linear trend fit in log
+space, pure numpy computed on read; empty when history is too short). `scripts/anomaly_methodology.py` and
 `scripts/forecast_methodology.py` validate both offline against statsmodels (STL · Holt-Winters) under
 the `ml` extra. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
