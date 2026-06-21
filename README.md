@@ -29,7 +29,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
 | GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
-| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, lastIngestAt }` |
+| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, forecast, lastIngestAt }` |
 | GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | GET | `/recalls/topics?country` | per-country themes (NMF over reason/product text), largest first → `TopicOut[]` |
@@ -65,7 +65,13 @@ lists that country's themes (NMF runs per country) and `/recalls/{source}/{recal
 `/recalls/events?country` lists a country's clusters — recalls grouped into one incident by a shared
 pathogen within a time window or the same FDA event, with the multi-recall pathogen-driven ones
 flagged as outbreaks — materialised by `scripts/build_events.py` (connected components over the
-similarity graph; see `app/modules/recalls/events.py`). Public reads are
+similarity graph; see `app/modules/recalls/events.py`). `stats.anomalies` flags months that
+*already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
+looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,
+from a self-built multiplicative seasonal model (a 12-month seasonal index + linear trend fit in log
+space, pure numpy computed on read; empty when history is too short). `scripts/anomaly_methodology.py` and
+`scripts/forecast_methodology.py` validate both offline against statsmodels (STL · Holt-Winters) under
+the `ml` extra. Public reads are
 rate-limited (60/min per IP); `POST /contact` is limited to 5/min and `POST /nullspace/score` to
 10/min per IP. Interactive docs at `/docs`.
 

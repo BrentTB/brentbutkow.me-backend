@@ -9,6 +9,7 @@ from sqlalchemy.sql.selectable import TableValuedAlias
 
 from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
+from app.modules.recalls.forecast import forecast_series
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
 from app.modules.recalls.models import IngestRun, Recall, RecallEvent, RecallNeighbor, RecallTopic
@@ -21,6 +22,7 @@ from app.modules.recalls.schemas import (
     CategoryCount,
     EntityCount,
     EventOut,
+    ForecastPoint,
     IngestResult,
     LabelCount,
     MonthCount,
@@ -363,6 +365,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
     # the busiest entities. Cheap on ~29k rows; the highest-|z| flags surface as trend callouts.
     calendar = _continuous_months([m for m, _ in by_month])
     anomalies: list[Anomaly] = []
+    forecast: list[ForecastPoint] = []
     if calendar:
         candidates: list[Anomaly] = []
 
@@ -372,7 +375,18 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
                 candidates.append(found)
 
         overall_counts = {m: c for m, c in by_month}
-        _add(AnomalyScope.overall, "All recalls", [(m, overall_counts.get(m, 0)) for m in calendar])
+        overall_series = [(m, overall_counts.get(m, 0)) for m in calendar]
+        # Project overall volume forward from the same gap-filled series the anomaly scan reads.
+        forecast = [
+            ForecastPoint(
+                month=point["month"],
+                predicted=point["predicted"],
+                lower=point["lower"],
+                upper=point["upper"],
+            )
+            for point in forecast_series(overall_series)
+        ]
+        _add(AnomalyScope.overall, "All recalls", overall_series)
 
         cat_rows = session.execute(
             scoped(
@@ -441,6 +455,7 @@ def get_stats(session: Session, country: str | None = None) -> RecallStats:
             EntityCount(type=etype, label=label, count=count) for etype, label, count in by_entity
         ],
         anomalies=anomalies,
+        forecast=forecast,
         last_ingest_at=last_ingest_at,
     )
 
@@ -619,21 +634,22 @@ def _run_ingest_job(
         rows = _dedupe(normalize(record) for record in records)
         # New = rows whose (source, recall_number) isn't already stored. The upsert touches new and
         # re-seen rows alike, so upserted_count alone is almost always just the fetched total. Look
-        # up only this batch's own composite keys (bounded by the fetch), not the whole source, and
-        # compare on the full (source, recall_number) so the count holds for a mixed-source job too.
+        # up only this batch's own composite keys, not the whole source, and compare on the full
+        # (source, recall_number) so the count holds for a mixed-source job too. Chunk the lookup
+        # like the upsert below: a single row-wise IN over a full-history backfill's ~26k keys
+        # expands to a deeply nested OR tree that overflows Postgres' max_stack_depth.
         keys = [(row["source"], row["recall_number"]) for row in rows]
-        existing = (
-            {
+        existing: set[tuple[str, str]] = set()
+        for start in range(0, len(keys), _UPSERT_CHUNK):
+            chunk = keys[start : start + _UPSERT_CHUNK]
+            existing.update(
                 (src, num)
                 for src, num in session.execute(
                     select(Recall.source, Recall.recall_number).where(
-                        tuple_(Recall.source, Recall.recall_number).in_(keys)
+                        tuple_(Recall.source, Recall.recall_number).in_(chunk)
                     )
                 )
-            }
-            if keys
-            else set()
-        )
+            )
         new_count = sum(1 for row in rows if (row["source"], row["recall_number"]) not in existing)
         _upsert_recalls(session, rows)
         run.finished_at = datetime.now(UTC)
