@@ -10,6 +10,9 @@ can't reach them:
   on NCC as media statements — only this one didn't).
 * **The two NRCS canned-fish recalls** — the NRCS recalls page is JavaScript-only and returns no
   content to an HTTP client, so it isn't scrapeable.
+* **The 2017-18 Tiger Brands / Enterprise listeriosis recall** — administered by the NCC but
+  predating its web archive; SA's largest-ever food recall (the world's largest listeriosis
+  outbreak). Attributed to source "ncc" since the NCC ordered it.
 
 Each entry keeps its **true source** (so the by-source breakdown stays honest) and the URL it was
 taken from. New SA recalls still arrive automatically via the NCC source; this only fills the gaps
@@ -133,6 +136,23 @@ _SEED: list[SeedRecall] = [
         ),
         "company": None,
         "url": "https://www.nrcs.org.za/recalls",
+    },
+    {
+        "source": RecallSource.ncc.value,  # NCC-administered; predates its web archive
+        "slug": "enterprise-foods-listeriosis-recall-2018",
+        "report_date": "2018-03-04",
+        "product": "Enterprise ready-to-eat processed meats (polony, viennas, russians)",
+        "reason": (
+            "South Africa's listeriosis outbreak — the world's largest — was traced to "
+            "ready-to-eat processed meats from Tiger Brands' Enterprise Foods facility in "
+            "Polokwane. Listeria monocytogenes caused over 1 000 cases and more than 200 "
+            "deaths; the NCC ordered a nationwide recall in March 2018."
+        ),
+        "company": "Tiger Brands (Enterprise Foods)",
+        "url": (
+            "https://www.gcis.gov.za/newsroom/media-releases/"
+            "government-update-listeria-outbreak-joint-media-statement"
+        ),
     },
 ]
 
