@@ -622,6 +622,12 @@ def get_events(
     ]
 
 
+def get_recall(session: Session, source: str, recall_number: str) -> RecallOut | None:
+    # One recall by its composite PK (source, recall_number) — backs the recall detail page.
+    recall = session.get(Recall, (source, recall_number))
+    return RecallOut.model_validate(recall) if recall is not None else None
+
+
 def get_similar(
     session: Session, source: str, recall_number: str, limit: int = 6
 ) -> list[SimilarRecall]:

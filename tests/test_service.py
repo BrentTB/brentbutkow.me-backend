@@ -153,6 +153,18 @@ def test_run_fda_ingest_is_idempotent_on_conflict(session, monkeypatch):
     assert rows[0].category == RecallCategory.pathogen.value
 
 
+def test_get_recall_returns_one_or_none(session, monkeypatch):
+    _patch_fetch(monkeypatch, [_record("R-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+
+    found = service.get_recall(session, "fda", "R-1")
+    assert found is not None
+    assert found.recall_number == "R-1"
+    assert found.source.value == "fda"
+
+    assert service.get_recall(session, "fda", "does-not-exist") is None
+
+
 def test_run_fda_ingest_counts_new_across_chunk_boundary(session, monkeypatch):
     # Regression: the new-vs-stored existence lookup must be chunked like the upsert. A single
     # row-wise IN over a full-history backfill's ~26k keys overflows Postgres' max_stack_depth,
@@ -442,9 +454,12 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
 
     # Any recall changing after the build marks the cache stale — not just an ingest, but a
     # standalone reclassify or backfill that rewrites a derived column. updated_at (onupdate) moves
-    # past computed_at, which is the signal status() reads.
+    # past computed_at, which is the signal status() reads. Bump severity_score to a genuinely new
+    # value so an UPDATE actually fires (re-setting a column to its current value is a no-op and
+    # wouldn't move updated_at).
     recall = session.scalars(select(Recall)).first()
-    recall.category = RecallCategory.allergen.value
+    assert recall is not None
+    recall.severity_score += 1
     session.commit()
     assert build_stats.status(session)[0] is True
 
