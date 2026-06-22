@@ -33,6 +33,9 @@ class RecallSource(StrEnum):
     usda = "usda"
     uk = "uk"
     ncc = "ncc"  # South Africa — National Consumer Commission
+    woolworths = "woolworths"  # South Africa — Woolworths Holdings (curated seed)
+    shoprite = "shoprite"  # South Africa — Shoprite / Checkers (curated seed)
+    nrcs = "nrcs"  # South Africa — National Regulator for Compulsory Specifications (curated seed)
 
 
 class RecallCountry(StrEnum):

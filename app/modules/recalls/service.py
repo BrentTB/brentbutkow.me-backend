@@ -45,6 +45,7 @@ from app.modules.recalls.schemas import (
     TrendGroup,
     TrendResult,
 )
+from app.modules.recalls.seed_za import fetch_seed, normalize_seed
 
 # Rows per upsert statement — keeps a large backfill to a few statements instead of thousands.
 _UPSERT_CHUNK = 500
@@ -57,7 +58,11 @@ _CONFLICT_KEYS = ("source", "recall_number")
 
 # Which ingest sources belong to each country — scopes the "last updated" timestamp and drives the
 # per-country stats rebuild loop (rebuild_stats), so a new country must be registered here.
-_COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",), "za": ("ncc_za",)}
+_COUNTRY_SOURCES = {
+    "us": ("openfda_food", "usda_fsis"),
+    "uk": ("uk_fsa",),
+    "za": ("ncc_za", "seed_za"),
+}
 
 # Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
 # we surface them from — current trends matter more than a big spike from a decade ago.
@@ -751,3 +756,8 @@ def run_uk_ingest(session: Session) -> IngestResult:
 
 def run_ncc_ingest(session: Session) -> IngestResult:
     return _run_ingest_job(session, source="ncc_za", fetch=fetch_ncc, normalize=normalize_ncc)
+
+
+def run_seed_ingest(session: Session) -> IngestResult:
+    # Curated SA recalls NCC doesn't carry (Woolworths/Shoprite/NRCS) — see seed_za.py.
+    return _run_ingest_job(session, source="seed_za", fetch=fetch_seed, normalize=normalize_seed)

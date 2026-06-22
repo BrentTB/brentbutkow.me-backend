@@ -58,6 +58,11 @@ _SKIP_SLUG_MARKERS = (
     "product-recall-notifications",
 )
 
+# NCC also publishes some recalls under a bare "consumers-are-urged-to-return-…" /
+# "…urges-consumers-to-return-…" slug (no product-recall- / media-statement- prefix) — e.g. the 2021
+# Appletiser and apple-juice recalls. _canonical collapses any that also have a prefixed twin.
+_RECALL_SLUG_MARKERS = ("urged-to-return", "urges-consumers-to-return")
+
 # Non-food classes the NCC also recalls — matched against the TITLE (the product class is named
 # there). Listed first so a non-food recall can't slip through on a stray food word: "dry pet foods"
 # contains "food", a "honey"-scented shampoo contains "honey".
@@ -277,7 +282,9 @@ def _is_recall_post(slug: str) -> bool:
         return False
     if slug.startswith(_RECALL_SLUG_PREFIXES):
         return True
-    return slug.startswith("media-statement") and "recall" in slug
+    if slug.startswith("media-statement") and "recall" in slug:
+        return True
+    return any(marker in slug for marker in _RECALL_SLUG_MARKERS)
 
 
 def is_food_recall(record: NccRecord) -> bool:
@@ -361,8 +368,10 @@ def normalize_ncc(record: NccRecord) -> NormalizedRecall:
 # Strip a slug to the recalled subject, so a recall posted under both a product-recall-* and a
 # media-statement-* slug collapses to one record.
 _CANONICAL_PREFIX = re.compile(
-    r"^(?:product-safety-recall-|product-recall-|recalls-of-the-|recalls-of-"
-    r"|recall-of-the-|recall-of-|recalls-|recall-)"
+    r"^(?:product-safety-recall-|product-recall-"
+    r"|the-ncc-urges-consumers-to-return-|ncc-urges-consumers-to-return-(?:certain-)?"
+    r"|consumers-are-urged-to-return-(?:certain-|recalled-)?"
+    r"|recalls-of-the-|recalls-of-|recall-of-the-|recall-of-|recalls-|recall-)"
 )
 
 
@@ -372,7 +381,11 @@ def _canonical(slug: str) -> str:
         if core.startswith(prefix):
             core = core[len(prefix) :]
             break
-    return _CANONICAL_PREFIX.sub("", core)
+    # Strip layered prefixes, e.g. "product-recall-the-ncc-urges-consumers-to-return-similac-…".
+    prev = ""
+    while prev != core:
+        prev, core = core, _CANONICAL_PREFIX.sub("", core)
+    return core
 
 
 def _dedupe(records: list[NccRecord]) -> list[NccRecord]:

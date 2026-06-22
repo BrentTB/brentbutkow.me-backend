@@ -256,3 +256,40 @@ def test_dedupe_prefers_product_recall_over_media_statement_twin():
     assert deduped[0].slug == "product-recall-hino-700-series-trucks"  # the dedicated post wins
     # Two genuinely different recalls are both kept.
     assert len(ncc_za._dedupe([pr, rec("product-recall-buttanutt-peanut-butter")])) == 2
+
+
+def test_is_recall_post_accepts_urge_phrase_slugs():
+    # NCC also publishes some recalls under bare "urged-to-return" slugs (no prefix).
+    assert ncc_za._is_recall_post("consumers-are-urged-to-return-recalled-appletiser-products")
+    assert ncc_za._is_recall_post(
+        "the-ncc-urges-consumers-to-return-similac-alimentum-400g-infant-formula"
+    )
+    # An inspection notice (no recall/urge marker) and a periodic digest are not single recalls.
+    assert not ncc_za._is_recall_post("media-statement-ncc-conducts-market-monitoring-inspections")
+    assert not ncc_za._is_recall_post(
+        "media-statement-update-on-20-product-recalls-administered-during-quarter"
+    )
+
+
+def test_dedupe_collapses_urge_phrase_twin():
+    # A recall posted under both a product-recall-* stub and a bare urged-to-return post must
+    # collapse to one — the layered canonical strip handles the nested prefixes.
+    def rec(slug):
+        return NccRecord.model_validate(
+            {"slug": slug, "title": {"rendered": "x"}, "content": {"rendered": ""}}
+        )
+
+    pairs = [
+        (
+            "product-recall-mccain-beans-and-spar-stir-fry-products",
+            "consumers-are-urged-to-return-certain-mccain-beans-and-spar-stir-fry-products",
+        ),
+        (
+            "product-recall-the-ncc-urges-consumers-to-return-similac-alimentum-400g-infant-formula",
+            "the-ncc-urges-consumers-to-return-similac-alimentum-400g-infant-formula",
+        ),
+    ]
+    for stub_slug, bare_slug in pairs:
+        deduped = ncc_za._dedupe([rec(bare_slug), rec(stub_slug)])
+        assert len(deduped) == 1
+        assert deduped[0].slug == stub_slug  # the dedicated product-recall-* post wins

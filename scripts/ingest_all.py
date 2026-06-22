@@ -9,6 +9,7 @@ from app.modules.recalls.service import (
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
+    run_seed_ingest,
     run_uk_ingest,
 )
 
@@ -18,6 +19,7 @@ _INGESTS: tuple[tuple[str, Callable[..., IngestResult]], ...] = (
     ("FSIS", run_fsis_ingest),
     ("UK FSA", run_uk_ingest),
     ("NCC", run_ncc_ingest),
+    ("Seed ZA", run_seed_ingest),
 )
 
 

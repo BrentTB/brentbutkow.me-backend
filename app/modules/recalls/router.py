@@ -34,6 +34,7 @@ from app.modules.recalls.service import (
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
+    run_seed_ingest,
     run_uk_ingest,
     search_companies,
 )
@@ -71,7 +72,7 @@ def get_recalls(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, uk, or ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -189,7 +190,7 @@ def recall_trend(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, uk, or ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -425,3 +426,18 @@ def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
     return run_ncc_ingest(session)
+
+
+@router.post(
+    "/ingest/seed",
+    response_model=IngestResult,
+    summary="Upsert the curated South Africa seed recalls",
+    description=(
+        "Upserts a small hand-maintained set of SA food recalls the NCC feed doesn't carry "
+        "(Woolworths / Shoprite / NRCS). Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
+    return run_seed_ingest(session)
