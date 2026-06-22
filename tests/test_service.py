@@ -275,11 +275,40 @@ def test_search_companies_ranks_by_count_and_matches_substring(session, monkeypa
     )
     service.run_fda_ingest(session)
 
-    # Ranked by recall count: "Acme Foods" (2) leads the singletons.
-    assert service.search_companies(session)[0] == "Acme Foods"
-    # Case-insensitive substring match.
-    assert set(service.search_companies(session, q="acme")) == {"Acme Foods", "Acme Bakery"}
-    assert service.search_companies(session, q="beta") == ["Beta Foods"]
+    # Each suggestion carries its count, ranked by it — "Acme Foods" (2) leads the singletons.
+    top = service.search_companies(session)[0]
+    assert top.label == "Acme Foods"
+    assert top.count == 2
+    # Case-insensitive substring match on the name.
+    assert {c.label for c in service.search_companies(session, q="acme")} == {
+        "Acme Foods",
+        "Acme Bakery",
+    }
+    assert [c.label for c in service.search_companies(session, q="beta")] == ["Beta Foods"]
+
+
+def test_search_companies_counts_honor_other_filters(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("C-1", recalling_firm="Acme Foods", state="CA"),
+            _record("C-2", recalling_firm="Acme Foods", state="TX"),
+            _record("C-3", recalling_firm="Beta Foods", state="CA"),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    # Unfiltered: Acme (2) leads Beta (1).
+    assert {c.label: c.count for c in service.search_companies(session)} == {
+        "Acme Foods": 2,
+        "Beta Foods": 1,
+    }
+    # Company is a facet — counts re-tally under the other active filters. Scoping to CA drops
+    # Acme's Texas recall, so each firm now shows 1.
+    assert {c.label: c.count for c in service.search_companies(session, state="CA")} == {
+        "Acme Foods": 1,
+        "Beta Foods": 1,
+    }
 
 
 def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monkeypatch):
@@ -672,6 +701,84 @@ def test_get_stats_by_source_state_and_country_scope(session, monkeypatch):
     uk_stats = service.get_stats(session, country="uk")
     assert uk_stats.total == 1
     assert {s.label for s in uk_stats.by_source} == {"uk"}
+
+
+def test_get_facets_counts_each_dimension_under_the_filter_set(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+
+    facets = service.get_facets(session)
+    # Unfiltered, each facet equals the global breakdown.
+    assert {s.label: s.count for s in facets.source} == {"fda": 1, "usda": 1, "uk": 1}
+    assert {s.label: s.count for s in facets.state} == {"CA": 2, "TX": 1}
+
+    # country scopes every facet (it isn't any facet's own dimension, so it always applies).
+    us = service.get_facets(session, country="us")
+    assert {s.label: s.count for s in us.source} == {"fda": 1, "usda": 1}  # uk source is uk-only
+    assert {s.label: s.count for s in us.state} == {"CA": 2, "TX": 1}
+
+
+def test_get_facets_excludes_a_facets_own_filter_but_applies_the_rest(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+
+    facets = service.get_facets(session, source="fda")
+    # source is this facet's own dimension, so its list ignores the source filter — every source
+    # still shows (with its full count), so the user can switch to one without it disappearing.
+    assert {s.label: s.count for s in facets.source} == {"fda": 1, "usda": 1, "uk": 1}
+    # Every *other* facet honors source=fda: only D-1 (FDA, CA) survives.
+    assert {s.label: s.count for s in facets.state} == {"CA": 1}
+
+
+def test_get_facets_includes_company_and_entity_breakdowns(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "F-1", recalling_firm="Acme Foods", reason_for_recall="undeclared milk", state="CA"
+            ),
+            _record("F-2", recalling_firm="Beta Foods", reason_for_recall="listeria", state="TX"),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    facets = service.get_facets(session)
+    assert {c.label: c.count for c in facets.company} == {"Acme Foods": 1, "Beta Foods": 1}
+    pairs = {(e.type.value, e.label) for e in facets.entity}
+    assert ("allergen", "milk") in pairs
+    assert ("pathogen", "Listeria") in pairs
+
+    # Both are facets too — other filters apply (state=CA keeps only Acme / its milk entity), while
+    # each facet still excludes its own dimension.
+    ca = service.get_facets(session, state="CA")
+    assert {c.label: c.count for c in ca.company} == {"Acme Foods": 1}
+    assert {(e.type.value, e.label) for e in ca.entity} == {("allergen", "milk")}
+
+
+def test_get_facets_counts_themes_and_outbreaks(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("T-1", reason_for_recall="undeclared milk", state="CA"),
+            _record("T-2", reason_for_recall="undeclared milk", state="TX"),
+            _record("T-3", reason_for_recall="listeria", state="CA"),
+        ],
+    )
+    service.run_fda_ingest(session)
+    # Assign theme + outbreak ids directly — the NMF/clustering build that normally sets them is
+    # exercised elsewhere; here we just need rows carrying ids to count.
+    rows = {r.recall_number: r for r in session.scalars(select(Recall)).all()}
+    rows["T-1"].topic_id, rows["T-1"].event_cluster_id = 1, 10
+    rows["T-2"].topic_id, rows["T-2"].event_cluster_id = 1, 11
+    rows["T-3"].topic_id, rows["T-3"].event_cluster_id = 2, 10
+    session.commit()
+
+    facets = service.get_facets(session)
+    assert facets.topic_counts == {"1": 2, "2": 1}
+    assert facets.event_counts == {"10": 2, "11": 1}
+
+    # Other filters apply: scope to CA keeps T-1 (topic 1 / event 10) and T-3 (topic 2 / event 10).
+    ca = service.get_facets(session, state="CA")
+    assert ca.topic_counts == {"1": 1, "2": 1}
+    assert ca.event_counts == {"10": 2}
 
 
 def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):

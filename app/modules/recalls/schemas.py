@@ -181,6 +181,31 @@ class EntityCount(CamelModel):
     count: int
 
 
+class RecallFacets(CamelModel):
+    """Per-facet option counts for a filter set — drives the filterable dropdowns.
+
+    Each list holds `{label, count}` for one filterable dimension, where every count reflects all
+    the *other* active filters but ignores this dimension's own selection (the faceted-search rule,
+    so a chosen value never zeroes out its siblings). Counts are over recalls, so a multi-state
+    recall adds to each of its states. Company isn't here — it's a type-ahead, served with counts by
+    /recalls/companies.
+    """
+
+    category: list[LabelCount]
+    classification: list[LabelCount]
+    severity: list[LabelCount]
+    source: list[LabelCount]
+    state: list[LabelCount]
+    # Top firms by count (capped); the leaderboard breakdown reads this, the type-ahead uses
+    # /companies. Entities (allergens/pathogens/hazards) carry their type so the UI can split them.
+    company: list[LabelCount]
+    entity: list[EntityCount]
+    # Recalls per theme / per outbreak cluster (keyed by surrogate id as a string), so the Themes +
+    # Outbreaks lists can drop the ones with no match under the current filters.
+    topic_counts: dict[str, int]
+    event_counts: dict[str, int]
+
+
 class AnomalyScope(StrEnum):
     overall = "overall"
     category = "category"

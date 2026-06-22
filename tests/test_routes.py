@@ -161,6 +161,56 @@ def test_list_recalls_forwards_topic(monkeypatch):
     assert captured["event"] == "listeria-2026-03"
 
 
+def test_facets(monkeypatch):
+    captured: dict = {}
+
+    def fake_facets(*a, **k):
+        captured.update(k)
+        return {
+            "category": [{"label": "allergen", "count": 3}],
+            "classification": [],
+            "severity": [],
+            "source": [],
+            "state": [],
+            "company": [],
+            "entity": [],
+            "topicCounts": {},
+            "eventCounts": {},
+        }
+
+    monkeypatch.setattr(router_module, "get_facets", fake_facets)
+    res = client.get("/recalls/facets?country=us&category=allergen&severity=severe")
+    assert res.status_code == 200
+    assert res.json()["category"] == [{"label": "allergen", "count": 3}]
+    assert res.headers["cache-control"] == "public, max-age=120"
+    # The shared filter dependency parses + forwards the filters (enums normalized to their values).
+    assert captured["country"] == "us"
+    assert captured["category"] == "allergen"
+    assert captured["severity"] == "severe"
+    # Same validation as the recall list: bad enum and inverted date window both 422.
+    assert client.get("/recalls/facets?country=narnia").status_code == 422
+    assert client.get("/recalls/facets?since=2026-02-01&until=2026-01-01").status_code == 422
+
+
+def test_companies_returns_counts_and_excludes_its_own_filter(monkeypatch):
+    captured: dict = {}
+
+    def fake_search(*a, **k):
+        captured.update(k)
+        return [{"label": "Acme Foods", "count": 5}]
+
+    monkeypatch.setattr(router_module, "search_companies", fake_search)
+    res = client.get("/recalls/companies?q=acme&state=CA&category=allergen&company=ignored")
+    assert res.status_code == 200
+    assert res.json() == [{"label": "Acme Foods", "count": 5}]
+    assert captured["q"] == "acme"
+    # Other filters are forwarded so the counts reflect them...
+    assert captured["state"] == "CA"
+    assert captured["category"] == "allergen"
+    # ...but company is the facet's own dimension, so it's never passed to its own search.
+    assert "company" not in captured
+
+
 def test_topics(monkeypatch):
     monkeypatch.setattr(router_module, "get_topics", lambda *a, **k: [])
     res = client.get("/recalls/topics")
