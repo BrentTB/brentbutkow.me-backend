@@ -95,12 +95,62 @@ PET_FOOD = {
     "excerpt": {"rendered": ""},
 }
 
-NON_RECALL = {
-    "id": 6,
-    "slug": "media-statement-ncc-quarterly-product-recalls-update",
-    "title": {"rendered": "Media statement: quarterly product recalls update"},
+# A retailer-initiated recall published only as a "media-statement-…recall…" post (no dedicated
+# product-recall-* twin) — the broadened filter must catch these. Title carries "Media Statement:" +
+# "Product Safety Recall" boilerplate around the product.
+HUMMUS_MS = {
+    "id": 7,
+    "slug": "media-statement-deli-hummus-range-product-safety-recall",
+    "link": "https://thencc.org.za/media-statement-deli-hummus-range-product-safety-recall/",
+    "date": "2024-10-03T09:00:00",
+    "title": {"rendered": "Media Statement: Deli Hummus range Product Safety Recall"},
     "content": {
-        "rendered": "<p>The NCC provides its periodic update on peanut butter recalls.</p>"
+        "rendered": (
+            "<p>The National Consumer Commission (NCC) notifies consumers of a product safety "
+            "recall of the Deli Hummus range, as notified by the Shoprite Group, after Listeria "
+            "monocytogenes was detected in certain batches.</p>"
+        )
+    },
+    "excerpt": {"rendered": ""},
+}
+
+# Title-only deny: a food recall whose BODY mentions a non-food word ("truck") must still be kept,
+# because the deny-list reads only the title (the product class is always named there).
+CLOVER_MS = {
+    "id": 8,
+    "slug": "media-statement-clover-peanut-butter-recall",
+    "title": {"rendered": "Media Statement: Clover Peanut Butter Recall"},
+    "content": {
+        "rendered": (
+            "<p>Clover is recalling peanut butter over aflatoxin levels. Affected stock was "
+            "distributed by truck to retailers nationwide.</p>"
+        )
+    },
+    "excerpt": {"rendered": ""},
+}
+
+# A periodic digest that lists many recalls in one post — skipped (not a single product recall),
+# even though its body mentions food hazards.
+DIGEST = {
+    "id": 9,
+    "slug": "media-statement-update-on-20-product-recalls-administered-during-quarter",
+    "title": {
+        "rendered": "Media Statement: Update on 20 product recalls administered this quarter"
+    },
+    "content": {
+        "rendered": "<p>This quarter's recalls included peanut butter and listeria cases.</p>"
+    },
+    "excerpt": {"rendered": ""},
+}
+
+# A non-recall media statement (an inspection notice) — no "recall" in the slug, so not ingested,
+# even though its body mentions peanut butter.
+INSPECTION = {
+    "id": 10,
+    "slug": "media-statement-ncc-conducts-market-monitoring-inspections",
+    "title": {"rendered": "Media Statement: NCC conducts market monitoring inspections"},
+    "content": {
+        "rendered": "<p>The NCC inspected food products including peanut butter at retailers.</p>"
     },
     "excerpt": {"rendered": ""},
 }
@@ -160,13 +210,49 @@ def test_normalize_finds_hazard_named_deep_in_body(monkeypatch):
 
 
 def test_is_food_recall_keeps_human_food():
-    assert is_food_recall(NccRecord.model_validate(BUTTANUTT))
-    assert is_food_recall(NccRecord.model_validate(MCCAIN_STUB))
-    # Title has no food word — only the full-content scan (cereulide) keeps it.
-    assert is_food_recall(NccRecord.model_validate(APTAMIL))
+    # Includes a media-statement-only recall (HUMMUS_MS) and a title-with-no-food-word recall whose
+    # body names the hazard (APTAMIL → cereulide).
+    for fixture in (BUTTANUTT, MCCAIN_STUB, APTAMIL, HUMMUS_MS):
+        assert is_food_recall(NccRecord.model_validate(fixture))
+
+
+def test_is_food_recall_deny_reads_title_only():
+    # A deny word ("truck") in the BODY must not drop a food recall — the deny-list reads the title.
+    assert is_food_recall(NccRecord.model_validate(CLOVER_MS))
 
 
 def test_is_food_recall_drops_non_food_and_non_recalls():
     assert not is_food_recall(NccRecord.model_validate(HINO_TRUCKS))  # vehicle
     assert not is_food_recall(NccRecord.model_validate(PET_FOOD))  # pet food, not human food
-    assert not is_food_recall(NccRecord.model_validate(NON_RECALL))  # not a recall slug
+    assert not is_food_recall(
+        NccRecord.model_validate(INSPECTION)
+    )  # not a recall (no "recall" slug)
+    assert not is_food_recall(NccRecord.model_validate(DIGEST))  # periodic digest, not one recall
+
+
+def test_normalize_media_statement_recall(monkeypatch):
+    # The broadened filter ingests media-statement recalls; the title boilerplate
+    # ("Media Statement: … Product Safety Recall") is stripped to the product.
+    row = _normalize(monkeypatch, HUMMUS_MS, category=RecallCategory.pathogen)
+    assert row["source"] == "ncc" and row["country"] == "za"
+    assert row["recall_number"] == "media-statement-deli-hummus-range-product-safety-recall"
+    assert row["product_description"] == "Deli Hummus range"
+    assert "listeria" in row["reason_text"].lower()
+    assert {"type": "pathogen", "value": "Listeria"} in row["entities"]
+
+
+def test_dedupe_prefers_product_recall_over_media_statement_twin():
+    def rec(slug):
+        return NccRecord.model_validate(
+            {"slug": slug, "title": {"rendered": "x"}, "content": {"rendered": ""}}
+        )
+
+    pr = rec("product-recall-hino-700-series-trucks")
+    ms = rec(
+        "media-statement-recall-of-hino-700-series-trucks"
+    )  # same recall, other slug convention
+    deduped = ncc_za._dedupe([ms, pr])
+    assert len(deduped) == 1
+    assert deduped[0].slug == "product-recall-hino-700-series-trucks"  # the dedicated post wins
+    # Two genuinely different recalls are both kept.
+    assert len(ncc_za._dedupe([pr, rec("product-recall-buttanutt-peanut-butter")])) == 2

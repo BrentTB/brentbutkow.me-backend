@@ -335,7 +335,8 @@ def recall_detail(
     source: RecallSource,
     response: Response,
     recall_number: str = Path(
-        max_length=64, description="The recall's identifier within its source."
+        max_length=256,
+        description="The recall's identifier within its source (a number, or an NCC slug for ZA).",
     ),
     session: Session = Depends(get_session),
 ) -> RecallOut:
@@ -360,7 +361,8 @@ def recall_similar(
     source: RecallSource,
     response: Response,
     recall_number: str = Path(
-        max_length=64, description="The recall's identifier within its source."
+        max_length=256,
+        description="The recall's identifier within its source (a number, or an NCC slug for ZA).",
     ),
     session: Session = Depends(get_session),
     limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),

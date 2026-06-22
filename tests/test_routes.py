@@ -27,6 +27,17 @@ def test_list_recalls(monkeypatch):
     assert client.get("/recalls?state=CA&company=Acme&category=allergen").status_code == 200
 
 
+def test_recall_detail_accepts_long_sa_slug(monkeypatch):
+    # South Africa recalls use the (long) NCC slug as the recall number, so the detail path must not
+    # reject it — older max_length=64 made these 422 before the lookup ran.
+    monkeypatch.setattr(router_module, "get_recall", lambda *a, **k: None)
+    slug = "product-recall-the-ncc-urges-consumers-to-return-similac-alimentum-400g-infant-formula"
+    assert len(slug) > 64  # would have 422'd under the old limit
+    assert client.get(f"/recalls/ncc/{slug}").status_code == 404  # validation passes → "not found"
+    # Still bounded — an absurdly long identifier is rejected.
+    assert client.get("/recalls/ncc/" + "x" * 300).status_code == 422
+
+
 def test_list_recalls_forwards_search(monkeypatch):
     captured: dict = {}
 
