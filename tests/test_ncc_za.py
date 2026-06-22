@@ -293,3 +293,50 @@ def test_dedupe_collapses_urge_phrase_twin():
         deduped = ncc_za._dedupe([rec(bare_slug), rec(stub_slug)])
         assert len(deduped) == 1
         assert deduped[0].slug == stub_slug  # the dedicated product-recall-* post wins
+
+
+class _FakeResponse:
+    def __init__(self, items, total_pages):
+        self._items = items
+        self.headers = {"X-WP-TotalPages": str(total_pages)}
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._items
+
+
+def _food_item(page):
+    # A food recall reusing BUTTANUTT's body (peanut butter / aflatoxin), unique per page so the
+    # canonical dedupe keeps each one.
+    return {**BUTTANUTT, "id": page, "slug": f"product-recall-item-{page}"}
+
+
+def test_fetch_ncc_stops_at_reported_total_pages(monkeypatch):
+    # X-WP-TotalPages (read on page 1) bounds the loop: a 2-page feed is fetched exactly twice.
+    pages = []
+
+    def fake_get(url, **kwargs):
+        page = kwargs["params"]["page"]
+        pages.append(page)
+        return _FakeResponse([_food_item(page)], total_pages=2)
+
+    monkeypatch.setattr(ncc_za.curl_requests, "get", fake_get)
+    records = ncc_za.fetch_ncc()
+    assert pages == [1, 2]
+    assert len(records) == 2
+
+
+def test_fetch_ncc_caps_at_max_pages(monkeypatch):
+    # A feed claiming far more pages than _MAX_PAGES is still bounded by the cap.
+    pages = []
+
+    def fake_get(url, **kwargs):
+        page = kwargs["params"]["page"]
+        pages.append(page)
+        return _FakeResponse([_food_item(page)], total_pages=999)
+
+    monkeypatch.setattr(ncc_za.curl_requests, "get", fake_get)
+    ncc_za.fetch_ncc()
+    assert len(pages) == ncc_za._MAX_PAGES

@@ -384,3 +384,33 @@ def test_ingest_uk_with_bearer(monkeypatch):
     res = client.post("/recalls/ingest/uk", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "fetched": 1, "new": 1, "upserted": 1}
+
+
+def test_ingest_ncc_requires_bearer():
+    assert client.post("/recalls/ingest/ncc").status_code == 401
+
+
+def test_ingest_ncc_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_ncc_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 5, "new": 2, "upserted": 5},
+    )
+    res = client.post("/recalls/ingest/ncc", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 5, "new": 2, "upserted": 5}
+
+
+def test_ingest_seed_requires_bearer():
+    assert client.post("/recalls/ingest/seed").status_code == 401
+
+
+def test_ingest_seed_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_seed_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 4, "new": 0, "upserted": 4},
+    )
+    res = client.post("/recalls/ingest/seed", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 4, "new": 0, "upserted": 4}

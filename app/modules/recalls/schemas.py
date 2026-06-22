@@ -70,8 +70,13 @@ class RecallEntity(CamelModel):
 
 
 class RecallOut(CamelModel):
-    country: RecallCountry = Field(description="Country the recall is from: us or uk.")
-    source: RecallSource = Field(description="Data source: fda (openFDA), usda (FSIS), uk (FSA).")
+    country: RecallCountry = Field(description="Country the recall is from: us, uk, or za.")
+    source: RecallSource = Field(
+        description=(
+            "Data source: fda (openFDA), usda (FSIS), uk (FSA), ncc (South Africa NCC), and the "
+            "curated SA seed sources woolworths / shoprite / nrcs."
+        )
+    )
     recall_number: str = Field(
         description="Recall number, unique per source.", examples=["007-2026"]
     )

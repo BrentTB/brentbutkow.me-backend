@@ -19,11 +19,13 @@ on:
         options:
           # Ingest — pull new recalls from the sources. Cadence: DAILY. Normally automated by
           # ingest.yml (which hits the API); run here to catch up a missed day or force a refresh.
-          # ingest_all runs all three sources then rebuilds analytics; the others are single-source.
+          # ingest_all runs every source then rebuilds analytics; the others are single-source.
           - ingest_all
           - ingest_fda
           - ingest_fsis
           - ingest_uk
+          - ingest_ncc
+          - ingest_seed
           # Backfill — one-time seeding of already-stored rows. Cadence: ONCE on first setup, and
           # again right after a migration adds a derived column. New rows self-populate at ingest, so
           # these don't repeat. backfill_all runs only the ones still needed (status-gated).

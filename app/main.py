@@ -18,11 +18,12 @@ from app.rate_limit import limiter
 logger = logging.getLogger(__name__)
 
 API_DESCRIPTION = """
-**Recall Radar** — a live food-recall API covering the US and UK.
+**Recall Radar** — a live food-recall API covering the US, UK, and South Africa.
 
-Ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US) plus UK
-[FSA](https://data.food.gov.uk/food-alerts/) food alerts, classifies each by likely cause, and
-serves them to the [brentbutkow.me](https://brentbutkow.me) dashboard.
+Ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US), UK
+[FSA](https://data.food.gov.uk/food-alerts/) food alerts, and South Africa NCC recall notices,
+classifies each by likely cause, and serves them to the
+[brentbutkow.me](https://brentbutkow.me) dashboard.
 
 - Public reads are rate-limited to **60 requests/min per IP**.
 - The `POST /recalls/ingest/*` endpoints are **bearer-protected** (used by the daily ingest job).
@@ -42,7 +43,7 @@ OPENAPI_TAGS = [
 def create_app() -> FastAPI:
     app = FastAPI(
         title="brentbutkow.me backend",
-        summary="Live US + UK food-recall API (Recall Radar).",
+        summary="Live US + UK + South Africa food-recall API (Recall Radar).",
         description=API_DESCRIPTION,
         version="0.1.0",
         openapi_tags=OPENAPI_TAGS,
