@@ -4,7 +4,9 @@ Each source's `normalize_*` maps its validated payload into a `NormalizedRecall`
 shape the ingest upsert consumes — so the column set is defined once here, not in three places.
 """
 
+import html
 from datetime import date
+from html.parser import HTMLParser
 from typing import Any, TypedDict
 
 from app.modules.recalls.entities import Entity
@@ -50,3 +52,26 @@ def parse_iso_date(raw: str | None) -> date | None:
         return date.fromisoformat(raw[:10])
     except ValueError:
         return None
+
+
+class _TagStripper(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def strip_html(value: str | None) -> str:
+    # Source payloads carry HTML entities and tags (FSIS summaries, NCC article bodies); flatten to
+    # plain text — unescape entities, drop tags, and collapse whitespace.
+    if not value:
+        return ""
+    stripper = _TagStripper()
+    stripper.feed(html.unescape(value))
+    return " ".join(stripper.text.split())

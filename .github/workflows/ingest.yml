@@ -43,6 +43,16 @@ jobs:
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
 
+      - name: Trigger NCC (South Africa) ingest endpoint
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 300 \
+            -X POST "${API_BASE_URL}/recalls/ingest/ncc" \
+            -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
+            -H "Content-Type: application/json"
+
   # Themes + similar-recall neighbours are a whole-corpus rebuild (TF-IDF + NMF), too heavy to run in
   # the API process — so this runs scripts.build_analytics directly against the live DB on the runner,
   # after the ingests above land their new recalls. Needs a DATABASE_URL repo secret pointing at the

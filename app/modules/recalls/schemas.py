@@ -32,11 +32,13 @@ class RecallSource(StrEnum):
     fda = "fda"
     usda = "usda"
     uk = "uk"
+    ncc = "ncc"  # South Africa — National Consumer Commission
 
 
 class RecallCountry(StrEnum):
     us = "us"
     uk = "uk"
+    za = "za"
 
 
 class EntityType(StrEnum):

@@ -33,6 +33,7 @@ from app.modules.recalls.service import (
     list_recalls,
     run_fda_ingest,
     run_fsis_ingest,
+    run_ncc_ingest,
     run_uk_ingest,
     search_companies,
 )
@@ -62,13 +63,15 @@ def get_recalls(
     session: Session = Depends(get_session),
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
-    country: RecallCountry | None = Query(default=None, description="Filter by country: us or uk."),
+    country: RecallCountry | None = Query(
+        default=None, description="Filter by country: us, uk, or za."
+    ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, or uk."
+        default=None, description="Filter by data source: fda, usda, uk, or ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -186,7 +189,7 @@ def recall_trend(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, or uk."
+        default=None, description="Filter by data source: fda, usda, uk, or ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -405,3 +408,18 @@ def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
     return run_uk_ingest(session)
+
+
+@router.post(
+    "/ingest/ncc",
+    response_model=IngestResult,
+    summary="Trigger a South Africa NCC ingest",
+    description=(
+        "Crawls the National Consumer Commission's recall notices (WordPress REST API), keeps the "
+        "human-food recalls, and upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
+    return run_ncc_ingest(session)

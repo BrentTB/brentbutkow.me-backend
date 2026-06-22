@@ -36,6 +36,13 @@ _SEASONAL_MIN_CYCLES = 2
 # confidence interval. Honest and modest; it still widens with the horizon (see forecast_series).
 _BAND_Z = 1.0
 
+# Minimum mean monthly volume to attempt a forecast. A seasonal-plus-trend fit over a near-zero
+# series — a low-volume country like South Africa (~<1 recall/month) — just fits noise into a
+# confident-looking projection, so we decline it. Like the min_history floor, an empty result reads
+# as "no projection" to every caller. US and UK average dozens-to-hundreds/month and clear this with
+# wide margin; the gate only ever engages for a sparse country.
+_MIN_MEAN_PER_MONTH = 3.0
+
 
 # The forecaster's raw output shape — plain dicts, kept distinct from the API's ForecastPoint schema
 # (schemas.py) so the model layer stays free of any serialization concern. compute_stats maps these
@@ -53,6 +60,7 @@ def forecast_series(
     horizon: int = 3,
     period: int = 12,
     min_history: int = 24,
+    min_mean: float = _MIN_MEAN_PER_MONTH,
 ) -> list[ForecastResult]:
     """Project the next `horizon` months of `series` with a seasonal-plus-trend model.
 
@@ -62,16 +70,19 @@ def forecast_series(
     horizon then covers that current month forward (its first point re-projects the partial month
     as a full one).
 
-    Returns `[]` when there is less than `min_history` of history: a short series can't support a
-    stable forecast, and an empty list reads as "no projection" to every caller (no overlay, no
-    callout). Otherwise returns `horizon` points, each a `predicted` count with a `[lower, upper]`
-    band, all floored at zero.
+    Returns `[]` when the history is too short (< `min_history` months) *or* too sparse (mean
+    monthly volume < `min_mean`): neither supports a stable forecast, and an empty list reads as "no
+    projection" to every caller (no overlay, no callout). Otherwise returns `horizon` points, each a
+    `predicted` count with a `[lower, upper]` band, all floored at zero.
     """
     points = series[:-1]  # drop the in-progress final month, as detect_anomalies does
     if len(points) < min_history:
         return []
 
     counts = np.array([count for _, count in points], dtype=float)
+    # Decline a near-zero series: a seasonal fit over mostly-empty months is noise, not signal.
+    if float(counts.mean()) < min_mean:
+        return []
     months = [month for month, _ in points]
     n = len(counts)
     t = np.arange(n, dtype=float)

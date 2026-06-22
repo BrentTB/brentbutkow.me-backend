@@ -33,6 +33,16 @@ def test_min_history_boundary():
     assert forecast_series(_months("2020-01", [5] * 25)) != []
 
 
+def test_sparse_series_returns_no_forecast():
+    # A low-volume country (South Africa: a handful of recalls over years) has enough *length* but
+    # near-zero monthly volume — a seasonal fit there is noise, so no projection is returned.
+    sparse = [1 if i % 5 == 0 else 0 for i in range(40)]  # ~0.2/month
+    assert sum(sparse) / len(sparse) < 1
+    assert forecast_series(_months("2021-01", sparse)) == []
+    # Same length, real volume → a forecast is produced. Only density gates it.
+    assert forecast_series(_months("2021-01", [12] * 40)) != []
+
+
 def test_horizon_length():
     series = _months("2022-01", _seasonal(40, 10, 6, 8))
     assert len(forecast_series(series, horizon=3)) == 3

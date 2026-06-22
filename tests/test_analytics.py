@@ -36,3 +36,21 @@ def test_too_small_a_corpus_returns_no_topics_or_neighbours():
     assert result.topics == []
     assert all(topic is None for topic in result.topic_ids)
     assert all(neighbours == [] for neighbours in result.neighbors)
+
+
+def test_topics_gated_below_corpus_floor_but_neighbours_kept():
+    # A low-volume country (few recalls) gets no themes — NMF would be brand noise — but the
+    # similar-recall neighbours still build, since they degrade gracefully.
+    texts = [
+        "Listeria monocytogenes found in deli meat",
+        "Listeria contamination detected in sliced deli meat",
+        "Undeclared peanuts in chocolate cookies",
+        "Undeclared peanut allergen in cookie dough",
+    ]
+    result = build_analytics(texts, n_neighbors=2, min_df=1, min_topic_docs=100)
+
+    assert result.topics == []
+    assert all(topic is None for topic in result.topic_ids)
+    # Neighbours are unaffected by the topic floor: each near-duplicate still pairs with its twin.
+    assert result.neighbors[0][0][0] == 1
+    assert result.neighbors[2][0][0] == 3

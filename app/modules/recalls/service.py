@@ -20,6 +20,7 @@ from app.modules.recalls.models import (
     RecallStatsCache,
     RecallTopic,
 )
+from app.modules.recalls.ncc_za import fetch_ncc, normalize_ncc
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
 from app.modules.recalls.schemas import (
@@ -54,8 +55,9 @@ _TOP_N = 15
 # Recalls are identified by (source, recall_number) — the dedupe + upsert conflict key.
 _CONFLICT_KEYS = ("source", "recall_number")
 
-# Which ingest sources belong to each country — scopes the "last updated" timestamp.
-_COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",)}
+# Which ingest sources belong to each country — scopes the "last updated" timestamp and drives the
+# per-country stats rebuild loop (rebuild_stats), so a new country must be registered here.
+_COUNTRY_SOURCES = {"us": ("openfda_food", "usda_fsis"), "uk": ("uk_fsa",), "za": ("ncc_za",)}
 
 # Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
 # we surface them from — current trends matter more than a big spike from a decade ago.
@@ -745,3 +747,7 @@ def run_fsis_ingest(session: Session) -> IngestResult:
 
 def run_uk_ingest(session: Session) -> IngestResult:
     return _run_ingest_job(session, source="uk_fsa", fetch=fetch_fsa, normalize=normalize_fsa)
+
+
+def run_ncc_ingest(session: Session) -> IngestResult:
+    return _run_ingest_job(session, source="ncc_za", fetch=fetch_ncc, normalize=normalize_ncc)
