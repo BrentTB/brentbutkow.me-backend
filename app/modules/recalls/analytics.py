@@ -261,6 +261,12 @@ _MAX_DF_MIN_DOCS = 200
 _MIN_DF_LARGE = 5
 _LARGE_CORPUS = 500
 
+# Topics need a real corpus to be trustworthy: below this the max_df filter is off (one-off brand
+# tokens then dominate the themes), so for a low-volume country like South Africa we skip NMF and
+# surface no themes; neighbours still build (they degrade gracefully). rebuild_analytics applies
+# this per country, while build_analytics defaults lower so small test corpora keep their topics.
+_MIN_TOPIC_CORPUS = 200
+
 
 def _strip_company(text: str, company: str | None) -> str:
     # Drop the recalling firm's name tokens so a big manufacturer can't form its own "theme".
@@ -355,9 +361,15 @@ def build_analytics(
     n_terms: int = _N_TERMS,
     n_neighbors: int = _N_NEIGHBORS,
     min_df: int = _MIN_DF,
+    min_topic_docs: int = _MIN_DOCS,
 ) -> AnalyticsResult:
     """Factor `texts` into topics + nearest neighbours. Docs with no usable text (and the whole
-    corpus when it's too small or all stop-words) get no topic and no neighbours, never an error."""
+    corpus when it's too small or all stop-words) get no topic and no neighbours, never an error.
+
+    Topics are only factored when the corpus has at least `min_topic_docs` usable documents; below
+    that NMF themes are one-off brand noise, so no topics are produced while neighbours still build
+    (they degrade gracefully). The caller sets the floor — `rebuild_analytics` uses a high one per
+    country; the default stays low so small corpora (tests, the request path) keep their topics."""
     topic_ids: list[int | None] = [None] * len(texts)
     neighbors: list[list[tuple[int, float]]] = [[] for _ in texts]
 
@@ -381,40 +393,44 @@ def build_analytics(
     if matrix.shape[1] == 0:  # vocabulary emptied by min_df / stop-words
         return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors)
 
-    topic_count = max(1, min(n_topics, matrix.shape[0], matrix.shape[1]))
-    model = NMF(n_components=topic_count, init="nndsvda", random_state=42, max_iter=_MAX_ITER)
-    weights = model.fit_transform(matrix)
-    features = vectorizer.get_feature_names_out()
+    # Themes only on a large-enough corpus; below the floor NMF would surface one-off brand noise,
+    # so skip it (no topics) — the neighbours below still build for the same matrix.
+    topics: list[TopicInfo] = []
+    if len(corpus) >= min_topic_docs:
+        topic_count = max(1, min(n_topics, matrix.shape[0], matrix.shape[1]))
+        model = NMF(n_components=topic_count, init="nndsvda", random_state=42, max_iter=_MAX_ITER)
+        weights = model.fit_transform(matrix)
+        features = vectorizer.get_feature_names_out()
 
-    assignments = weights.argmax(axis=1)
-    rowsums = weights.sum(axis=1)
-    topic_terms = [
-        _top_terms(features, model.components_[component], n_terms)
-        for component in range(topic_count)
-    ]
+        assignments = weights.argmax(axis=1)
+        rowsums = weights.sum(axis=1)
+        topic_terms = [
+            _top_terms(features, model.components_[component], n_terms)
+            for component in range(topic_count)
+        ]
 
-    for position, original in enumerate(nonempty):
-        if rowsums[position] <= 0:
-            continue  # an all-zero row has no real topic
-        component = int(assignments[position])
-        # Only keep the assignment when the recall actually contains one of the topic's *label*
-        # terms. NMF's argmax otherwise files low-signal recalls (e.g. a kombucha bottle-cap recall)
-        # under whichever topic loads least-badly, giving a "curry · chicken · powder" chip with no
-        # visible connection to the recall. No match → no theme, rather than a misleading one.
-        label = topic_terms[component][:3]
-        if any(term in corpus[position].lower() for term in label):
-            topic_ids[original] = component
+        for position, original in enumerate(nonempty):
+            if rowsums[position] <= 0:
+                continue  # an all-zero row has no real topic
+            component = int(assignments[position])
+            # Only keep the assignment when the recall actually contains one of the topic's *label*
+            # terms. NMF's argmax otherwise files low-signal recalls (e.g. a kombucha bottle-cap
+            # recall) under whichever topic loads least-badly, giving a "curry · chicken · powder"
+            # chip unconnected to the recall. No match → no theme, rather than a misleading one.
+            label = topic_terms[component][:3]
+            if any(term in corpus[position].lower() for term in label):
+                topic_ids[original] = component
 
-    sizes = Counter(topic for topic in topic_ids if topic is not None)
-    topics = [
-        TopicInfo(
-            id=component,
-            label=" · ".join(topic_terms[component][:3]),
-            top_terms=topic_terms[component],
-            size=int(sizes.get(component, 0)),
-        )
-        for component in range(topic_count)
-    ]
+        sizes = Counter(topic for topic in topic_ids if topic is not None)
+        topics = [
+            TopicInfo(
+                id=component,
+                label=" · ".join(topic_terms[component][:3]),
+                top_terms=topic_terms[component],
+                size=int(sizes.get(component, 0)),
+            )
+            for component in range(topic_count)
+        ]
 
     corpus_neighbors = _compute_neighbors(matrix, n_neighbors)
     for position, original in enumerate(nonempty):
@@ -476,7 +492,8 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
         texts = [_compose_text(r.reason_text, r.product_description, r.company_name) for r in group]
         # Shed one-off brand tokens on a real corpus; stay lenient so a small one still clusters.
         min_df = _MIN_DF_LARGE if len(group) >= _LARGE_CORPUS else _MIN_DF
-        result = build_analytics(texts, min_df=min_df)
+        # Skip themes for a low-volume country (no topics, neighbours still build); US/UK clear it.
+        result = build_analytics(texts, min_df=min_df, min_topic_docs=_MIN_TOPIC_CORPUS)
 
         local_to_global: dict[int, int] = {}
         seen_slugs: set[str] = set()

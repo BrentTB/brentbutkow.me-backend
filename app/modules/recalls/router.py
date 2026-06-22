@@ -9,9 +9,11 @@ from app.db import get_session
 from app.modules.recalls.schemas import (
     EventOut,
     IngestResult,
+    LabelCount,
     RecallCategory,
     RecallClass,
     RecallCountry,
+    RecallFacets,
     RecallListResult,
     RecallOut,
     RecallSort,
@@ -25,6 +27,7 @@ from app.modules.recalls.schemas import (
 )
 from app.modules.recalls.service import (
     get_events,
+    get_facets,
     get_recall,
     get_similar,
     get_stats,
@@ -33,6 +36,8 @@ from app.modules.recalls.service import (
     list_recalls,
     run_fda_ingest,
     run_fsis_ingest,
+    run_ncc_ingest,
+    run_seed_ingest,
     run_uk_ingest,
     search_companies,
 )
@@ -50,6 +55,61 @@ def _validate_date_range(since: date | None, until: date | None) -> None:
         raise HTTPException(status_code=422, detail="`since` must be on or before `until`.")
 
 
+def recall_filters(
+    country: RecallCountry | None = Query(
+        default=None, description="Filter by country: us, uk, or za."
+    ),
+    category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
+    classification: RecallClass | None = Query(
+        default=None, description="Filter by recall classification / alert type."
+    ),
+    source: RecallSource | None = Query(
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+    ),
+    state: str | None = Query(
+        default=None, max_length=50, description="Affected state — 2-letter code, e.g. CA."
+    ),
+    company: str | None = Query(
+        default=None, max_length=100, description="Company name (case-insensitive partial match)."
+    ),
+    entity: str | None = Query(
+        default=None, max_length=100, description="Allergen/pathogen/hazard/contaminant value."
+    ),
+    severity: SeverityLabel | None = Query(
+        default=None, description="Severity band: low, moderate, high, or severe."
+    ),
+    topic: str | None = Query(default=None, description="Theme slug from /recalls/topics."),
+    event: str | None = Query(default=None, description="Event/outbreak slug."),
+    since: date | None = Query(
+        default=None, description="Only recalls reported on or after this date (YYYY-MM-DD)."
+    ),
+    until: date | None = Query(
+        default=None, description="Only recalls reported on or before this date (YYYY-MM-DD)."
+    ),
+    search: str | None = Query(
+        default=None, max_length=200, description="Full-text search over product/reason/company."
+    ),
+) -> dict[str, Any]:
+    # Shared filter set for the faceted endpoints (/facets, /companies). Normalizes enums to their
+    # string values and validates the date window once, so each endpoint just forwards the dict.
+    _validate_date_range(since, until)
+    return {
+        "country": country.value if country else None,
+        "source": source.value if source else None,
+        "category": category.value if category else None,
+        "classification": classification.value if classification else None,
+        "state": state,
+        "company": company,
+        "entity": entity,
+        "severity": severity.value if severity else None,
+        "topic": topic,
+        "event": event,
+        "since": since,
+        "until": until,
+        "search": search,
+    }
+
+
 @router.get(
     "",
     response_model=RecallListResult,
@@ -62,13 +122,15 @@ def get_recalls(
     session: Session = Depends(get_session),
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
-    country: RecallCountry | None = Query(default=None, description="Filter by country: us or uk."),
+    country: RecallCountry | None = Query(
+        default=None, description="Filter by country: us, uk, or za."
+    ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, or uk."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -167,6 +229,29 @@ def recall_stats(
 
 
 @router.get(
+    "/facets",
+    response_model=RecallFacets,
+    summary="Filter facet counts",
+    description=(
+        "Option counts for each filterable dimension (cause, classification, severity, source, "
+        "state) under the current filters. Every count ignores its own facet's selection but "
+        "honors the rest — so the dropdowns can show how many recalls each choice would return "
+        "and grey out the dead ends. Company counts come from /recalls/companies (a type-ahead)."
+    ),
+    responses=_RATE_LIMITED,
+)
+def recall_facets(
+    response: Response,
+    session: Session = Depends(get_session),
+    filters: dict[str, Any] = Depends(recall_filters),
+) -> RecallFacets:
+    # Filter-dependent, so it can't be materialized like /stats — but it's a handful of grouped
+    # counts, and a short cache still absorbs repeat hits while the user reads.
+    response.headers["Cache-Control"] = "public, max-age=120"
+    return get_facets(session, **filters)
+
+
+@router.get(
     "/trend",
     response_model=TrendResult,
     summary="Monthly trend",
@@ -186,7 +271,7 @@ def recall_trend(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source: fda, usda, or uk."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
     ),
     state: str | None = Query(
         default=None,
@@ -259,24 +344,29 @@ def recall_trend(
 
 @router.get(
     "/companies",
-    response_model=list[str],
+    response_model=list[LabelCount],
     summary="Company name suggestions",
     description=(
-        "Distinct company names matching `q`, ranked by recall count — feeds the company "
-        "filter's type-ahead."
+        "Company names matching `q`, each with its recall count under the other active filters "
+        "(company is a facet too, so its own selection is excluded). Ranked by count — feeds the "
+        "company filter's type-ahead."
     ),
     responses=_RATE_LIMITED,
 )
 def recall_companies(
     response: Response,
     session: Session = Depends(get_session),
-    country: RecallCountry | None = Query(default=None, description="Scope to a country."),
+    filters: dict[str, Any] = Depends(recall_filters),
     q: str = Query(
         default="", max_length=100, description="Search term (case-insensitive substring)."
     ),
-) -> list[str]:
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return search_companies(session, country.value if country else None, q)
+) -> list[LabelCount]:
+    response.headers["Cache-Control"] = "public, max-age=120"
+    # company is the facet's own dimension, so it's excluded from its own counts (search_companies
+    # nulls it internally).
+    return search_companies(
+        session, q=q, **{key: value for key, value in filters.items() if key != "company"}
+    )
 
 
 @router.get(
@@ -332,7 +422,8 @@ def recall_detail(
     source: RecallSource,
     response: Response,
     recall_number: str = Path(
-        max_length=64, description="The recall's identifier within its source."
+        max_length=256,
+        description="The recall's identifier within its source (a number, or an NCC slug for ZA).",
     ),
     session: Session = Depends(get_session),
 ) -> RecallOut:
@@ -357,7 +448,8 @@ def recall_similar(
     source: RecallSource,
     response: Response,
     recall_number: str = Path(
-        max_length=64, description="The recall's identifier within its source."
+        max_length=256,
+        description="The recall's identifier within its source (a number, or an NCC slug for ZA).",
     ),
     session: Session = Depends(get_session),
     limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),
@@ -405,3 +497,33 @@ def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
     return run_uk_ingest(session)
+
+
+@router.post(
+    "/ingest/ncc",
+    response_model=IngestResult,
+    summary="Trigger a South Africa NCC ingest",
+    description=(
+        "Crawls the National Consumer Commission's recall notices (WordPress REST API), keeps the "
+        "human-food recalls, and upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
+    return run_ncc_ingest(session)
+
+
+@router.post(
+    "/ingest/seed",
+    response_model=IngestResult,
+    summary="Upsert the curated South Africa seed recalls",
+    description=(
+        "Upserts a small hand-maintained set of SA food recalls the NCC feed doesn't carry "
+        "(Woolworths / Shoprite / NRCS). Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
+    return run_seed_ingest(session)

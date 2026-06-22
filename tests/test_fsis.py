@@ -1,5 +1,6 @@
 from app.modules.recalls import fsis
 from app.modules.recalls.fsis import FsisRecord, normalize_fsis
+from app.modules.recalls.normalize import strip_html
 from app.modules.recalls.schemas import RecallCategory
 from app.modules.recalls.severity import score_severity
 
@@ -97,4 +98,4 @@ def test_map_states_drops_unknown_names():
 
 
 def test_strip_html_unescapes_and_removes_tags():
-    assert fsis._strip_html("<p>Undeclared milk &amp; soy</p>") == "Undeclared milk & soy"
+    assert strip_html("<p>Undeclared milk &amp; soy</p>") == "Undeclared milk & soy"

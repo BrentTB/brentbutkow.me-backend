@@ -99,7 +99,9 @@ uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /
 python -m scripts.ingest_fda                 # pull the latest openFDA recalls into the DB
 python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (via curl_cffi)
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
-python -m scripts.ingest_all                 # run all three source ingests, then rebuild analytics + events + stats
+python -m scripts.ingest_ncc                 # pull South Africa NCC recall notices (via curl_cffi)
+python -m scripts.ingest_seed                # upsert the curated SA seed recalls (Woolworths/Shoprite/NRCS)
+python -m scripts.ingest_all                 # run all source ingests, then rebuild analytics + events + stats
 python -m scripts.backfill_fda               # one-time: seed full openFDA history (~26k records)
 python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 python -m scripts.backfill_entities          # one-time: seed entities over existing recalls (after migrating)

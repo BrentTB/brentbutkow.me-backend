@@ -109,6 +109,7 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (EntityType.contaminant, "mercury", ("mercury",)),
     (EntityType.contaminant, "histamine", ("histamine", "scombrotoxin", "scombroid")),
     (EntityType.contaminant, "aflatoxin", ("aflatoxin", "mycotoxin", "ochratoxin")),
+    (EntityType.contaminant, "patulin", ("patulin",)),
     (
         EntityType.contaminant,
         "marine biotoxin",

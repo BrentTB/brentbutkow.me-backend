@@ -27,6 +27,17 @@ def test_list_recalls(monkeypatch):
     assert client.get("/recalls?state=CA&company=Acme&category=allergen").status_code == 200
 
 
+def test_recall_detail_accepts_long_sa_slug(monkeypatch):
+    # South Africa recalls use the (long) NCC slug as the recall number, so the detail path must not
+    # reject it — older max_length=64 made these 422 before the lookup ran.
+    monkeypatch.setattr(router_module, "get_recall", lambda *a, **k: None)
+    slug = "product-recall-the-ncc-urges-consumers-to-return-similac-alimentum-400g-infant-formula"
+    assert len(slug) > 64  # would have 422'd under the old limit
+    assert client.get(f"/recalls/ncc/{slug}").status_code == 404  # validation passes → "not found"
+    # Still bounded — an absurdly long identifier is rejected.
+    assert client.get("/recalls/ncc/" + "x" * 300).status_code == 422
+
+
 def test_list_recalls_forwards_search(monkeypatch):
     captured: dict = {}
 
@@ -148,6 +159,56 @@ def test_list_recalls_forwards_topic(monkeypatch):
     assert captured["topic"] == "listeria-deli-meat"
     assert client.get("/recalls?event=listeria-2026-03").status_code == 200
     assert captured["event"] == "listeria-2026-03"
+
+
+def test_facets(monkeypatch):
+    captured: dict = {}
+
+    def fake_facets(*a, **k):
+        captured.update(k)
+        return {
+            "category": [{"label": "allergen", "count": 3}],
+            "classification": [],
+            "severity": [],
+            "source": [],
+            "state": [],
+            "company": [],
+            "entity": [],
+            "topicCounts": {},
+            "eventCounts": {},
+        }
+
+    monkeypatch.setattr(router_module, "get_facets", fake_facets)
+    res = client.get("/recalls/facets?country=us&category=allergen&severity=severe")
+    assert res.status_code == 200
+    assert res.json()["category"] == [{"label": "allergen", "count": 3}]
+    assert res.headers["cache-control"] == "public, max-age=120"
+    # The shared filter dependency parses + forwards the filters (enums normalized to their values).
+    assert captured["country"] == "us"
+    assert captured["category"] == "allergen"
+    assert captured["severity"] == "severe"
+    # Same validation as the recall list: bad enum and inverted date window both 422.
+    assert client.get("/recalls/facets?country=narnia").status_code == 422
+    assert client.get("/recalls/facets?since=2026-02-01&until=2026-01-01").status_code == 422
+
+
+def test_companies_returns_counts_and_excludes_its_own_filter(monkeypatch):
+    captured: dict = {}
+
+    def fake_search(*a, **k):
+        captured.update(k)
+        return [{"label": "Acme Foods", "count": 5}]
+
+    monkeypatch.setattr(router_module, "search_companies", fake_search)
+    res = client.get("/recalls/companies?q=acme&state=CA&category=allergen&company=ignored")
+    assert res.status_code == 200
+    assert res.json() == [{"label": "Acme Foods", "count": 5}]
+    assert captured["q"] == "acme"
+    # Other filters are forwarded so the counts reflect them...
+    assert captured["state"] == "CA"
+    assert captured["category"] == "allergen"
+    # ...but company is the facet's own dimension, so it's never passed to its own search.
+    assert "company" not in captured
 
 
 def test_topics(monkeypatch):
@@ -323,3 +384,33 @@ def test_ingest_uk_with_bearer(monkeypatch):
     res = client.post("/recalls/ingest/uk", headers={"Authorization": "Bearer test-token"})
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "fetched": 1, "new": 1, "upserted": 1}
+
+
+def test_ingest_ncc_requires_bearer():
+    assert client.post("/recalls/ingest/ncc").status_code == 401
+
+
+def test_ingest_ncc_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_ncc_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 5, "new": 2, "upserted": 5},
+    )
+    res = client.post("/recalls/ingest/ncc", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 5, "new": 2, "upserted": 5}
+
+
+def test_ingest_seed_requires_bearer():
+    assert client.post("/recalls/ingest/seed").status_code == 401
+
+
+def test_ingest_seed_with_bearer(monkeypatch):
+    monkeypatch.setattr(
+        router_module,
+        "run_seed_ingest",
+        lambda *a, **k: {"status": "ok", "fetched": 4, "new": 0, "upserted": 4},
+    )
+    res = client.post("/recalls/ingest/seed", headers={"Authorization": "Bearer test-token"})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "fetched": 4, "new": 0, "upserted": 4}

@@ -1,12 +1,9 @@
-import html
-from html.parser import HTMLParser
-
 from curl_cffi import requests as curl_requests
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
-from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_iso_date
+from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_iso_date, strip_html
 from app.modules.recalls.schemas import RecallCountry, RecallSource
 from app.modules.recalls.severity import score_severity
 
@@ -91,41 +88,19 @@ class FsisRecord(BaseModel):
     langcode: str | None = None
 
 
-class _TagStripper(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    @property
-    def text(self) -> str:
-        return "".join(self._parts)
-
-
-def _strip_html(value: str | None) -> str:
-    # FSIS values carry HTML entities and (in summaries) tags; flatten to plain text.
-    if not value:
-        return ""
-    stripper = _TagStripper()
-    stripper.feed(html.unescape(value))
-    return " ".join(stripper.text.split())
-
-
 def _map_states(names: list[str]) -> list[str] | None:
     codes = [_STATE_CODE[name] for name in names if name in _STATE_CODE]
     return codes or None
 
 
 def normalize_fsis(record: FsisRecord) -> NormalizedRecall:
-    reason_text = ", ".join(record.field_recall_reason).strip() or _strip_html(record.field_summary)
+    reason_text = ", ".join(record.field_recall_reason).strip() or strip_html(record.field_summary)
     category, confidence = classify(reason_text)
     classification = parse_class(record.field_recall_classification)
     states = _map_states(record.field_states)
     distribution_pattern = ", ".join(record.field_states) or None
     entities = extract_entities(reason_text)
-    product = _strip_html(" / ".join(record.field_product_items)) or _strip_html(record.field_title)
+    product = strip_html(" / ".join(record.field_product_items)) or strip_html(record.field_title)
     status = {"True": "Active", "False": "Closed"}.get(record.field_active_notice or "")
     recall_date = parse_iso_date(record.field_recall_date)
     severity_score, severity_label = score_severity(
