@@ -200,7 +200,7 @@ def _recall_conditions(
         # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
         conditions.append(Recall.severity_score >= min_severity)
     if severity:
-        # Exact severity band: low / moderate / high / severe.
+        # Exact severity band: low / moderate / high / severe / critical.
         conditions.append(Recall.severity_label == severity)
     if topic:
         # Resolve the theme slug to its surrogate id(s), scoped to the country when set — slugs are
