@@ -49,12 +49,15 @@ Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source`
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
-carries a `severityScore` (0–100) and `severityLabel` ∈ `low · moderate · high · severe` — a
+carries a `severityScore` (0–100) and `severityLabel` ∈ `low · moderate · high · severe · critical` — a
 transparent composite of classification, cause, the named-hazard tier (a lethal pathogen or a
 high-risk allergen weighs more than a low-risk one), reported harm in the recall text, and US
 geographic breadth, on one scale that puts US classes and UK alert types side by side and lets both
-countries span the full range (see `app/modules/recalls/severity.py`); `severity` filters to one
-band, `minSeverity` to recalls at or above a score, `sort=severity` orders by it, and `bySeverity`
+countries span the full range (see `app/modules/recalls/severity.py`). Content modifiers lift the
+score with diminishing returns, so heavy profiles spread out near the top instead of saturating at
+100 — it rates the **assessed hazard**, not the realised outcome (recall notices carry no reliable
+casualty counts). `severity` filters to one band, `minSeverity` to recalls at or above a score,
+`sort=severity` orders by it (ties broken toward larger outbreaks, then recency), and `bySeverity`
 breaks the corpus down by band. `topic` scopes to a theme by its **stable slug** (e.g.
 `listeria-deli-meat`, from `/recalls/topics`) so a bookmarked theme survives an analytics rebuild,
 where the surrogate id would not; each recall also carries its `topicId`. `/recalls/topics?country`

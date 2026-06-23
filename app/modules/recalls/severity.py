@@ -128,9 +128,16 @@ _MULTI_BONUS = 3.0  # 2–5 affected states
 _WIDE_STATE_COUNT = 6
 
 # Score → band thresholds (inclusive lower bound). Class I always clears 75 via the base alone.
+# `critical` is the worst-of-the-worst tier above severe — a top-class recall whose named lethal
+# hazard is compounded by reported harm or nationwide spread (a natural gap in the data sits below).
+_CRITICAL = 89.0
 _SEVERE = 75.0
 _HIGH = 55.0
 _MODERATE = 35.0
+
+# Above-base modifiers lift the score toward 100 with diminishing returns (this sets how fast), so
+# distinct hazard profiles spread out near the top instead of all clipping to the ceiling.
+_LIFT_SCALE = 25.0
 
 
 def _entity_bonus(entities: list[Entity]) -> float:
@@ -179,6 +186,8 @@ def _breadth_bonus(states: list[str] | None, distribution_pattern: str | None) -
 
 
 def _label(score: float) -> str:
+    if score >= _CRITICAL:
+        return SeverityLabel.critical.value
     if score >= _SEVERE:
         return SeverityLabel.severe.value
     if score >= _HIGH:
@@ -211,11 +220,24 @@ def score_severity(
         else _CATEGORY_BASE.get(category, _CATEGORY_BASE[RecallCategory.other.value])
     )
 
-    score = base + _CATEGORY_NUDGE.get(category, 0.0)
-    score += _entity_bonus(entities)
-    score += _allergen_adjust(entities)
-    score += _harm_bonus(reason_text)
-    score += _breadth_bonus(states, distribution_pattern)
+    # Sum the content modifiers: cause nudge, named hazard, allergen tier, reported harm, breadth.
+    modifiers = (
+        _CATEGORY_NUDGE.get(category, 0.0)
+        + _entity_bonus(entities)
+        + _allergen_adjust(entities)
+        + _harm_bonus(reason_text)
+        + _breadth_bonus(states, distribution_pattern)
+    )
+
+    # Positive modifiers lift the score into the headroom above the base with diminishing returns,
+    # so heavy profiles spread out near the top (a nationwide outbreak outranks a routine Class I)
+    # instead of all clipping to 100 — the pile-up that made "highest severity" collapse to newest-
+    # first. Net-negative modifiers (a low-risk allergen) pull below the anchor, linearly.
+    if modifiers >= 0:
+        headroom = 100.0 - base
+        score = base + headroom * (modifiers / (modifiers + _LIFT_SCALE))
+    else:
+        score = base + modifiers
 
     # The regulator's top classification (Class I) can be lifted by content but never demoted out of
     # the severe band — content modulates, it doesn't override.
