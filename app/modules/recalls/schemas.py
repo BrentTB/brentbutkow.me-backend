@@ -57,11 +57,12 @@ class SeverityLabel(StrEnum):
     moderate = "moderate"
     high = "high"
     severe = "severe"
+    critical = "critical"
 
 
 class RecallSort(StrEnum):
     recency = "recency"  # most recent report_date first (the default)
-    severity = "severity"  # highest severity_score first, then most recent
+    severity = "severity"  # highest severity_score first, then larger outbreaks, then most recent
 
 
 class RecallEntity(CamelModel):
@@ -105,7 +106,7 @@ class RecallOut(CamelModel):
         )
     )
     severity_label: SeverityLabel = Field(
-        description="Banded severity: low, moderate, high, or severe."
+        description="Banded severity: low, moderate, high, severe, or critical."
     )
     topic_id: int | None = Field(
         default=None,

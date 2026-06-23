@@ -123,16 +123,47 @@ def test_unknown_classification_is_treated_like_a_missing_one():
     assert bogus == missing
 
 
-def test_score_is_clamped_to_100():
-    score, label = score_severity(
+def test_top_profiles_separate_instead_of_saturating():
+    # The composite no longer clips to 100: heavy profiles spread out near the top so "highest
+    # severity" can rank them, rather than piling into one tie at the ceiling (broken only by date).
+    heaviest, label = score_severity(
         classification=RecallClass.class_i.value,
         category=RecallCategory.pathogen.value,
         entities=[_ent("pathogen", "Listeria")],
+        reason_text="An outbreak sickened many; several were hospitalized.",
         states=["CA", "NY", "TX", "FL", "WA", "OR"],
         distribution_pattern="Nationwide",
     )
-    assert score == 100.0
-    assert label == SeverityLabel.severe.value
+    lighter, _ = score_severity(
+        classification=RecallClass.class_i.value,
+        category=RecallCategory.mislabeling.value,
+        entities=[],
+    )
+    assert label == SeverityLabel.critical.value
+    # The heavier profile now tops the new critical band; the lighter Class I stays severe — both
+    # score strictly apart, and nothing reaches the old 100 ceiling.
+    assert 75 <= lighter < heaviest <= 100
+
+
+def test_critical_band_tops_severe_for_a_compounded_hazard():
+    # The worst-of-the-worst tier: a top-class recall whose lethal pathogen is compounded by
+    # reported harm and nationwide spread clears the critical floor; the same recall without that
+    # compounding (a bare Class I + lethal pathogen) stays in severe.
+    compounded, label = score_severity(
+        classification=RecallClass.class_i.value,
+        category=RecallCategory.pathogen.value,
+        entities=[_ent("pathogen", "Listeria")],
+        reason_text="An outbreak sickened many; several were hospitalized.",
+        distribution_pattern="Nationwide",
+    )
+    bare, bare_label = score_severity(
+        classification=RecallClass.class_i.value,
+        category=RecallCategory.pathogen.value,
+        entities=[_ent("pathogen", "Listeria")],
+    )
+    assert label == SeverityLabel.critical.value
+    assert bare_label == SeverityLabel.severe.value
+    assert compounded > bare
 
 
 def test_uk_alert_types_land_on_the_same_scale():

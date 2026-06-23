@@ -73,10 +73,11 @@ _ANOMALY_RECENT_MONTHS = 24
 
 # Severity bands surface worst-first in the stats breakdown (label is text, so we order it here).
 _SEVERITY_RANK = {
-    SeverityLabel.severe.value: 0,
-    SeverityLabel.high.value: 1,
-    SeverityLabel.moderate.value: 2,
-    SeverityLabel.low.value: 3,
+    SeverityLabel.critical.value: 0,
+    SeverityLabel.severe.value: 1,
+    SeverityLabel.high.value: 2,
+    SeverityLabel.moderate.value: 3,
+    SeverityLabel.low.value: 4,
 }
 
 
@@ -199,7 +200,7 @@ def _recall_conditions(
         # Keep recalls at or above a severity floor — backed by the btree index on severity_score.
         conditions.append(Recall.severity_score >= min_severity)
     if severity:
-        # Exact severity band: low / moderate / high / severe.
+        # Exact severity band: low / moderate / high / severe / critical.
         conditions.append(Recall.severity_label == severity)
     if topic:
         # Resolve the theme slug to its surrogate id(s), scoped to the country when set — slugs are
@@ -280,7 +281,13 @@ def list_recalls(
             func.ts_rank(Recall.search_vector, func.websearch_to_tsquery("english", search)).desc()
         )
     if sort == RecallSort.severity.value:
+        # Tie-break equal severity scores by the scale of the outbreak the recall belongs to (its
+        # event cluster's recall count) before recency — so a big historic outbreak outranks an
+        # isolated recent recall of the same score, instead of "highest severity" collapsing to the
+        # newest of everything sharing a score.
+        stmt = stmt.outerjoin(RecallEvent, Recall.event_cluster_id == RecallEvent.id)
         ordering.append(Recall.severity_score.desc().nulls_last())
+        ordering.append(RecallEvent.recall_count.desc().nulls_last())
     ordering.append(Recall.report_date.desc().nulls_last())
     rows = session.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     total = session.scalar(count_stmt) or 0
