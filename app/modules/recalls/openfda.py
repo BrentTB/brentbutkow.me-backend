@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from app.config import settings
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
-from app.modules.recalls.normalize import NormalizedRecall, parse_class
+from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_us_state
 from app.modules.recalls.schemas import RecallCountry, RecallSource
 from app.modules.recalls.severity import score_severity
 
@@ -47,7 +47,10 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
     reason_text = record.reason_for_recall or ""
     category, confidence = classify(reason_text)
     classification = parse_class(record.classification)
-    states = [record.state] if record.state else None
+    # The recalling firm's state — only a real US code feeds the map / filter. Foreign firms report
+    # a province ("Ontario") or "N/A", which would otherwise pollute the US state facet.
+    state = parse_us_state(record.state)
+    states = [state] if state else None
     entities = extract_entities(reason_text)
     severity_score, severity_label = score_severity(
         classification=classification,
@@ -68,7 +71,7 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
         "product_description": record.product_description or "",
         "reason_text": reason_text,
         "company_name": record.recalling_firm,
-        "state": record.state,
+        "state": state,
         "states": states,
         "distribution_pattern": record.distribution_pattern,
         "recall_initiation_date": _parse_date(record.recall_initiation_date),
