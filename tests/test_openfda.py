@@ -55,6 +55,23 @@ def test_normalize_handles_missing_and_invalid_values(monkeypatch):
     assert result["category"] == RecallCategory.other.value
 
 
+@pytest.mark.parametrize("raw_state", ["Ontario", "Nova Scotia", "N/A", "", "  "])
+def test_normalize_drops_non_us_state(monkeypatch, raw_state):
+    # openFDA reports a foreign firm's province ("Ontario") or junk ("N/A") in the state field;
+    # these must not reach the US state map / filter.
+    monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.other, 0.0))
+    result = normalize_recall(OpenFdaRecord(recall_number="C-1", state=raw_state))
+    assert result["state"] is None
+    assert result["states"] is None
+
+
+def test_normalize_keeps_us_state(monkeypatch):
+    monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.other, 0.0))
+    result = normalize_recall(OpenFdaRecord(recall_number="U-1", state="ca"))
+    assert result["state"] == "CA"
+    assert result["states"] == ["CA"]
+
+
 def test_response_validation():
     valid = OpenFdaResponse.model_validate({"results": [{"recall_number": "A-1"}]})
     assert len(valid.results) == 1

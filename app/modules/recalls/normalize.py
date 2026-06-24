@@ -15,6 +15,69 @@ from app.modules.recalls.schemas import RecallClass
 # Classification values accepted verbatim from a source; anything else normalizes to None.
 VALID_CLASSES = {c.value for c in RecallClass}
 
+# The 50 states + DC + the inhabited territories openFDA / FSIS report. The single source of truth
+# for "is this a US state code": openFDA hands us the recalling firm's state verbatim, which for a
+# foreign firm is a Canadian province ("Ontario") or "N/A" — only codes in this set reach the map /
+# state filter. FSIS maps full names to these same codes before it ever populates `states`.
+US_STATE_CODES = frozenset(
+    {
+        "AL",
+        "AK",
+        "AZ",
+        "AR",
+        "CA",
+        "CO",
+        "CT",
+        "DE",
+        "DC",
+        "FL",
+        "GA",
+        "HI",
+        "ID",
+        "IL",
+        "IN",
+        "IA",
+        "KS",
+        "KY",
+        "LA",
+        "ME",
+        "MD",
+        "MA",
+        "MI",
+        "MN",
+        "MS",
+        "MO",
+        "MT",
+        "NE",
+        "NV",
+        "NH",
+        "NJ",
+        "NM",
+        "NY",
+        "NC",
+        "ND",
+        "OH",
+        "OK",
+        "OR",
+        "PA",
+        "RI",
+        "SC",
+        "SD",
+        "TN",
+        "TX",
+        "UT",
+        "VT",
+        "VA",
+        "WA",
+        "WV",
+        "WI",
+        "WY",
+        "PR",
+        "GU",
+        "VI",
+    }
+)
+
 
 class NormalizedRecall(TypedDict):
     source: str
@@ -42,6 +105,16 @@ class NormalizedRecall(TypedDict):
 
 def parse_class(raw: str | None) -> str | None:
     return raw if raw in VALID_CLASSES else None
+
+
+def parse_us_state(raw: str | None) -> str | None:
+    # openFDA reports the recalling firm's state verbatim — usually a 2-letter US code, but for a
+    # foreign firm a full province name ("Ontario") or "N/A". Keep only real US codes so the state
+    # map / filter stays US-only; anything else → None.
+    if not raw:
+        return None
+    code = raw.strip().upper()
+    return code if code in US_STATE_CODES else None
 
 
 def parse_iso_date(raw: str | None) -> date | None:
