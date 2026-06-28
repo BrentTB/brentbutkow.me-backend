@@ -143,6 +143,15 @@ class RecallEvent(Base):
     severity_max: Mapped[float] = mapped_column(Float, server_default=text("0"))
 
 
+class RecallAnalyticsBuild(Base):
+    __tablename__ = "recall_analytics_builds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    built_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 # The whole /recalls/stats payload, materialized per country by scripts/build_stats.py after each
 # ingest. get_stats reads this row instead of recomputing ~8 aggregations + the anomaly scan + the
 # forecast on every request; it falls back to a live compute when a row is absent (see service.py).

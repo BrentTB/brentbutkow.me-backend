@@ -8,10 +8,10 @@ reachable Postgres, keeping the default `pytest` run database-free.
 """
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -19,7 +19,12 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import Recall, RecallStatsCache, RecallTopic
+from app.modules.recalls.models import (
+    Recall,
+    RecallAnalyticsBuild,
+    RecallStatsCache,
+    RecallTopic,
+)
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -27,7 +32,7 @@ from app.modules.recalls.schemas import (
     RecallCountry,
     RecallSource,
 )
-from scripts import build_stats
+from scripts import build_analytics, build_stats
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -493,6 +498,54 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
     assert build_stats.status(session)[0] is True
 
 
+def test_build_analytics_status_ignores_preexisting_null_topics(session):
+    session.add(
+        RecallTopic(
+            id=1,
+            country="us",
+            slug="listeria",
+            label="listeria",
+            top_terms=["listeria"],
+            size=1,
+        )
+    )
+    session.add(RecallAnalyticsBuild(built_at=datetime(2024, 1, 1, tzinfo=UTC)))
+    built_at = datetime(2024, 1, 1, tzinfo=UTC)
+    session.add(
+        Recall(
+            source="fda",
+            country="us",
+            recall_number="A-1",
+            product_description="milk",
+            reason_text="listeria",
+            company_name="Acme",
+            category="food",
+            category_confidence=0.0,
+            raw={},
+            topic_id=1,
+            updated_at=built_at,
+        )
+    )
+    session.add(
+        Recall(
+            source="fda",
+            country="us",
+            recall_number="A-2",
+            product_description="milk",
+            reason_text="listeria",
+            company_name="Acme",
+            category="food",
+            category_confidence=0.0,
+            raw={},
+            topic_id=None,
+            updated_at=built_at - timedelta(days=1),
+        )
+    )
+    session.commit()
+
+    assert build_analytics.status(session)[0] is False
+
+
 def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
@@ -824,6 +877,10 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
 def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     from app.modules.recalls import analytics
 
+    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
+    # surface no themes; lower it here so this small fixture still factors topics to assert on.
+    monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
+
     # Three pairs of near-duplicate recalls so every doc shares ≥2-document-frequency terms with its
     # partner — the default min_df keeps them, so every recall gets a topic + neighbours.
     _patch_fetch(
@@ -954,3 +1011,70 @@ def test_events_clustering_filter_and_serialisation(session, monkeypatch):
     # The serialised recall carries its eventClusterId (the field the frontend reads).
     e1 = next(item for item in members.items if item.recall_number == "E-1")
     assert e1.event_cluster_id is not None
+
+
+def test_rebuild_writes_derived_ids_without_bumping_updated_at(session, monkeypatch):
+    # topic_id and event_cluster_id are derived columns: their bulk UPDATE must leave
+    # recalls.updated_at untouched. updated_at (onupdate) is the "source data changed" signal
+    # status() reads, so if a rebuild bumped it past built_at, every rebuild would read its own
+    # write as a fresh source change and re-run forever. This guards the `updated_at=col-to-itself`
+    # trick on the write path directly — not just status()'s comparison, which the by-hand-timestamp
+    # test above never exercises.
+    from app.modules.recalls import analytics, events
+
+    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
+    # surface no themes; lower it here so this small fixture still factors topics to write back.
+    monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
+
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record(
+                "D-1",
+                reason_for_recall="Listeria monocytogenes in deli meat",
+                product_description="sliced deli turkey",
+                report_date="20260101",
+            ),
+            _record(
+                "D-2",
+                reason_for_recall="Listeria contamination in deli meat",
+                product_description="deli turkey slices",
+                report_date="20260110",
+            ),
+            _record(
+                "D-3",
+                reason_for_recall="Listeria found in sliced deli meat",
+                product_description="turkey deli slices",
+                report_date="20260120",
+            ),
+            _record(
+                "D-4",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="chocolate peanut cookies",
+                report_date="20260101",
+            ),
+            _record(
+                "D-5",
+                reason_for_recall="undeclared peanuts in cookies",
+                product_description="peanut cookies pack",
+                report_date="20260110",
+            ),
+        ],
+    )
+    service.run_fda_ingest(session)
+    before = session.scalar(select(func.max(Recall.updated_at)))
+    assert before is not None
+
+    analytics.rebuild_analytics(session)
+    # The derived id was written...
+    assert session.scalars(select(Recall).where(Recall.topic_id.is_not(None))).first() is not None
+    # ...but updated_at didn't move, so status() reads the corpus as unchanged, not stale.
+    assert session.scalar(select(func.max(Recall.updated_at))) == before
+    assert build_analytics.status(session)[0] is False
+
+    events.rebuild_events(session)
+    assert (
+        session.scalars(select(Recall).where(Recall.event_cluster_id.is_not(None))).first()
+        is not None
+    )
+    assert session.scalar(select(func.max(Recall.updated_at))) == before

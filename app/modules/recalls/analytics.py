@@ -15,15 +15,21 @@ Pure compute lives in `build_analytics`; `rebuild_analytics` does the DB I/O. De
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import cast
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.decomposition import NMF
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
-from sqlalchemy import delete, insert, select
+from sqlalchemy import Table, bindparam, delete, insert, select, update
 from sqlalchemy.orm import Session, load_only
 
-from app.modules.recalls.models import Recall, RecallNeighbor, RecallTopic
+from app.modules.recalls.models import (
+    Recall,
+    RecallAnalyticsBuild,
+    RecallNeighbor,
+    RecallTopic,
+)
 
 # TF-IDF — mirrors the category classifier's vectoriser so the text representation is consistent.
 _NGRAM = (1, 2)
@@ -478,14 +484,16 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     for recall in recalls:
         by_country.setdefault(recall.country, []).append(recall)
 
-    for recall in recalls:
-        recall.topic_id = None
     session.execute(delete(RecallNeighbor))
     session.execute(delete(RecallTopic))
     session.flush()
 
     topic_rows: list[dict[str, object]] = []
     neighbor_rows: list[dict[str, object]] = []
+    # Collect each recall's new topic id and write them in one bulk UPDATE at the end (below) rather
+    # than mutating the ORM rows — topic_id is a derived field, so its write must NOT bump
+    # recalls.updated_at (the "source data changed" signal status() reads to decide staleness).
+    topic_ids: list[dict[str, object]] = []
     next_topic_id = 0  # surrogate ids, unique across countries so recalls.topic_id stays one int
     for country in sorted(by_country):
         group = by_country[country]
@@ -512,7 +520,13 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
             next_topic_id += 1
 
         for recall, topic_id in zip(group, result.topic_ids, strict=True):
-            recall.topic_id = local_to_global[topic_id] if topic_id is not None else None
+            topic_ids.append(
+                {
+                    "b_source": recall.source,
+                    "b_number": recall.recall_number,
+                    "b_topic": local_to_global[topic_id] if topic_id is not None else None,
+                }
+            )
 
         for recall, nbrs in zip(group, result.neighbors, strict=True):
             for rank, (index, score) in enumerate(nbrs, start=1):
@@ -533,5 +547,26 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     for start in range(0, len(neighbor_rows), _DB_CHUNK):
         session.execute(insert(RecallNeighbor), neighbor_rows[start : start + _DB_CHUNK])
 
+    # Write topic_id while preserving updated_at: setting updated_at to itself keeps the column in
+    # the UPDATE's SET clause, so the onupdate=func.now() default doesn't fire and a topic-id-only
+    # change can't masquerade as a source change to status(). A Core table UPDATE (not the ORM
+    # update(Recall)) keeps this a plain executemany, not an ORM bulk-update-by-primary-key.
+    recall_table = cast(Table, Recall.__table__)
+    for start in range(0, len(topic_ids), _DB_CHUNK):
+        session.execute(
+            update(recall_table)
+            .where(recall_table.c.source == bindparam("b_source"))
+            .where(recall_table.c.recall_number == bindparam("b_number"))
+            .values(topic_id=bindparam("b_topic"), updated_at=recall_table.c.updated_at),
+            topic_ids[start : start + _DB_CHUNK],
+        )
+
+    # Stamp the build marker from the DB clock (server_default=func.now()). Because the writes above
+    # leave updated_at untouched, the newest updated_at reflects only real source changes — all of
+    # which predate this build — so status()'s `max(updated_at) > built_at` can't false-flag.
+    session.add(RecallAnalyticsBuild())
     session.commit()
+    # The Core bulk UPDATE above bypassed the identity map, so the loaded recalls still hold their
+    # old topic_id in memory; expire them so any later read reloads from the DB.
+    session.expire_all()
     return {"recalls": len(recalls), "topics": len(topic_rows), "neighbors": len(neighbor_rows)}

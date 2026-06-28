@@ -21,11 +21,12 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
+from typing import cast
 
 import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
-from sqlalchemy import delete, insert, select
+from sqlalchemy import Table, bindparam, delete, insert, select, update
 from sqlalchemy.orm import Session, load_only
 
 from app.modules.recalls.models import Recall, RecallEvent, RecallNeighbor
@@ -263,12 +264,14 @@ def rebuild_events(session: Session) -> dict[str, int]:
     for recall in recalls:
         by_country.setdefault(recall.country, []).append(recall)
 
-    for recall in recalls:
-        recall.event_cluster_id = None
     session.execute(delete(RecallEvent))
     session.flush()
 
     event_rows: list[dict[str, object]] = []
+    # Collect every recall's new cluster id and write them in one bulk UPDATE at the end (below)
+    # rather than mutating the ORM rows — event_cluster_id is a derived field, so its write must NOT
+    # bump recalls.updated_at (the "source data changed" signal build_analytics/build_stats read).
+    cluster_ids: list[dict[str, object]] = []
     next_id = 0  # surrogate ids, unique across countries so recalls.event_cluster_id stays one int
     for country in sorted(by_country):
         group = by_country[country]
@@ -306,11 +309,34 @@ def rebuild_events(session: Session) -> dict[str, int]:
             next_id += 1
 
         for recall, assigned in zip(group, result.cluster_ids, strict=True):
-            recall.event_cluster_id = local_to_global[assigned] if assigned is not None else None
+            cluster_ids.append(
+                {
+                    "b_source": recall.source,
+                    "b_number": recall.recall_number,
+                    "b_cluster": local_to_global[assigned] if assigned is not None else None,
+                }
+            )
 
     for start in range(0, len(event_rows), _DB_CHUNK):
         session.execute(insert(RecallEvent), event_rows[start : start + _DB_CHUNK])
 
+    # Write event_cluster_id while preserving updated_at: setting updated_at to itself keeps the
+    # column in the UPDATE's SET clause, so the onupdate=func.now() default doesn't fire and a
+    # cluster-id-only change can't masquerade as a source change to the staleness checks. A Core
+    # table UPDATE keeps this a plain parameterised executemany, not an ORM bulk-update-by-PK.
+    recall_table = cast(Table, Recall.__table__)
+    for start in range(0, len(cluster_ids), _DB_CHUNK):
+        session.execute(
+            update(recall_table)
+            .where(recall_table.c.source == bindparam("b_source"))
+            .where(recall_table.c.recall_number == bindparam("b_number"))
+            .values(event_cluster_id=bindparam("b_cluster"), updated_at=recall_table.c.updated_at),
+            cluster_ids[start : start + _DB_CHUNK],
+        )
+
     session.commit()
+    # The Core bulk UPDATE above bypassed the identity map, so the loaded recalls still hold their
+    # old event_cluster_id in memory; expire them so any later read reloads from the DB.
+    session.expire_all()
     outbreaks = sum(1 for row in event_rows if row["is_outbreak"])
     return {"recalls": len(recalls), "events": len(event_rows), "outbreaks": outbreaks}
