@@ -148,6 +148,8 @@ docker compose exec api python -m scripts.backfill_fda # one-time: full history 
 docker compose down         # stop (add -v to also wipe the DB)
 ```
 
+The Compose file uses the project name `website-backend`, so the stack is consistently addressed as `website-backend-api-1` and `website-backend-db-1`.
+
 ## Environment
 
 | Var | Required | Notes |
