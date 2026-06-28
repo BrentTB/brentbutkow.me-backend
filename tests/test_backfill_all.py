@@ -76,3 +76,12 @@ def test_resolve_plan_keeps_original_reason_for_independently_due_backfill():
 def test_resolve_plan_force_all_runs_everything():
     needed, _ = backfill_all.resolve_plan(_status(), force_all=True)
     assert all(needed.values())
+
+
+def test_resolve_plan_force_all_labels_clean_backfills_as_forced():
+    # --all runs everything; a module with no work of its own says "forced by --all" rather than
+    # printing its clean status next to a [RUN ] marker, while one with real work keeps its reason.
+    needed, reason = backfill_all.resolve_plan(_status(backfill_fda), force_all=True)
+    assert all(needed.values())
+    assert reason[backfill_fda] == "due"
+    assert reason[build_stats] == "forced by --all"

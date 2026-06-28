@@ -49,7 +49,8 @@ from scripts import (
 
 class _Backfill(Protocol):
     # The contract every backfill module satisfies: a display name, a status check that reports
-    # whether it still has work (and why), and a main() that runs it. Modules match structurally.
+    # whether it still has work (and why), and a main() that runs it. Modules match this
+    # structurally — mypy binds each module's top-level status()/main() to these `self`-style defs.
     NAME: str
 
     def status(self, session: Session) -> tuple[bool, str]: ...
@@ -107,7 +108,12 @@ def resolve_plan(
     _BACKFILLS suffices because every trigger edge points forward in that list. Pure (no DB) so the
     planning logic stays unit-testable apart from the status() probes that feed it."""
     needed = {bf: force_all or status[bf][0] for bf in _BACKFILLS}
-    reason = {bf: status[bf][1] for bf in _BACKFILLS}
+    # A module with real work keeps its own reason; one running only because of --all says so,
+    # rather than print a clean status ("stats materialized") next to a [RUN ] marker.
+    reason = {
+        bf: status[bf][1] if status[bf][0] else "forced by --all" if force_all else status[bf][1]
+        for bf in _BACKFILLS
+    }
     for bf in _BACKFILLS:
         if needed[bf]:
             for dep in _TRIGGERS.get(bf, ()):
