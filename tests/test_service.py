@@ -877,6 +877,10 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
 def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     from app.modules.recalls import analytics
 
+    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
+    # surface no themes; lower it here so this small fixture still factors topics to assert on.
+    monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
+
     # Three pairs of near-duplicate recalls so every doc shares ≥2-document-frequency terms with its
     # partner — the default min_df keeps them, so every recall gets a topic + neighbours.
     _patch_fetch(
@@ -1017,6 +1021,10 @@ def test_rebuild_writes_derived_ids_without_bumping_updated_at(session, monkeypa
     # trick on the write path directly — not just status()'s comparison, which the by-hand-timestamp
     # test above never exercises.
     from app.modules.recalls import analytics, events
+
+    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
+    # surface no themes; lower it here so this small fixture still factors topics to write back.
+    monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
 
     _patch_fetch(
         monkeypatch,
