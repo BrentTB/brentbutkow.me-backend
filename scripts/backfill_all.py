@@ -73,27 +73,29 @@ _BACKFILLS: list[_Backfill] = [
 ]
 
 
-# Cross-backfill staleness: running one backfill changes data a later whole-corpus rebuild reads, so
-# that rebuild goes stale the instant the first one runs — even if its own status() looked clean
-# against the pre-run corpus. This maps each backfill to the others its run invalidates, so the plan
-# printed up front already accounts for the knock-on work (the alternative — re-checking status()
-# between runs — would be accurate but couldn't show the full plan before starting).
+# Cross-backfill staleness: running one backfill changes data a later one reads, so that one goes
+# stale the instant the first runs — even if its own status() looked clean against the pre-run
+# corpus. This maps each backfill to the others its run invalidates, so the plan printed up front
+# already accounts for the knock-on work (the alternative — re-checking status() between runs —
+# would be accurate but couldn't show the full plan before starting). Edges are real data
+# dependencies, i.e. what each consumer actually reads:
 #
 #   backfill_fda      seeds ~26k history rows. New rows self-populate entities/severity/category at
 #                     ingest, so only the whole-corpus rebuilds need a rerun.
 #   backfill_entities feeds severity (deadliest-pathogen bonus) and the stats entity aggregates.
 #   backfill_severity feeds the stats severity aggregates.
-#   build_analytics   rewrites topic_id (bumping updated_at, which stats keys off) and the neighbour
-#                     graph build_events consumes.
-#   build_events      rewrites event_cluster_id (bumps updated_at -> stats).
+#   build_analytics   produces the neighbour graph build_events consumes. It does NOT trigger stats:
+#                     the stats payload reads no topic_id (see compute_stats) and the topic_id write
+#                     leaves updated_at untouched, so it can't trip stats.status.
+#   build_events      writes only event_cluster_id, which nothing here reads (stats ignores it, and
+#                     the write preserves updated_at), so it invalidates nothing — no edges.
 #
 # Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
 _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
     backfill_fda: (build_analytics, build_events, build_stats),
     backfill_entities: (backfill_severity, build_stats),
     backfill_severity: (build_stats,),
-    build_analytics: (build_events, build_stats),
-    build_events: (build_stats,),
+    build_analytics: (build_events,),
 }
 
 

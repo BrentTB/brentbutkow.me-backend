@@ -47,6 +47,25 @@ def test_resolve_plan_entities_cascades_through_severity_to_stats():
     assert not needed[build_analytics] and not needed[build_events]
 
 
+def test_resolve_plan_analytics_triggers_events_but_not_stats():
+    # analytics produces the neighbour graph events consumes, so it must pull events in. It must NOT
+    # pull stats: the stats payload reads no topic_id, and the topic_id write preserves updated_at,
+    # so a standalone analytics rebuild never invalidates the materialised stats.
+    needed, reason = backfill_all.resolve_plan(_status(build_analytics), force_all=False)
+
+    assert needed[build_events]
+    assert reason[build_events] == "triggered by analytics"
+    assert not needed[build_stats]
+
+
+def test_resolve_plan_events_triggers_nothing():
+    # event_cluster_id feeds nothing here (stats ignores it; the write preserves updated_at).
+    needed, _ = backfill_all.resolve_plan(_status(build_events), force_all=False)
+
+    assert needed[build_events]
+    assert not needed[build_stats]
+
+
 def test_resolve_plan_keeps_original_reason_for_independently_due_backfill():
     # A backfill flagged by its own status keeps that reason; it isn't overwritten by a trigger.
     needed, reason = backfill_all.resolve_plan(_status(backfill_fda, build_stats), force_all=False)
