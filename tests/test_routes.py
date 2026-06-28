@@ -14,6 +14,10 @@ def test_health_ok_and_not_rate_limited():
     for _ in range(70):
         res = client.get("/health")
         assert res.status_code == 200
+        # HEAD is what most uptime monitors probe with; it shares the GET handler and exemption.
+        head = client.head("/health")
+        assert head.status_code == 200
+        assert head.content == b""  # HEAD carries no body
     assert res.json() == {"status": "ok"}
 
 
