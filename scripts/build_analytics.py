@@ -1,35 +1,27 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.modules.recalls.analytics import rebuild_analytics
-from app.modules.recalls.models import Recall, RecallTopic
+from app.modules.recalls.models import Recall, RecallAnalyticsBuild, RecallTopic
 
 NAME = "analytics"
 
 
 def status(session: Session) -> tuple[bool, str]:
-    # Unlike the per-row backfills, themes + neighbours are a whole-corpus rebuild and don't
-    # self-populate at ingest — so any text-bearing recall without a topic means the build is stale.
+    # Themes + neighbours are a whole-corpus rebuild that doesn't self-populate at ingest. A row
+    # with no topic can be legitimate for recalls that don't have enough usable text to cluster,
+    # so use an explicit build marker instead of the nullable topic column.
     topics = session.scalar(select(func.count()).select_from(RecallTopic)) or 0
-    if topics == 0:
+
+    built_at = session.scalar(select(func.max(RecallAnalyticsBuild.built_at)))
+    if built_at is None:
         return True, "themes + neighbours not built yet"
-    missing = (
-        session.scalar(
-            select(func.count())
-            .select_from(Recall)
-            .where(
-                Recall.topic_id.is_(None),
-                or_(
-                    Recall.reason_text != "",
-                    Recall.product_description != "",
-                ),
-            )
-        )
-        or 0
-    )
-    if missing:
-        return True, f"{missing} recall(s) added since the last build"
+
+    last_change = session.scalar(select(func.max(Recall.updated_at)))
+    if last_change is not None and last_change > built_at:
+        return True, "recalls changed since the last analytics build"
+
     return False, f"themes + neighbours built ({topics} topics)"
 
 

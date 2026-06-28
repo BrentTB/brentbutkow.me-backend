@@ -59,17 +59,60 @@ class _Backfill(Protocol):
 
 # Each backfill module owns its own "do I still need to run?" logic (its `status`), so adding a
 # backfill is just a new scripts/backfill_*.py with NAME + status() + main(), then a line here.
-# build_analytics then build_events run last — whole-corpus rebuilds that want the rows seeded
-# first, and build_events reuses the neighbour graph build_analytics produces. build_stats runs
-# after them: it materializes the stats payload from the (now fully derived) recalls.
+# Order is dependency order — every edge in _TRIGGERS below points forward in this list, so a row
+# never runs before something it depends on: entities before severity (severity is derived from
+# entities), then build_analytics, build_events (reuses the neighbour graph build_analytics
+# produces), and build_stats last (it materializes the payload from the now fully-derived recalls).
 _BACKFILLS: list[_Backfill] = [
     backfill_fda,
-    backfill_severity,
     backfill_entities,
+    backfill_severity,
     build_analytics,
     build_events,
     build_stats,
 ]
+
+
+# Cross-backfill staleness: running one backfill changes data a later whole-corpus rebuild reads, so
+# that rebuild goes stale the instant the first one runs — even if its own status() looked clean
+# against the pre-run corpus. This maps each backfill to the others its run invalidates, so the plan
+# printed up front already accounts for the knock-on work (the alternative — re-checking status()
+# between runs — would be accurate but couldn't show the full plan before starting).
+#
+#   backfill_fda      seeds ~26k history rows. New rows self-populate entities/severity/category at
+#                     ingest, so only the whole-corpus rebuilds need a rerun.
+#   backfill_entities feeds severity (deadliest-pathogen bonus) and the stats entity aggregates.
+#   backfill_severity feeds the stats severity aggregates.
+#   build_analytics   rewrites topic_id (bumping updated_at, which stats keys off) and the neighbour
+#                     graph build_events consumes.
+#   build_events      rewrites event_cluster_id (bumps updated_at -> stats).
+#
+# Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
+_TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
+    backfill_fda: (build_analytics, build_events, build_stats),
+    backfill_entities: (backfill_severity, build_stats),
+    backfill_severity: (build_stats,),
+    build_analytics: (build_events, build_stats),
+    build_events: (build_stats,),
+}
+
+
+def resolve_plan(
+    status: dict[_Backfill, tuple[bool, str]], *, force_all: bool
+) -> tuple[dict[_Backfill, bool], dict[_Backfill, str]]:
+    """Expand each module's own status into the full run set: anything that will run drags in the
+    backfills its run invalidates (_TRIGGERS), with a "triggered by X" reason. One forward pass over
+    _BACKFILLS suffices because every trigger edge points forward in that list. Pure (no DB) so the
+    planning logic stays unit-testable apart from the status() probes that feed it."""
+    needed = {bf: force_all or status[bf][0] for bf in _BACKFILLS}
+    reason = {bf: status[bf][1] for bf in _BACKFILLS}
+    for bf in _BACKFILLS:
+        if needed[bf]:
+            for dep in _TRIGGERS.get(bf, ()):
+                if not needed[dep]:
+                    needed[dep] = True
+                    reason[dep] = f"triggered by {bf.NAME}"
+    return needed, reason
 
 
 # Runs the data backfills, skipping any whose own status reports it's already done. `--all` forces
@@ -86,24 +129,26 @@ def main() -> None:
 
     session = SessionLocal()
     try:
-        plan = [(bf, *bf.status(session)) for bf in _BACKFILLS]
+        status = {bf: bf.status(session) for bf in _BACKFILLS}
     finally:
         session.close()
 
-    for bf, needed, reason in plan:
-        print(f"[{'RUN ' if args.all or needed else 'skip'}] {bf.NAME}: {reason}")
+    needed, reason = resolve_plan(status, force_all=args.all)
+
+    for bf in _BACKFILLS:
+        print(f"[{'RUN ' if needed[bf] else 'skip'}] {bf.NAME}: {reason[bf]}")
 
     if args.check:
         return
 
     ran = 0
-    for bf, needed, _reason in plan:
-        if args.all or needed:
+    for bf in _BACKFILLS:
+        if needed[bf]:
             print(f"\n=== {bf.NAME} ===")
             bf.main()
             ran += 1
 
-    print(f"\nBackfill-all complete ({ran} of {len(plan)} run).")
+    print(f"\nBackfill-all complete ({ran} of {len(_BACKFILLS)} run).")
 
 
 if __name__ == "__main__":

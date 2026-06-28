@@ -23,7 +23,12 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session, load_only
 
-from app.modules.recalls.models import Recall, RecallNeighbor, RecallTopic
+from app.modules.recalls.models import (
+    Recall,
+    RecallAnalyticsBuild,
+    RecallNeighbor,
+    RecallTopic,
+)
 
 # TF-IDF — mirrors the category classifier's vectoriser so the text representation is consistent.
 _NGRAM = (1, 2)
@@ -533,5 +538,9 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     for start in range(0, len(neighbor_rows), _DB_CHUNK):
         session.execute(insert(RecallNeighbor), neighbor_rows[start : start + _DB_CHUNK])
 
+    # Stamp the marker from the DB clock (server_default=func.now()), the same clock and transaction
+    # the topic_id writes above used for updated_at — so built_at lands exactly at this build's
+    # timestamp and status()'s `updated_at > built_at` check can't false-flag on its own writes.
+    session.add(RecallAnalyticsBuild())
     session.commit()
     return {"recalls": len(recalls), "topics": len(topic_rows), "neighbors": len(neighbor_rows)}

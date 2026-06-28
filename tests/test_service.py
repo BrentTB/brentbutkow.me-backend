@@ -8,7 +8,7 @@ reachable Postgres, keeping the default `pytest` run database-free.
 """
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -19,7 +19,12 @@ from app.db import Base
 from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
-from app.modules.recalls.models import Recall, RecallStatsCache, RecallTopic
+from app.modules.recalls.models import (
+    Recall,
+    RecallAnalyticsBuild,
+    RecallStatsCache,
+    RecallTopic,
+)
 from app.modules.recalls.openfda import OpenFdaRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
@@ -27,7 +32,7 @@ from app.modules.recalls.schemas import (
     RecallCountry,
     RecallSource,
 )
-from scripts import build_stats
+from scripts import build_analytics, build_stats
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -491,6 +496,54 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
     recall.severity_score += 1
     session.commit()
     assert build_stats.status(session)[0] is True
+
+
+def test_build_analytics_status_ignores_preexisting_null_topics(session):
+    session.add(
+        RecallTopic(
+            id=1,
+            country="us",
+            slug="listeria",
+            label="listeria",
+            top_terms=["listeria"],
+            size=1,
+        )
+    )
+    session.add(RecallAnalyticsBuild(built_at=datetime(2024, 1, 1, tzinfo=UTC)))
+    built_at = datetime(2024, 1, 1, tzinfo=UTC)
+    session.add(
+        Recall(
+            source="fda",
+            country="us",
+            recall_number="A-1",
+            product_description="milk",
+            reason_text="listeria",
+            company_name="Acme",
+            category="food",
+            category_confidence=0.0,
+            raw={},
+            topic_id=1,
+            updated_at=built_at,
+        )
+    )
+    session.add(
+        Recall(
+            source="fda",
+            country="us",
+            recall_number="A-2",
+            product_description="milk",
+            reason_text="listeria",
+            company_name="Acme",
+            category="food",
+            category_confidence=0.0,
+            raw={},
+            topic_id=None,
+            updated_at=built_at - timedelta(days=1),
+        )
+    )
+    session.commit()
+
+    assert build_analytics.status(session)[0] is False
 
 
 def test_get_stats_by_entity_and_entity_filter(session, monkeypatch):
