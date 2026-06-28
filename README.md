@@ -1,5 +1,7 @@
 # brentbutkow.me-backend
 
+[![API status](https://img.shields.io/uptimerobot/status/m803392574-4c73f9eb6ba6700e79132c3e)](https://stats.uptimerobot.com/OrnjJNCLvf)
+
 General-purpose backend for [brentbutkow.me](https://brentbutkow.me). Modular — each feature is a
 self-contained package under `app/modules/`. First module: **Recall Radar**, a US + UK food-recall API
 that ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US) plus UK

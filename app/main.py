@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health", tags=["system"], summary="Liveness check")
+    @app.head("/health", tags=["system"], summary="Liveness check")
     @limiter.exempt  # liveness probes must not be throttled by the global per-IP limit
     def health() -> dict[str, str]:
         return {"status": "ok"}
