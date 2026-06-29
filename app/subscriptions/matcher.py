@@ -20,10 +20,10 @@ def recall_matches(recall: Recall, sub: Subscription) -> bool:
         if not recall_entity_values.intersection(sub_entities_lower):
             return False
 
-    # (b) Company substring
-    if sub.company:
+    # (b) Company substring — match if the recall's company contains any of the subscribed names
+    if sub.companies:
         recall_company = (recall.company_name or "").lower()
-        if sub.company.lower() not in recall_company:
+        if not any(c.lower() in recall_company for c in sub.companies):
             return False
 
     # (c) Country membership

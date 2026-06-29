@@ -32,7 +32,7 @@ class Subscription(Base):
     email: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_confirmation")
     entities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    company: Mapped[str | None] = mapped_column(Text, nullable=True)
+    companies: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     countries: Mapped[list] = mapped_column(JSONB, nullable=False)
     categories: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     min_severity: Mapped[str | None] = mapped_column(Text, nullable=True)

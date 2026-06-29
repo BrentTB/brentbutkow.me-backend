@@ -20,7 +20,7 @@ class SubscriptionCreate(BaseModel):
     email: EmailStr
     countries: CountriesField
     entities: list[Annotated[str, Field(max_length=100)]] = Field(default=[], max_length=50)
-    company: Annotated[str, Field(max_length=200)] | None = None
+    companies: list[Annotated[str, Field(max_length=200)]] = Field(default=[], max_length=50)
     categories: list[str] = []
     min_severity: str | None = None
 
@@ -52,10 +52,10 @@ class SubscriptionCreate(BaseModel):
     @model_validator(mode="after")
     def require_at_least_one_filter(self) -> SubscriptionCreate:
         has_entities = bool(self.entities)
-        has_company = bool(self.company)
+        has_companies = any(c and c.strip() for c in self.companies)
         has_categories = bool(self.categories)
         has_min_severity = self.min_severity is not None
-        if not any([has_entities, has_company, has_categories, has_min_severity]):
+        if not any([has_entities, has_companies, has_categories, has_min_severity]):
             raise ValueError("at_least_one_filter_required")
         return self
 
@@ -66,7 +66,7 @@ class SubscriptionOut(BaseModel):
     status: str
     countries: list[str]
     entities: list[str]
-    company: str | None
+    companies: list[str]
     categories: list[str]
     min_severity: str | None
 
@@ -74,7 +74,7 @@ class SubscriptionOut(BaseModel):
 class SubscriptionPatch(BaseModel):
     countries: CountriesField | None = None
     entities: list[Annotated[str, Field(max_length=100)]] | None = None
-    company: Annotated[str, Field(max_length=200)] | None = None
+    companies: list[Annotated[str, Field(max_length=200)]] | None = None
     categories: list[str] | None = None
     min_severity: str | None = None
 

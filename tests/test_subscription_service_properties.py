@@ -42,13 +42,14 @@ company_st = st.text(
     max_size=80,
     alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd", "Zs")),
 )
+companies_st = st.lists(company_st, min_size=1, max_size=3)
 
 # Combine into "at least one filter present" strategy
 filter_fields_st = st.fixed_dictionaries(
     {},
     optional={
         "entities": entities_st,
-        "company": company_st,
+        "companies": companies_st,
         "categories": categories_st,
         "min_severity": severity_st,
     },
@@ -94,7 +95,7 @@ class _FakeSub:
         email: str = "user@example.com",
         status: str = "active",
         entities: list | None = None,
-        company: str | None = None,
+        companies: list | None = None,
         countries: list | None = None,
         categories: list | None = None,
         min_severity: str | None = None,
@@ -107,7 +108,7 @@ class _FakeSub:
         self.email = email
         self.status = status
         self.entities = entities if entities is not None else []
-        self.company = company
+        self.companies = companies if companies is not None else []
         self.countries = countries if countries is not None else ["us"]
         self.categories = categories if categories is not None else []
         self.min_severity = min_severity
@@ -125,7 +126,7 @@ def make_subscription(
     email: str = "user@example.com",
     status: str = "active",
     entities: list | None = None,
-    company: str | None = None,
+    companies: list | None = None,
     countries: list | None = None,
     categories: list | None = None,
     min_severity: str | None = None,
@@ -138,7 +139,7 @@ def make_subscription(
         email=email,
         status=status,
         entities=entities,
-        company=company,
+        companies=companies,
         countries=countries,
         categories=categories,
         min_severity=min_severity,
@@ -229,21 +230,21 @@ def test_property_2_duplicate_active_rejected(
     """
     # Normalise the filter values the way service.py does
     entities = filters.get("entities", [])
-    company = filters.get("company", None)
+    companies = filters.get("companies", [])
     categories = filters.get("categories", [])
     min_severity = filters.get("min_severity", None)
 
     normalised_entities = sorted(e.lower() for e in entities)
     normalised_countries = sorted(c.lower() for c in countries)
     normalised_categories = sorted(c.lower() for c in categories)
-    normalised_company = (company or "").lower() or None
+    normalised_companies = sorted(c.lower() for c in companies)
 
     # Create an existing active subscription with the normalised criteria
     existing = make_subscription(
         email=email,
         status="active",
         entities=normalised_entities,
-        company=normalised_company,
+        companies=normalised_companies,
         countries=normalised_countries,
         categories=normalised_categories,
         min_severity=min_severity,
@@ -255,19 +256,19 @@ def test_property_2_duplicate_active_rejected(
     equivalent_entities = _shuffle_preserving_values(entities)
     equivalent_countries = _shuffle_preserving_values(countries)
     equivalent_categories = _shuffle_preserving_values(categories)
-    equivalent_company = _vary_case(company) if company else company
+    equivalent_companies = [_vary_case(c) for c in _shuffle_preserving_values(companies)]
 
     data = SubscriptionCreate(
         email=email,
         countries=equivalent_countries,
         entities=equivalent_entities,
-        company=equivalent_company,
+        companies=equivalent_companies,
         categories=equivalent_categories,
         min_severity=min_severity,
         **{
             k: v
             for k, v in filters.items()
-            if k not in ("entities", "company", "categories", "min_severity", "countries")
+            if k not in ("entities", "companies", "categories", "min_severity", "countries")
         },
     )
 
@@ -303,7 +304,7 @@ def test_property_3_empty_filter_body_rejected(
                 "email": email,
                 "countries": countries,
                 "entities": [],
-                "company": None,
+                "companies": [],
                 "categories": [],
                 "min_severity": None,
             }
@@ -321,13 +322,14 @@ def test_property_3_empty_filter_body_rejected(
     countries=countries_st,
 )
 @settings(max_examples=30)
-def test_property_3_empty_string_company_also_rejected(
+def test_property_3_blank_company_also_rejected(
     email: str,
     countries: list[str],
 ) -> None:
     """
 
-    Empty string for company with all other filters absent also raises ValidationError.
+    A companies list holding only blank strings, with all other filters absent, still raises
+    ValidationError — a blank company name is not a real filter.
 
     """
     with pytest.raises(ValidationError) as exc_info:
@@ -336,7 +338,7 @@ def test_property_3_empty_string_company_also_rejected(
                 "email": email,
                 "countries": countries,
                 "entities": [],
-                "company": "",
+                "companies": ["", "   "],
                 "categories": [],
                 "min_severity": None,
             }
@@ -517,7 +519,7 @@ def test_property_8_manage_never_leaks_email(
         status=status,
         countries=countries,
         entities=filters.get("entities", []),
-        company=filters.get("company"),
+        companies=filters.get("companies", []),
         categories=filters.get("categories", []),
         min_severity=filters.get("min_severity"),
         management_token=mgmt_token,
@@ -573,7 +575,7 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
     mgmt_token = str(uuid.uuid4())
     original_entities = entities
     original_countries = countries
-    original_company = "OriginalCompany"
+    original_companies = ["OriginalCompany"]
     original_min_severity = "low"
     original_categories = ["allergen"]
 
@@ -581,7 +583,7 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
         status="active",
         entities=list(original_entities),
         countries=list(original_countries),
-        company=original_company,
+        companies=list(original_companies),
         min_severity=original_min_severity,
         categories=list(original_categories),
         management_token=mgmt_token,
@@ -602,7 +604,7 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
         patch_categories == []
         and not patch_kwargs.get("min_severity")
         and not sub.entities
-        and not sub.company
+        and not sub.companies
     ):
         # patch would result in empty filter, skip this case
         return
@@ -615,7 +617,7 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
 
     pre_patch_entities = list(sub.entities)
     pre_patch_countries = list(sub.countries)
-    pre_patch_company = sub.company
+    pre_patch_companies = list(sub.companies)
 
     status_code, body = service.patch_manage(mgmt_token, patch, mock_db)
 
@@ -629,7 +631,7 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
             assert sub.countries == pre_patch_countries, (
                 f"countries changed unexpectedly: {pre_patch_countries} → {sub.countries}"
             )
-        if "company" not in patch_kwargs:
-            assert sub.company == pre_patch_company, (
-                f"company changed unexpectedly: {pre_patch_company} → {sub.company}"
+        if "companies" not in patch_kwargs:
+            assert sub.companies == pre_patch_companies, (
+                f"companies changed unexpectedly: {pre_patch_companies} → {sub.companies}"
             )

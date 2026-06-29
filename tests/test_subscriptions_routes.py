@@ -69,7 +69,7 @@ def test_patch_manage_forwards_service_status(monkeypatch):
     monkeypatch.setattr(
         service, "patch_manage", lambda token, patch, db: (200, {"status": "active"})
     )
-    res = client.patch("/subscriptions/manage", params={"token": "t"}, json={"company": "Acme"})
+    res = client.patch("/subscriptions/manage", params={"token": "t"}, json={"companies": ["Acme"]})
     assert res.status_code == 200
     assert res.json() == {"status": "active"}
 

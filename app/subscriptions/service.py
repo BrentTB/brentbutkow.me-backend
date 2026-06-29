@@ -45,7 +45,7 @@ def _normalise_criteria(data: SubscriptionCreate) -> dict:
     """
     return {
         "entities": sorted(e.lower() for e in (data.entities or [])),
-        "company": (data.company or "").lower() or None,
+        "companies": sorted(c.lower() for c in (data.companies or []) if c and c.strip()),
         "countries": sorted(c.lower() for c in (data.countries or [])),
         "categories": sorted(c.lower() for c in (data.categories or [])),
         "min_severity": (data.min_severity or "").lower() or None,
@@ -56,7 +56,7 @@ def _normalise_criteria_from_row(row: Subscription) -> dict:
     """Builds a normalised criteria dict from an existing Subscription ORM row."""
     return {
         "entities": sorted(e.lower() for e in (row.entities or [])),
-        "company": (row.company or "").lower() or None,
+        "companies": sorted(c.lower() for c in (row.companies or []) if c and c.strip()),
         "countries": sorted(c.lower() for c in (row.countries or [])),
         "categories": sorted(c.lower() for c in (row.categories or [])),
         "min_severity": (row.min_severity or "").lower() or None,
@@ -114,7 +114,7 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
         email=data.email,
         status="pending_confirmation",
         entities=normalised_incoming["entities"],
-        company=normalised_incoming["company"],
+        companies=normalised_incoming["companies"],
         countries=normalised_incoming["countries"],
         categories=normalised_incoming["categories"],
         min_severity=normalised_incoming["min_severity"],
@@ -208,10 +208,10 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
         setattr(row, field, value)
     # Validate post-patch state: at least one filter field must be non-empty
     has_entities = bool(row.entities)
-    has_company = bool(row.company)
+    has_companies = any(c and c.strip() for c in (row.companies or []))
     has_categories = bool(row.categories)
     has_min_severity = row.min_severity is not None
-    if not any([has_entities, has_company, has_categories, has_min_severity]):
+    if not any([has_entities, has_companies, has_categories, has_min_severity]):
         db.rollback()
         return (422, {"detail": "At least one filter field must remain after update."})
     row.updated_at = datetime.now(UTC)

@@ -40,7 +40,7 @@ class _FakeSub:
     """Minimal stand-in for the Subscription ORM model — only the fields matcher.py touches."""
 
     entities: list[str]
-    company: str | None
+    companies: list[str]
     countries: list[str]
     categories: list[str]
     min_severity: str | None
@@ -115,7 +115,7 @@ def matching_pair_st(draw):
     )
     sub = _FakeSub(
         entities=sub_entities,
-        company=sub_company,
+        companies=[sub_company],
         countries=[country],
         categories=[category],
         min_severity=severity,  # same level → index >= index → passes
@@ -147,7 +147,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
     # Case 2a: entity mismatch → False
     mismatched_entity_sub = _FakeSub(
         entities=["__no_match_xyz__"],
-        company=sub.company,
+        companies=sub.companies,
         countries=sub.countries,
         categories=sub.categories,
         min_severity=sub.min_severity,
@@ -161,7 +161,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
     # Case 2b: company mismatch → False
     mismatched_company_sub = _FakeSub(
         entities=sub.entities,
-        company="__zzznocompanymatch__",
+        companies=["__zzznocompanymatch__"],
         countries=sub.countries,
         categories=sub.categories,
         min_severity=sub.min_severity,
@@ -177,7 +177,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
     if other_countries:
         mismatched_country_sub = _FakeSub(
             entities=sub.entities,
-            company=sub.company,
+            companies=sub.companies,
             countries=other_countries,
             categories=sub.categories,
             min_severity=sub.min_severity,
@@ -193,7 +193,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
     if other_categories:
         mismatched_category_sub = _FakeSub(
             entities=sub.entities,
-            company=sub.company,
+            companies=sub.companies,
             countries=sub.countries,
             categories=[other_categories[0]],
             min_severity=sub.min_severity,
@@ -211,7 +211,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
         higher_severity = SEVERITY_ORDER[recall_idx + 1]
         mismatched_severity_sub = _FakeSub(
             entities=sub.entities,
-            company=sub.company,
+            companies=sub.companies,
             countries=sub.countries,
             categories=sub.categories,
             min_severity=higher_severity,
@@ -226,7 +226,7 @@ def test_property_10_recall_matching_is_conjunction(pair):
     # Case 3: empty subscription criteria (all filters cleared) → True for any recall
     empty_sub = _FakeSub(
         entities=[],
-        company=None,
+        companies=[],
         countries=[],
         categories=[],
         min_severity=None,
@@ -262,7 +262,7 @@ def test_property_10_case_insensitive_entity_match(entity_value, country, catego
     )
     sub = _FakeSub(
         entities=[entity_value.lower()],
-        company=None,
+        companies=[],
         countries=[],
         categories=[],
         min_severity=None,
@@ -303,7 +303,7 @@ def test_property_11_both_dates_null_returns_false(report_date, initiation_date)
     ref = datetime(2024, 1, 1, tzinfo=UTC)
     sub = _FakeSub(
         entities=[],
-        company=None,
+        companies=[],
         countries=[],
         categories=[],
         min_severity=None,
@@ -357,7 +357,7 @@ def test_property_11_effective_date_after_reference_returns_true(
     if use_last_digest:
         sub = _FakeSub(
             entities=[],
-            company=None,
+            companies=[],
             countries=[],
             categories=[],
             min_severity=None,
@@ -367,7 +367,7 @@ def test_property_11_effective_date_after_reference_returns_true(
     else:
         sub = _FakeSub(
             entities=[],
-            company=None,
+            companies=[],
             countries=[],
             categories=[],
             min_severity=None,
@@ -423,7 +423,7 @@ def test_property_11_effective_date_not_after_reference_returns_false(
     if use_last_digest:
         sub = _FakeSub(
             entities=[],
-            company=None,
+            companies=[],
             countries=[],
             categories=[],
             min_severity=None,
@@ -433,7 +433,7 @@ def test_property_11_effective_date_not_after_reference_returns_false(
     else:
         sub = _FakeSub(
             entities=[],
-            company=None,
+            companies=[],
             countries=[],
             categories=[],
             min_severity=None,
@@ -473,7 +473,7 @@ def test_property_11_no_reference_returns_true(report_date, initiation_date):
     )
     sub = _FakeSub(
         entities=[],
-        company=None,
+        companies=[],
         countries=[],
         categories=[],
         min_severity=None,
@@ -521,7 +521,7 @@ def test_property_11_last_digest_takes_precedence_over_confirmed_at(date1, date2
 
     sub = _FakeSub(
         entities=[],
-        company=None,
+        companies=[],
         countries=[],
         categories=[],
         min_severity=None,
