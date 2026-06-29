@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,11 @@ _RATE_LIMITED: dict[int | str, dict[str, Any]] = {429: {"description": "Rate lim
 
 # The service layer returns (status_code, body) so it stays framework-agnostic and unit-testable
 # without a request; the router just forwards that to the client.
+
+# Confirmation and management tokens travel in this header rather than the query string, so they
+# never land in access logs, browser history, or Referer headers. The email links carry the token in
+# their URL (a clicked link can't set a header), but the SPA reads it once and passes it on here.
+_TOKEN_HEADER = "X-Subscription-Token"
 
 
 @router.post(
@@ -47,7 +52,7 @@ def create_subscription(
     description="Activates a pending subscription via the raw token from the opt-in email link.",
 )
 def confirm_subscription(
-    token: str = Query(..., description="Raw confirmation token from the opt-in email."),
+    token: str = Header(..., alias=_TOKEN_HEADER, description="Raw confirmation token."),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     status_code, body = service.confirm(token, session)
@@ -60,7 +65,7 @@ def confirm_subscription(
     description="Returns the filter criteria and a masked email for a management token.",
 )
 def get_subscription(
-    token: str = Query(..., description="Management token from an email link."),
+    token: str = Header(..., alias=_TOKEN_HEADER, description="Management token."),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     status_code, body = service.get_manage(token, session)
@@ -74,7 +79,7 @@ def get_subscription(
 )
 def patch_subscription(
     payload: SubscriptionPatch,
-    token: str = Query(..., description="Management token from an email link."),
+    token: str = Header(..., alias=_TOKEN_HEADER, description="Management token."),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     status_code, body = service.patch_manage(token, payload, session)
@@ -87,7 +92,7 @@ def patch_subscription(
     description="Transitions a subscription to unsubscribed via its management token.",
 )
 def unsubscribe_subscription(
-    token: str = Query(..., description="Management token from an email link."),
+    token: str = Header(..., alias=_TOKEN_HEADER, description="Management token."),
     session: Session = Depends(get_session),
 ) -> JSONResponse:
     status_code, body = service.unsubscribe(token, session)

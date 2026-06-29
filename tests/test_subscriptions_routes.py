@@ -53,7 +53,7 @@ def test_confirm_requires_token():
 
 def test_confirm_forwards_service_status(monkeypatch):
     monkeypatch.setattr(service, "confirm", lambda token, db: (200, {"message": "confirmed"}))
-    res = client.get("/subscriptions/confirm", params={"token": "raw"})
+    res = client.get("/subscriptions/confirm", headers={"X-Subscription-Token": "raw"})
     assert res.status_code == 200
     assert res.json() == {"message": "confirmed"}
 
@@ -64,14 +64,19 @@ def test_manage_requires_token():
 
 def test_manage_forwards_service_status(monkeypatch):
     monkeypatch.setattr(service, "get_manage", lambda token, db: (410, {"detail": "gone"}))
-    assert client.get("/subscriptions/manage", params={"token": "t"}).status_code == 410
+    res = client.get("/subscriptions/manage", headers={"X-Subscription-Token": "t"})
+    assert res.status_code == 410
 
 
 def test_patch_manage_forwards_service_status(monkeypatch):
     monkeypatch.setattr(
         service, "patch_manage", lambda token, patch, db: (200, {"status": "active"})
     )
-    res = client.patch("/subscriptions/manage", params={"token": "t"}, json={"companies": ["Acme"]})
+    res = client.patch(
+        "/subscriptions/manage",
+        headers={"X-Subscription-Token": "t"},
+        json={"companies": ["Acme"]},
+    )
     assert res.status_code == 200
     assert res.json() == {"status": "active"}
 
@@ -82,7 +87,8 @@ def test_unsubscribe_requires_token():
 
 def test_unsubscribe_forwards_service_status(monkeypatch):
     monkeypatch.setattr(service, "unsubscribe", lambda token, db: (200, {"message": "bye"}))
-    assert client.post("/subscriptions/unsubscribe", params={"token": "t"}).status_code == 200
+    res = client.post("/subscriptions/unsubscribe", headers={"X-Subscription-Token": "t"})
+    assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------
