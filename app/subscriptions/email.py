@@ -98,15 +98,15 @@ def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
     ----------
     email:             Recipient's email address.
     raw_token:         Raw (unhashed) confirmation token.
-    management_token:  Subscriber's management token, used for the manage/unsubscribe link.
+    management_token:  Subscriber's management token, used for the unsubscribe link.
     """
     if EMAIL_DISABLED:
         return
 
     confirm_url = f"https://brentbutkow.me/projects/recall-radar/confirm?token={raw_token}"
-    manage_url = f"https://brentbutkow.me/projects/recall-radar/manage?token={management_token}"
+    unsub_url = f"https://brentbutkow.me/projects/recall-radar/unsubscribe?token={management_token}"
 
-    html = _optin_html(confirm_url=confirm_url, manage_url=manage_url)
+    html = _optin_html(confirm_url=confirm_url, unsub_url=unsub_url)
 
     resend.Emails.send(
         {
@@ -118,11 +118,11 @@ def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
     )
 
 
-def _optin_html(confirm_url: str, manage_url: str) -> str:
+def _optin_html(confirm_url: str, unsub_url: str) -> str:
     # Escape before interpolating into href attributes — defence in depth even though the tokens are
     # URL-safe by construction.
     confirm_url = _html_escape(confirm_url)
-    manage_url = _html_escape(manage_url)
+    unsub_url = _html_escape(unsub_url)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -172,12 +172,6 @@ def _optin_html(confirm_url: str, manage_url: str) -> str:
                 </tr>
               </table>
 
-              <p style="margin:0 0 16px 0;font-size:14px;color:#444444;line-height:1.5;">
-                Want to review or change your filters first?
-                <a href="{manage_url}" style="color:#1a1a2e;text-decoration:underline;">
-                  Manage your subscription</a>.
-              </p>
-
               <p style="margin:0 0 8px 0;font-size:14px;color:#666666;line-height:1.5;">
                 This link expires in 72 hours. If you didn&#39;t subscribe, you can safely ignore
                 this email.
@@ -189,7 +183,7 @@ def _optin_html(confirm_url: str, manage_url: str) -> str:
           <tr>
             <td style="background:#f9f9f9;padding:20px 32px;border-top:1px solid #e8e8e8;">
               <p style="margin:0 0 8px 0;font-size:13px;color:#888888;">
-                <a href="{manage_url}"
+                <a href="{unsub_url}"
                    style="color:#888888;text-decoration:underline;">Unsubscribe</a>
                 &nbsp;&middot;&nbsp;
                 <a href="https://brentbutkow.me"
