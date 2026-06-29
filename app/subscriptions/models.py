@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import CheckConstraint, Column, DateTime, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base  # existing declarative base
 
@@ -27,27 +28,27 @@ class Subscription(Base):
         ),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(Text, nullable=False)
-    status = Column(String(30), nullable=False, default="pending_confirmation")
-    entities = Column(JSONB, nullable=False, default=list)
-    company = Column(Text, nullable=True)
-    countries = Column(JSONB, nullable=False)
-    categories = Column(JSONB, nullable=False, default=list)
-    min_severity = Column(Text, nullable=True)
-    confirmation_token_hash = Column(Text, nullable=True)
-    management_token = Column(Text, nullable=False)
-    confirmed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_confirmation")
+    entities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    company: Mapped[str | None] = mapped_column(Text, nullable=True)
+    countries: Mapped[list] = mapped_column(JSONB, nullable=False)
+    categories: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    min_severity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmation_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    management_token: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
-    last_digest_at = Column(DateTime(timezone=True), nullable=True)
-    skipped_at = Column(JSONB, nullable=False, default=list)
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skipped_at: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
