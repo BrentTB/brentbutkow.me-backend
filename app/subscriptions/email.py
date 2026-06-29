@@ -119,6 +119,10 @@ def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
 
 
 def _optin_html(confirm_url: str, manage_url: str) -> str:
+    # Escape before interpolating into href attributes — defence in depth even though the tokens are
+    # URL-safe by construction.
+    confirm_url = _html_escape(confirm_url)
+    manage_url = _html_escape(manage_url)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -249,11 +253,13 @@ def send_digest_email(subscription, matching_recalls: list) -> None:
 def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_url: str) -> str:
     today = datetime.now(UTC).date().isoformat()
     count = len(matching_recalls)
+    manage_url = _html_escape(manage_url)
+    unsub_url = _html_escape(unsub_url)
 
     # skipped_at notice block
     skipped_notice = ""
     if subscription.skipped_at:
-        dates_str = ", ".join(subscription.skipped_at)
+        dates_str = ", ".join(_html_escape(str(d)) for d in subscription.skipped_at)
         skipped_notice = f"""
           <tr>
             <td style="padding:0 32px 20px 32px;">
@@ -370,28 +376,36 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
 
 
 def _recall_card(recall) -> str:
-    """Return an HTML card for a single recall (inline styles only)."""
-    detail_url = (
+    """Return an HTML card for a single recall (inline styles only).
+
+    Every recall field comes from external ingest feeds, so each is HTML-escaped before
+    interpolation to keep feed content from breaking or injecting markup.
+    """
+    detail_url = _html_escape(
         f"https://brentbutkow.me/projects/recall-radar/{recall.source}/{recall.recall_number}"
     )
     company_row = ""
     if recall.company_name:
-        company_row = (
-            f'<span style="color:#555555;font-size:13px;">Company: {recall.company_name}</span><br>'
-        )
+        company = _html_escape(recall.company_name)
+        company_row = f'<span style="color:#555555;font-size:13px;">Company: {company}</span><br>'
+
+    product_description = _html_escape(recall.product_description)
+    country = _html_escape(recall.country)
+    category = _html_escape(recall.category)
+    severity_label = _html_escape(recall.severity_label)
 
     return f"""
       <div style="padding:16px 0;border-bottom:1px solid #f0f0f0;">
         <p style="margin:0 0 6px 0;font-size:15px;font-weight:bold;color:#1a1a2e;">
-          {recall.product_description}
+          {product_description}
         </p>
         {company_row}
         <span style="color:#555555;font-size:13px;">
-          Country: {recall.country}
+          Country: {country}
           &nbsp;&middot;&nbsp;
-          Category: {recall.category}
+          Category: {category}
           &nbsp;&middot;&nbsp;
-          Severity: {recall.severity_label}
+          Severity: {severity_label}
         </span>
         <br>
         <a href="{detail_url}"
@@ -587,16 +601,22 @@ def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> st
 
 
 def _operator_recall_row(recall) -> str:
-    company_part = f" &middot; {recall.company_name}" if recall.company_name else ""
-    source_url = recall.source_url or (
-        f"https://brentbutkow.me/projects/recall-radar/{recall.source}/{recall.recall_number}"
+    # Recall fields come from external feeds — escape each before interpolation.
+    company_part = f" &middot; {_html_escape(recall.company_name)}" if recall.company_name else ""
+    source_url = _html_escape(
+        recall.source_url
+        or f"https://brentbutkow.me/projects/recall-radar/{recall.source}/{recall.recall_number}"
     )
+    product_description = _html_escape(recall.product_description)
+    country = _html_escape(recall.country)
+    category = _html_escape(recall.category)
+    severity_label = _html_escape(recall.severity_label)
     return (
         f'<div style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:13px;color:#333333;">'
-        f"<strong>{recall.product_description}</strong>{company_part}"
-        f" &middot; {recall.country}"
-        f" &middot; {recall.category}"
-        f" &middot; {recall.severity_label}"
+        f"<strong>{product_description}</strong>{company_part}"
+        f" &middot; {country}"
+        f" &middot; {category}"
+        f" &middot; {severity_label}"
         f"<br>"
         f'<a href="{source_url}" style="color:#1a1a2e;text-decoration:underline;">'
         f"{source_url}"
