@@ -151,7 +151,6 @@ def _try_send_optin(
         email_module.send_optin_email(  # type: ignore[attr-defined]
             email=email,
             raw_token=raw_token,
-            management_token=subscription.management_token,
         )
     except Exception as exc:
         logger.error(
@@ -180,7 +179,10 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
         {
             "message": (
                 "Subscription confirmed. You will receive alerts when matching recalls are found."
-            )
+            ),
+            # Hand back the management token so the just-confirmed visitor can jump straight to
+            # managing their preferences. They own this subscription (they followed the email link).
+            "management_token": row.management_token,
         },
     )
 

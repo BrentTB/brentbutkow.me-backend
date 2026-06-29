@@ -238,6 +238,31 @@ def test_property_10_recall_matching_is_conjunction(pair):
     )
 
 
+def test_company_filter_matches_any_of_several():
+    """A multi-company subscription matches when the recall's company contains ANY entry."""
+    recall = _FakeRecall(
+        entities=[],
+        company_name="Acme Foods Ltd",
+        country="us",
+        category="allergen",
+        severity_label="low",
+        report_date=None,
+        recall_initiation_date=None,
+    )
+    base = dict(
+        entities=[],
+        countries=[],
+        categories=[],
+        min_severity=None,
+        last_digest_at=None,
+        confirmed_at=None,
+    )
+    # One of the two names is a case-insensitive substring of the recall company → match.
+    assert recall_matches(recall, _FakeSub(companies=["other corp", "acme"], **base)) is True
+    # None of the names appear → no match.
+    assert recall_matches(recall, _FakeSub(companies=["other corp", "globex"], **base)) is False
+
+
 @given(
     entity_value=entity_value_st,
     country=country_st,

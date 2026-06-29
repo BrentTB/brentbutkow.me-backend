@@ -88,25 +88,24 @@ async def send_with_retry(send_fn, *args, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
+def send_optin_email(email: str, raw_token: str) -> None:
     """
     Send the double opt-in confirmation email.
 
-    Silently skipped when EMAIL_DISABLED is True.
+    Silently skipped when EMAIL_DISABLED is True. No unsubscribe link is shown — a pre-confirmation
+    subscription has nothing to manage, and ignoring this email is itself the opt-out.
 
     Parameters
     ----------
-    email:             Recipient's email address.
-    raw_token:         Raw (unhashed) confirmation token.
-    management_token:  Subscriber's management token, used for the unsubscribe link.
+    email:      Recipient's email address.
+    raw_token:  Raw (unhashed) confirmation token.
     """
     if EMAIL_DISABLED:
         return
 
     confirm_url = f"https://brentbutkow.me/projects/recall-radar/confirm?token={raw_token}"
-    unsub_url = f"https://brentbutkow.me/projects/recall-radar/unsubscribe?token={management_token}"
 
-    html = _optin_html(confirm_url=confirm_url, unsub_url=unsub_url)
+    html = _optin_html(confirm_url=confirm_url)
 
     resend.Emails.send(
         {
@@ -118,11 +117,10 @@ def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
     )
 
 
-def _optin_html(confirm_url: str, unsub_url: str) -> str:
-    # Escape before interpolating into href attributes — defence in depth even though the tokens are
+def _optin_html(confirm_url: str) -> str:
+    # Escape before interpolating into the href — defence in depth even though the token is
     # URL-safe by construction.
     confirm_url = _html_escape(confirm_url)
-    unsub_url = _html_escape(unsub_url)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -183,9 +181,6 @@ def _optin_html(confirm_url: str, unsub_url: str) -> str:
           <tr>
             <td style="background:#f9f9f9;padding:20px 32px;border-top:1px solid #e8e8e8;">
               <p style="margin:0 0 8px 0;font-size:13px;color:#888888;">
-                <a href="{unsub_url}"
-                   style="color:#888888;text-decoration:underline;">Unsubscribe</a>
-                &nbsp;&middot;&nbsp;
                 <a href="https://brentbutkow.me"
                    style="color:#888888;text-decoration:underline;">brentbutkow.me</a>
               </p>
