@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "ruff>=0.7", "mypy>=1.13", "pre-commit>=3.7"]
+dev = ["pytest>=8.3", "hypothesis>=6", "ruff>=0.7", "mypy>=1.13", "pre-commit>=3.7"]
 # Offline only — scripts/anomaly_methodology.py uses STL to validate the runtime z-score detector.
 # Never imported by the app, so the deploy build stays light. Install with: pip install -e '.[ml]'.
 ml = ["statsmodels>=0.14"]
