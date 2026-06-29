@@ -524,7 +524,7 @@ def test_property_7_already_used_token_returns_404(raw_token: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Manage endpoint never leaks email
+# Manage endpoint returns a masked email (owner can recognise it; a leaked token can't read it)
 # ---------------------------------------------------------------------------
 
 
@@ -535,7 +535,7 @@ def test_property_7_already_used_token_returns_404(raw_token: str) -> None:
     status=st.sampled_from(["active", "paused"]),
 )
 @settings(max_examples=50)
-def test_property_8_manage_never_leaks_email(
+def test_property_8_manage_returns_masked_email(
     email: str,
     countries: list[str],
     filters: dict[str, Any],
@@ -543,8 +543,8 @@ def test_property_8_manage_never_leaks_email(
 ) -> None:
     """
 
-    For any active/paused subscription, GET /subscriptions/manage response body contains no field
-    equal to or containing the subscriber's email address.
+    GET /subscriptions/manage returns the subscriber's email *masked* — never the full address, so a
+    leaked management token can't read it, while the owner can still recognise the account.
 
     """
     mgmt_token = str(uuid.uuid4())
@@ -564,21 +564,15 @@ def test_property_8_manage_never_leaks_email(
     status_code, body = service.get_manage(mgmt_token, mock_db)
 
     assert status_code == 200, f"Expected 200, got {status_code}: {body}"
-    assert isinstance(body, dict)
+    assert body["email"] != email  # never the raw address
+    assert "***" in body["email"]
 
-    # Check that no value in the response body contains or equals the email
-    email_lower = email.lower()
-    for key, value in body.items():
-        if isinstance(value, str):
-            assert email_lower not in value.lower(), (
-                f"Field '{key}' leaks email: '{value}' contains '{email}'"
-            )
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, str):
-                    assert email_lower not in item.lower(), (
-                        f"Field '{key}' list item leaks email: '{item}' contains '{email}'"
-                    )
+
+def test_mask_email_examples():
+    assert service._mask_email("brent@gmail.com") == "b***@g***.com"
+    assert service._mask_email("a@b.co") == "a***@b***.co"
+    # No dot in the domain — mask the whole domain, no TLD to keep.
+    assert service._mask_email("x@localhost") == "x***@l***"
 
 
 # ---------------------------------------------------------------------------

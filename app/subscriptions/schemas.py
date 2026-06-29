@@ -53,6 +53,9 @@ class SubscriptionCreate(BaseModel):
 class SubscriptionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Returned only to the management-token holder (the subscriber managing their own alerts), so
+    # they can see which address the subscription belongs to.
+    email: str
     status: str
     countries: list[str]
     entities: list[str]

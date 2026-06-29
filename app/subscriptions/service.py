@@ -52,6 +52,24 @@ def _normalise_criteria(data: SubscriptionCreate) -> dict:
     }
 
 
+def _mask_email(email: str) -> str:
+    """Mask an email for display: keep the first letter of the local part and domain name + the TLD.
+
+    brent@gmail.com -> b***@g***.com. So a leaked management token still can't read the full address
+    from the manage response, while the owner can recognise which account it is.
+    """
+
+    def _mask(part: str) -> str:
+        return f"{part[0]}***" if part else "***"
+
+    local, at, domain = email.partition("@")
+    if not at:
+        return _mask(local)
+    name, dot, tld = domain.partition(".")
+    masked_domain = f"{_mask(name)}.{tld}" if dot else _mask(name)
+    return f"{_mask(local)}@{masked_domain}"
+
+
 def _apply_criteria(row: Subscription, norm: dict) -> None:
     """Copy normalised filter criteria onto a subscription row and stamp updated_at."""
     row.entities = norm["entities"]
@@ -260,7 +278,9 @@ def get_manage(management_token: str, db: Session) -> tuple[int, dict]:
         return (404, {"detail": "Token not found."})
     if row.status == "unsubscribed":
         return (410, {"detail": "This subscription has been unsubscribed."})
-    return (200, SubscriptionOut.model_validate(row).model_dump())
+    body = SubscriptionOut.model_validate(row).model_dump()
+    body["email"] = _mask_email(row.email)
+    return (200, body)
 
 
 def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -> tuple[int, dict]:
@@ -278,7 +298,9 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
         setattr(row, field, value)
     row.updated_at = datetime.now(UTC)
     db.commit()
-    return (200, SubscriptionOut.model_validate(row).model_dump())
+    body = SubscriptionOut.model_validate(row).model_dump()
+    body["email"] = _mask_email(row.email)
+    return (200, body)
 
 
 def unsubscribe(management_token: str, db: Session) -> tuple[int, dict]:
