@@ -126,7 +126,7 @@ def matching_pair_st(draw):
 
 
 # ---------------------------------------------------------------------------
-# Property 10 — recall matching predicate is a conjunction
+# recall matching predicate is a conjunction
 # ---------------------------------------------------------------------------
 
 
@@ -134,13 +134,10 @@ def matching_pair_st(draw):
 @settings(max_examples=200)
 def test_property_10_recall_matching_is_conjunction(pair):
     """
-    # Feature: recall-radar-subscriptions, Property 10: recall matching predicate is a conjunction
 
     For any (recall, subscription) pair, recall_matches returns True iff every non-empty
     criterion is satisfied; a single failing criterion returns False.
 
-    **Property 10: recall matching predicate is a conjunction**
-    **Validates: Requirements 5.1**
     """
     recall, sub = pair
 
@@ -250,7 +247,6 @@ def test_property_10_recall_matching_is_conjunction(pair):
 @settings(max_examples=100)
 def test_property_10_case_insensitive_entity_match(entity_value, country, category, severity):
     """
-    # Feature: recall-radar-subscriptions, Property 10: recall matching predicate is a conjunction
 
     Entity matching is case-insensitive: recall entity value "Peanuts" matches subscription
     entity "peanuts" and vice versa.
@@ -280,7 +276,7 @@ def test_property_10_case_insensitive_entity_match(entity_value, country, catego
 
 
 # ---------------------------------------------------------------------------
-# Property 11 — recall newness determined by effective date
+# recall newness determined by effective date
 # ---------------------------------------------------------------------------
 
 
@@ -291,12 +287,9 @@ def test_property_10_case_insensitive_entity_match(entity_value, country, catego
 @settings(max_examples=200)
 def test_property_11_both_dates_null_returns_false(report_date, initiation_date):
     """
-    # Feature: recall-radar-subscriptions, Property 11: recall newness determined by effective date
 
     When both date fields are None, recall_is_new must return False regardless of subscription.
 
-    **Property 11: recall newness determined by effective date**
-    **Validates: Requirements 5.2**
     """
     recall = _FakeRecall(
         entities=[],
@@ -331,12 +324,9 @@ def test_property_11_effective_date_after_reference_returns_true(
     base_date, delta_days, use_last_digest, use_both_dates
 ):
     """
-    # Feature: recall-radar-subscriptions, Property 11: recall newness determined by effective date
 
     When max(non-null dates) > reference.date(), recall_is_new must return True.
 
-    **Property 11: recall newness determined by effective date**
-    **Validates: Requirements 5.2**
     """
     reference_date = base_date
     # Effective date is strictly after the reference
@@ -401,12 +391,9 @@ def test_property_11_effective_date_not_after_reference_returns_false(
     base_date, delta_days, use_last_digest, use_both_dates
 ):
     """
-    # Feature: recall-radar-subscriptions, Property 11: recall newness determined by effective date
 
     When max(non-null dates) <= reference.date(), recall_is_new must return False.
 
-    **Property 11: recall newness determined by effective date**
-    **Validates: Requirements 5.2**
     """
     reference_date = base_date + timedelta(days=delta_days)  # reference is after or equal
     # Effective date is at or before the reference
@@ -466,13 +453,10 @@ def test_property_11_effective_date_not_after_reference_returns_false(
 @settings(max_examples=200)
 def test_property_11_no_reference_returns_true(report_date, initiation_date):
     """
-    # Feature: recall-radar-subscriptions, Property 11: recall newness determined by effective date
 
     When both last_digest_at and confirmed_at are None (newly activated subscription),
     recall_is_new must return True for any recall with at least one non-null date.
 
-    **Property 11: recall newness determined by effective date**
-    **Validates: Requirements 5.2**
     """
     # Need at least one non-null date for a meaningful result
     if report_date is None and initiation_date is None:
@@ -509,13 +493,10 @@ def test_property_11_no_reference_returns_true(report_date, initiation_date):
 @settings(max_examples=200)
 def test_property_11_last_digest_takes_precedence_over_confirmed_at(date1, date2, delta_days):
     """
-    # Feature: recall-radar-subscriptions, Property 11: recall newness determined by effective date
 
     When last_digest_at is set, it is used as the reference rather than confirmed_at.
     A recall newer than last_digest_at but older than confirmed_at should still be "new".
 
-    **Property 11: recall newness determined by effective date**
-    **Validates: Requirements 5.2**
     """
     # effective_date is between last_digest_at and confirmed_at:
     # last_digest_at < effective_date <= confirmed_at

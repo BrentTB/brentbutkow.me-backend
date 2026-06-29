@@ -63,6 +63,21 @@ jobs:
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
 
+      - name: Dispatch recall alert emails
+        # Runs only after every ingest above succeeds — a failed step short-circuits the job, so a
+        # digest never claims completeness off a partial ingest (those recalls land next run).
+        # Requires an INTERNAL_DISPATCH_TOKEN repo secret matching the backend's env var.
+        # --fail-with-body turns a non-2xx into a non-zero exit and --max-time 30 a timeout, so either
+        # fails the step and surfaces via GitHub Actions notifications.
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          INTERNAL_DISPATCH_TOKEN: ${{ secrets.INTERNAL_DISPATCH_TOKEN }}
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -X POST "${API_BASE_URL}/internal/dispatch-alerts" \
+            -H "X-Internal-Token: ${INTERNAL_DISPATCH_TOKEN}" \
+            -H "Content-Type: application/json"
+
   # Themes + similar-recall neighbours are a whole-corpus rebuild (TF-IDF + NMF), too heavy to run in
   # the API process — so this runs scripts.build_analytics directly against the live DB on the runner,
   # after the ingests above land their new recalls. Needs a DATABASE_URL repo secret pointing at the

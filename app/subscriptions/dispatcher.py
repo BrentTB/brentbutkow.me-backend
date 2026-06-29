@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Module-level cursor — persists across calls within a single process lifetime.
 _last_dispatch_run_at: datetime | None = None
 
-# Daily send cap per requirement 5.9 / 5.10
+# Free-tier daily send cap — the operator digest takes the 90th slot, leaving 89 for subscribers.
 _DAILY_SEND_CAP = 89
 
 
@@ -108,7 +108,7 @@ async def run_dispatch(db_session: Session) -> dict:
     }
 
     # ------------------------------------------------------------------
-    # 4. Send operator digest email first (req 9.1–9.2)
+    # 4. Send operator digest email first
     # ------------------------------------------------------------------
     operator_email = os.getenv("OPERATOR_EMAIL", "").strip()
     if not operator_email:

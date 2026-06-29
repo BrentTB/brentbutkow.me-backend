@@ -149,7 +149,7 @@ def make_subscription(
 
 
 # ---------------------------------------------------------------------------
-# Property 1: Subscription creation produces pending_confirmation status
+# Subscription creation produces pending_confirmation status
 # ---------------------------------------------------------------------------
 
 
@@ -165,14 +165,11 @@ def test_property_1_creation_produces_pending_confirmation(
     filters: dict[str, Any],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions,
-    # Property 1: subscription creation produces pending_confirmation
+    # subscription creation produces pending_confirmation
 
     For any valid email + non-empty filter criteria, the created record has
     status = 'pending_confirmation'.
 
-    **Property 1: Subscription creation produces pending_confirmation status**
-    **Validates: Requirements 1.2**
     """
     data = SubscriptionCreate(email=email, countries=countries, **filters)
     mock_db, added_objects = make_mock_db(existing_rows=[])
@@ -187,7 +184,7 @@ def test_property_1_creation_produces_pending_confirmation(
 
 
 # ---------------------------------------------------------------------------
-# Property 2: Duplicate active subscription rejected
+# Duplicate active subscription rejected
 # ---------------------------------------------------------------------------
 
 
@@ -199,9 +196,17 @@ def _shuffle_preserving_values(lst: list) -> list:
 
 
 def _vary_case(s: str) -> str:
-    """Return a case-varied version of s (toggle first char case if alphabetic)."""
+    """Return a case-varied version of s (toggle first char case if alphabetic).
+
+    Only toggles when the result stays equal to s under .lower() — the normalisation the service
+    uses for dedup. Some Unicode letters (e.g. 'ŉ', whose upper-case is the two-char 'ʼN') don't
+    round-trip through swapcase().lower(), so toggling them would produce a genuinely *different*
+    string, not a case variant.
+    """
     if s and s[0].isalpha():
-        return s[0].swapcase() + s[1:]
+        varied = s[0].swapcase() + s[1:]
+        if varied.lower() == s.lower():
+            return varied
     return s
 
 
@@ -217,13 +222,10 @@ def test_property_2_duplicate_active_rejected(
     filters: dict[str, Any],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 2: duplicate active subscription rejected
 
     For any filter criteria, an active subscription already exists → any semantically equivalent
     variant (shuffled arrays, different case) returns HTTP 409.
 
-    **Property 2: Duplicate active subscription with identical criteria is rejected**
-    **Validates: Requirements 1.3**
     """
     # Normalise the filter values the way service.py does
     entities = filters.get("entities", [])
@@ -276,7 +278,7 @@ def test_property_2_duplicate_active_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Property 3: All-empty filter body rejected with 422
+# All-empty filter body rejected with 422
 # ---------------------------------------------------------------------------
 
 
@@ -290,13 +292,10 @@ def test_property_3_empty_filter_body_rejected(
     countries: list[str],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 3: all-empty filter body rejected
 
     For any request body where all filter fields are absent / null / empty,
     SubscriptionCreate raises ValidationError (HTTP 422).
 
-    **Property 3: All-empty filter body is rejected with HTTP 422**
-    **Validates: Requirements 1.5, 3.6**
     """
     with pytest.raises(ValidationError) as exc_info:
         SubscriptionCreate.model_validate(
@@ -327,12 +326,9 @@ def test_property_3_empty_string_company_also_rejected(
     countries: list[str],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 3: all-empty filter body rejected
 
     Empty string for company with all other filters absent also raises ValidationError.
 
-    **Property 3: All-empty filter body is rejected with HTTP 422 (empty string variant)**
-    **Validates: Requirements 1.5, 3.6**
     """
     with pytest.raises(ValidationError) as exc_info:
         SubscriptionCreate.model_validate(
@@ -352,7 +348,7 @@ def test_property_3_empty_string_company_also_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Property 5: Invalid email rejected with 422
+# Invalid email rejected with 422
 # ---------------------------------------------------------------------------
 
 # Strategy for definitely-invalid emails
@@ -387,12 +383,9 @@ def test_property_5_invalid_email_rejected(
     filters: dict[str, Any],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 5: invalid email rejected
 
     For any non-RFC-5321 string in the email field, SubscriptionCreate raises ValidationError.
 
-    **Property 5: Invalid email addresses are rejected with HTTP 422**
-    **Validates: Requirements 1.6**
     """
     with pytest.raises(ValidationError):
         SubscriptionCreate.model_validate(
@@ -405,7 +398,7 @@ def test_property_5_invalid_email_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Property 6: Confirmation activates subscription and invalidates token
+# Confirmation activates subscription and invalidates token
 # ---------------------------------------------------------------------------
 
 
@@ -421,13 +414,10 @@ def test_property_6_confirmation_activates_and_invalidates_token(
     filters: dict[str, Any],
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 6: confirmation activates and invalidates token
 
     For any pending subscription within 72 hours, confirm transitions to active,
     sets confirmed_at, and nulls confirmation_token_hash.
 
-    **Property 6: Confirmation activates subscription and invalidates token**
-    **Validates: Requirements 2.4**
     """
     raw_token = "test-raw-token-" + str(uuid.uuid4())
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -451,7 +441,7 @@ def test_property_6_confirmation_activates_and_invalidates_token(
 
 
 # ---------------------------------------------------------------------------
-# Property 7: Unrecognised/reused tokens return 404
+# Unrecognised/reused tokens return 404
 # ---------------------------------------------------------------------------
 
 
@@ -461,12 +451,9 @@ def test_property_6_confirmation_activates_and_invalidates_token(
 @settings(max_examples=50)
 def test_property_7_unrecognised_token_returns_404(raw_token: str) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 7: unrecognised/reused tokens return 404
 
     For any token string that hashes to a value not in the DB, confirm returns 404.
 
-    **Property 7: Unrecognised or reused confirmation tokens return HTTP 404**
-    **Validates: Requirements 2.6**
     """
     # DB has no subscription with a matching hash
     mock_db, _ = make_mock_db(existing_rows=[])
@@ -482,13 +469,10 @@ def test_property_7_unrecognised_token_returns_404(raw_token: str) -> None:
 @settings(max_examples=50)
 def test_property_7_already_used_token_returns_404(raw_token: str) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 7: unrecognised/reused tokens return 404
 
     A subscription with confirmation_token_hash=None (already confirmed) → confirm returns 404.
 
-    **Property 7: Unrecognised or reused confirmation tokens return HTTP 404
     (already used variant)**
-    **Validates: Requirements 2.6**
     """
     # Subscription exists but hash is already None (already confirmed)
     make_subscription(
@@ -504,7 +488,7 @@ def test_property_7_already_used_token_returns_404(raw_token: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Property 8: Manage endpoint never leaks email
+# Manage endpoint never leaks email
 # ---------------------------------------------------------------------------
 
 
@@ -522,13 +506,10 @@ def test_property_8_manage_never_leaks_email(
     status: str,
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions, Property 8: manage endpoint never leaks email
 
     For any active/paused subscription, GET /subscriptions/manage response body contains no field
     equal to or containing the subscriber's email address.
 
-    **Property 8: Manage endpoint never leaks the subscriber's email address**
-    **Validates: Requirements 3.3**
     """
     mgmt_token = str(uuid.uuid4())
     sub = make_subscription(
@@ -565,7 +546,7 @@ def test_property_8_manage_never_leaks_email(
 
 
 # ---------------------------------------------------------------------------
-# Property 9: Partial update leaves unspecified fields unchanged
+# Partial update leaves unspecified fields unchanged
 # ---------------------------------------------------------------------------
 
 
@@ -583,14 +564,11 @@ def test_property_9_partial_update_leaves_unspecified_fields_unchanged(
     patch_categories: list[str] | None,
 ) -> None:
     """
-    # Feature: recall-radar-subscriptions,
-    # Property 9: partial update leaves unspecified fields unchanged
+    # partial update leaves unspecified fields unchanged
 
     For any active subscription and any partial PATCH body, fields absent from the body retain
     their pre-patch values.
 
-    **Property 9: Partial update leaves unspecified fields unchanged**
-    **Validates: Requirements 3.4, 3.5**
     """
     mgmt_token = str(uuid.uuid4())
     original_entities = entities

@@ -7,6 +7,9 @@ class Settings(BaseSettings):
 
     database_url: str
     ingest_bearer_token: str
+    # Shared secret guarding POST /internal/dispatch-alerts (the daily digest trigger). Absent →
+    # the endpoint rejects every caller, so a missing secret fails closed rather than open.
+    internal_dispatch_token: str | None = None
     allowed_origin: str = "http://localhost:5173"
     # Optional regex matched in *addition* to allowed_origin, for origins whose hostname is not
     # fixed (e.g. Vercel preview deploys, where the subdomain changes per deployment). Anchor it

@@ -4,10 +4,10 @@ Resend SDK wrapper and HTML email templates for Recall Radar subscriptions.
 
 Import-time behaviour
 ---------------------
-- If the `resend` package is not installed → ImportError is raised immediately (req 8.5).
-- If RESEND_API_KEY is absent → WARNING is logged, EMAIL_DISABLED is set to True (req 8.2).
-- If RESEND_API_KEY is present → resend.api_key is configured (req 8.1).
-- RESEND_FROM_ADDRESS defaults to recalls@notify.brentbutkow.me (req 8.3).
+- If the `resend` package is not installed → ImportError is raised immediately.
+- If RESEND_API_KEY is absent → WARNING is logged, EMAIL_DISABLED is set to True.
+- If RESEND_API_KEY is present → resend.api_key is configured.
+- RESEND_FROM_ADDRESS defaults to recalls@notify.brentbutkow.me.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import logging
 import os
 from datetime import UTC, datetime
 
-# Requirement 8.5: raise ImportError at import time if resend is unavailable.
+# Raise ImportError at import time if resend is unavailable.
 try:
     import resend
 except ModuleNotFoundError as _e:
@@ -45,7 +45,7 @@ else:
 FROM_ADDRESS: str = os.getenv("RESEND_FROM_ADDRESS", "recalls@notify.brentbutkow.me")
 
 # ---------------------------------------------------------------------------
-# Retry helper (req 5.6, 5.7)
+# Retry helper
 # ---------------------------------------------------------------------------
 
 RETRY_DELAYS = [5, 10, 20]  # seconds — 3 total attempts
@@ -84,7 +84,7 @@ async def send_with_retry(send_fn, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Opt-in email (req 2.1, 2.2, 2.10, 8.3, 8.4)
+# Opt-in email
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +92,7 @@ def send_optin_email(email: str, raw_token: str, management_token: str) -> None:
     """
     Send the double opt-in confirmation email.
 
-    Silently skipped when EMAIL_DISABLED is True (req 8.2).
+    Silently skipped when EMAIL_DISABLED is True.
 
     Parameters
     ----------
@@ -201,7 +201,7 @@ def _optin_html(confirm_url: str, manage_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Digest email (req 5.1–5.5, 5.10, 8.3, 8.4)
+# Digest email
 # ---------------------------------------------------------------------------
 
 
@@ -209,7 +209,7 @@ def send_digest_email(subscription, matching_recalls: list) -> None:
     """
     Send the subscriber daily digest email.
 
-    Silently skipped when EMAIL_DISABLED is True (req 8.2).
+    Silently skipped when EMAIL_DISABLED is True.
 
     Parameters
     ----------
@@ -250,7 +250,7 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
     today = datetime.now(UTC).date().isoformat()
     count = len(matching_recalls)
 
-    # skipped_at notice block (req 5.10)
+    # skipped_at notice block
     skipped_notice = ""
     if subscription.skipped_at:
         dates_str = ", ".join(subscription.skipped_at)
@@ -297,7 +297,7 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
             </td>
           </tr>
 
-          <!-- Manage / unsubscribe links (req 5.3 — placed BEFORE recall list) -->
+          <!-- Manage / unsubscribe links — placed before the recall list -->
           <tr>
             <td style="padding:20px 32px 0 32px;">
               <table cellpadding="0" cellspacing="0">
@@ -402,7 +402,7 @@ def _recall_card(recall) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Operator digest email (req 9.1–9.6)
+# Operator digest email
 # ---------------------------------------------------------------------------
 
 
@@ -410,8 +410,8 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
     """
     Send the operator summary email.
 
-    Silently skipped when EMAIL_DISABLED is True (req 8.2).
-    Also skipped (with WARNING) when OPERATOR_EMAIL is absent (req 9.2).
+    Silently skipped when EMAIL_DISABLED is True.
+    Also skipped (with WARNING) when OPERATOR_EMAIL is absent.
 
     Parameters
     ----------

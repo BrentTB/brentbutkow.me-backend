@@ -10,10 +10,12 @@ from sqlalchemy.exc import OperationalError
 
 from app.config import settings
 from app.db import engine
+from app.internal.router import router as internal_router
 from app.modules.contact.router import router as contact_router
 from app.modules.nullspace.router import router as nullspace_router
 from app.modules.recalls.router import router as recalls_router
 from app.rate_limit import limiter
+from app.subscriptions.router import router as subscriptions_router
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,11 @@ OPENAPI_TAGS = [
     },
     {"name": "contact", "description": "Visitor contact messages."},
     {"name": "nullspace", "description": "Null Space game leaderboard."},
+    {
+        "name": "subscriptions",
+        "description": "Recall alert subscriptions: create, confirm, manage, unsubscribe.",
+    },
+    {"name": "internal", "description": "Internal job triggers (ingest-driven alert dispatch)."},
     {"name": "system", "description": "Operational endpoints (liveness)."},
 ]
 
@@ -84,6 +91,8 @@ def create_app() -> FastAPI:
     app.include_router(recalls_router, prefix="/recalls", tags=["recalls"])
     app.include_router(contact_router, prefix="/contact", tags=["contact"])
     app.include_router(nullspace_router, prefix="/nullspace", tags=["nullspace"])
+    app.include_router(subscriptions_router, prefix="/subscriptions", tags=["subscriptions"])
+    app.include_router(internal_router, prefix="/internal", tags=["internal"])
     return app
 
 

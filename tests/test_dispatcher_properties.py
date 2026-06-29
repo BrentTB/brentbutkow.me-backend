@@ -3,8 +3,8 @@ tests/test_dispatcher_properties.py
 Property-based tests for dispatcher.py dispatch logic.
 
 Properties tested:
-  - Property 12: last_digest_at advances only on confirmed delivery  (Req 4.6)
-  - Property 13: Sending cap creates skipped_at entries and respects 89-slot limit  (Req 5.9, 5.10)
+  - last_digest_at advances only on confirmed delivery
+  - Sending cap creates skipped_at entries and respects 89-slot limit
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ def fail_mode_st(draw):
 
 
 # ---------------------------------------------------------------------------
-# Property 12: last_digest_at advances only on confirmed delivery
+# last_digest_at advances only on confirmed delivery
 # ---------------------------------------------------------------------------
 
 
@@ -191,15 +191,12 @@ def fail_mode_st(draw):
 @settings(max_examples=50)
 def test_property_12_last_digest_at_advances_only_on_success(pair):
     """
-    # Feature: recall-radar-subscriptions,
-    # Property 12: last_digest_at advances only on confirmed delivery
+    # last_digest_at advances only on confirmed delivery
 
     For any subscription, after a dispatch cycle:
     - If the email send succeeds (no exception) → last_digest_at is updated to a new value.
     - If the email send raises any exception (4xx or transient) → last_digest_at is unchanged.
 
-    **Property 12: last_digest_at advances only on confirmed delivery**
-    **Validates: Requirements 4.6**
     """
     sub, matching_recalls = pair
 
@@ -294,7 +291,7 @@ def test_property_12_last_digest_at_advances_only_on_success(pair):
 
 
 # ---------------------------------------------------------------------------
-# Property 13: Sending cap and skipped_at round-trip
+# Sending cap and skipped_at round-trip
 # ---------------------------------------------------------------------------
 
 
@@ -302,15 +299,12 @@ def test_property_12_last_digest_at_advances_only_on_success(pair):
 @settings(max_examples=50)
 def test_property_13_sending_cap_and_skipped_at_round_trip(extra_count: int):
     """
-    # Feature: recall-radar-subscriptions, Property 13: sending cap and skipped_at round-trip
 
     For N subscriptions above 89 (total = 89 + N, N ≥ 1):
     - Dispatcher sends exactly 89 digests.
     - All subscriptions beyond the first 89 have today's ISO date in skipped_at.
     - skipped_at is cleared after the next successful send.
 
-    **Property 13: Sending cap creates skipped_at entries and respects 89-slot limit**
-    **Validates: Requirements 5.9, 5.10**
     """
     today_iso = datetime.now(UTC).date().isoformat()
     total = _DAILY_SEND_CAP + extra_count
