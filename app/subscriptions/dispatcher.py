@@ -11,9 +11,10 @@ Usage
 
 Dispatch cursor
 ---------------
-DispatchState.last_run_at is persisted to the DB at the end of every cycle, so a restart or
-deploy doesn't re-treat the whole recall backlog as new. On the very first run (null cursor),
-all recalls with a non-null report_date or recall_initiation_date are treated as "new".
+A recall is "new" if it was ingested since the last run. DispatchState.last_run_at is persisted to
+the DB at the end of every cycle, so a restart or deploy doesn't re-treat the whole backlog as new.
+On the very first run (null cursor), a 1-day window stands in, so a subscriber's first digest is the
+last day's new recalls rather than a backlog.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 
 from resend.exceptions import ResendError
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.config import settings
 from app.modules.recalls.models import Recall
@@ -36,13 +37,31 @@ from app.subscriptions.email import (
     send_with_retry,
     status_code,
 )
-from app.subscriptions.matcher import recall_is_new, recall_matches
+from app.subscriptions.matcher import recall_matches
 from app.subscriptions.models import DispatchState, Subscription
 
 logger = logging.getLogger(__name__)
 
 # Free-tier daily send cap — the operator digest takes the 90th slot, leaving 89 for subscribers.
 _DAILY_SEND_CAP = 89
+
+# Only the columns the matcher and email templates touch — never the heavy `raw` JSONB (or the
+# deferred search_vector). Dates aren't read off the row (they're only used in the WHERE filter).
+_RECALL_COLUMNS = (
+    Recall.source_url,
+    Recall.product_description,
+    Recall.company_name,
+    Recall.country,
+    Recall.category,
+    Recall.severity_label,
+    Recall.entities,
+)
+
+# "New" means "ingested since the last run" (the cursor below). On the first run there's no cursor,
+# so fall back to a 1-day window — a subscriber's first digest is the last day's new recalls, never
+# a backlog. The ingest and dispatch run back-to-back in the same job, so a day comfortably covers
+# the batch just ingested.
+_FIRST_RUN_LOOKBACK = timedelta(days=1)
 
 
 def _load_dispatch_state(db_session: Session) -> DispatchState:
@@ -90,14 +109,17 @@ async def run_dispatch(db_session: Session) -> dict:
     # ------------------------------------------------------------------
     # 1. Load new recalls
     # ------------------------------------------------------------------
+    # Require at least one date — a recall with neither is structurally invalid and shouldn't alert.
+    has_date = (Recall.report_date.isnot(None)) | (Recall.recall_initiation_date.isnot(None))
     if last_run_at is None:
-        # First run — treat all recalls that have at least one date as "new"
-        stmt_recalls = select(Recall).where(
-            (Recall.report_date.isnot(None)) | (Recall.recall_initiation_date.isnot(None))
-        )
+        cutoff = datetime.now(UTC) - _FIRST_RUN_LOOKBACK
+        stmt_recalls = select(Recall).where(has_date & (Recall.created_at > cutoff))
     else:
-        stmt_recalls = select(Recall).where(Recall.created_at > last_run_at)
+        stmt_recalls = select(Recall).where(has_date & (Recall.created_at > last_run_at))
 
+    # load_only keeps each row to the handful of fields we use — no `raw` JSONB — so a big backlog
+    # doesn't exhaust memory.
+    stmt_recalls = stmt_recalls.options(load_only(*_RECALL_COLUMNS))
     new_recalls: list[Recall] = list(db_session.scalars(stmt_recalls).all())
 
     # ------------------------------------------------------------------
@@ -131,8 +153,7 @@ async def run_dispatch(db_session: Session) -> dict:
     # Match each subscription against the new recalls once, then reuse for both the metric and the
     # send loop (the matcher is the per-run hot path — O(subs × recalls)).
     sub_matches: list[tuple[Subscription, list[Recall]]] = [
-        (sub, [r for r in new_recalls if recall_matches(r, sub) and recall_is_new(r, sub)])
-        for sub in active_subs
+        (sub, [r for r in new_recalls if recall_matches(r, sub)]) for sub in active_subs
     ]
     will_receive_count = sum(1 for _, matches in sub_matches if matches)
 
