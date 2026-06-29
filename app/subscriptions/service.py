@@ -85,8 +85,9 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
     - No subscription → create one in pending_confirmation, send the opt-in email.
     - pending_confirmation → update its criteria, issue a fresh token, resend the opt-in.
     - unsubscribed → restage as pending_confirmation with the new criteria + token, send the opt-in.
-    - active → already confirmed, so update preferences in place (no re-confirm) and email the
-      verified address a "preferences updated" notice.
+    - active → already confirmed; stage the change and email a confirm-update link. The live
+      criteria don't change until that link is followed (an unauthenticated request can't alter a
+      live subscription on its own).
     """
     norm = _normalise_criteria(data)
 
@@ -100,10 +101,15 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
     )
 
     if primary is not None and primary.status == "active":
-        # Email already verified — apply the new preferences and notify the owner of the change.
-        _apply_criteria(primary, norm)
+        # Confirmed already — but this request is unauthenticated, so don't touch the live criteria.
+        # Stage the change and email the verified address a single confirm-update link; the criteria
+        # only change once that link is followed. The current alerts keep running until then.
+        raw_token, token_hash = generate_confirmation_token()
+        primary.confirmation_token_hash = token_hash
+        primary.pending_update = {"criteria": norm, "requested_at": datetime.now(UTC).isoformat()}
+        primary.updated_at = datetime.now(UTC)
         db.commit()
-        _try_send_prefs_updated(primary)
+        _try_send_update_confirm(primary, raw_token)
         return _CREATE_RESPONSE
 
     raw_token, token_hash = generate_confirmation_token()
@@ -169,24 +175,25 @@ def _try_send_optin(
         )
 
 
-def _try_send_prefs_updated(subscription: Subscription) -> None:
+def _try_send_update_confirm(subscription: Subscription, raw_token: str) -> None:
     """
-    Notify a confirmed subscriber that their preferences changed (best-effort).
+    Email a confirmed subscriber a link to confirm a staged preference change (best-effort).
 
-    Doubles as the safeguard for in-place updates: if the change wasn't them, the email gives the
-    owner the manage/unsubscribe links. Failures are logged and swallowed.
+    Only the verified address receives it, so an unauthenticated request can't change live criteria
+    without the owner clicking through. Failures are logged and swallowed.
     """
     try:
         import importlib  # noqa: PLC0415
 
         email_module = importlib.import_module("app.subscriptions.email")
-        email_module.send_prefs_updated_email(  # type: ignore[attr-defined]
+        email_module.send_update_confirm_email(  # type: ignore[attr-defined]
             email=subscription.email,
+            raw_token=raw_token,
             management_token=subscription.management_token,
         )
     except Exception as exc:
         logger.error(
-            "Failed to send preferences-updated email for subscription %s: %s",
+            "Failed to send update-confirmation email for subscription %s: %s",
             subscription.id,
             exc,
         )
@@ -198,6 +205,32 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
     row = db.scalars(stmt).first()
     if row is None:
         return (404, {"detail": "Token not found or already used."})
+
+    # The same token mechanism confirms two things: an initial opt-in, or a staged preference
+    # change on an already-active subscription. pending_update tells them apart.
+    if row.pending_update is not None:
+        requested_at = datetime.fromisoformat(row.pending_update["requested_at"])
+        if (datetime.now(UTC) - requested_at).total_seconds() > 72 * 3600:
+            row.pending_update = None
+            row.confirmation_token_hash = None
+            db.commit()
+            return (
+                410,
+                {"detail": "This update link has expired. Please submit your changes again."},
+            )
+        _apply_criteria(row, row.pending_update["criteria"])
+        row.pending_update = None
+        row.confirmation_token_hash = None
+        db.commit()
+        return (
+            200,
+            {
+                "message": "Your alert preferences have been updated.",
+                "management_token": row.management_token,
+                "updated": True,
+            },
+        )
+
     age_seconds = (datetime.now(UTC) - row.created_at).total_seconds()
     if age_seconds > 72 * 3600:
         return (410, {"detail": "This confirmation link has expired. Please subscribe again."})
@@ -215,6 +248,7 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
             # Hand back the management token so the just-confirmed visitor can jump straight to
             # managing their preferences. They own this subscription (they followed the email link).
             "management_token": row.management_token,
+            "updated": False,
         },
     )
 

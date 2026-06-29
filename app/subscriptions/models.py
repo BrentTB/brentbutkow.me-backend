@@ -52,3 +52,6 @@ class Subscription(Base):
     )
     last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     skipped_at: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # A confirmed subscriber's requested-but-not-yet-confirmed preference change. Holds
+    # {"criteria": <normalised filters>, "requested_at": <iso>}; cleared once confirmed/expired.
+    pending_update: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

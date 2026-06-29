@@ -200,20 +200,21 @@ def _optin_html(confirm_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Preferences-updated notice
+# Preference-update confirmation
 # ---------------------------------------------------------------------------
 
 
-def send_prefs_updated_email(email: str, management_token: str) -> None:
+def send_update_confirm_email(email: str, raw_token: str, management_token: str) -> None:
     """
-    Notify a confirmed subscriber that their alert preferences were changed.
+    Email a confirmed subscriber a link to confirm a staged preference change.
 
-    Silently skipped when EMAIL_DISABLED is True. Gives the owner the manage/unsubscribe links so
-    they can review or undo a change they didn't make.
+    Silently skipped when EMAIL_DISABLED is True. The change only takes effect once this link is
+    followed, so an unauthenticated request can never alter a live subscription on its own.
     """
     if EMAIL_DISABLED:
         return
 
+    confirm_url = f"https://brentbutkow.me/projects/recall-radar/confirm?token={raw_token}"
     manage_url = f"https://brentbutkow.me/projects/recall-radar/manage?token={management_token}"
     unsub_url = f"https://brentbutkow.me/projects/recall-radar/unsubscribe?token={management_token}"
 
@@ -221,13 +222,16 @@ def send_prefs_updated_email(email: str, management_token: str) -> None:
         {
             "from": FROM_ADDRESS,
             "to": [email],
-            "subject": "Your Recall Radar alert preferences were updated",
-            "html": _prefs_updated_html(manage_url=manage_url, unsub_url=unsub_url),
+            "subject": "Confirm your Recall Radar preference update",
+            "html": _update_confirm_html(
+                confirm_url=confirm_url, manage_url=manage_url, unsub_url=unsub_url
+            ),
         }
     )
 
 
-def _prefs_updated_html(manage_url: str, unsub_url: str) -> str:
+def _update_confirm_html(confirm_url: str, manage_url: str, unsub_url: str) -> str:
+    confirm_url = _html_escape(confirm_url)
     manage_url = _html_escape(manage_url)
     unsub_url = _html_escape(unsub_url)
     return f"""<!DOCTYPE html>
@@ -251,26 +255,20 @@ def _prefs_updated_html(manage_url: str, unsub_url: str) -> str:
           <tr>
             <td style="padding:32px;">
               <h1 style="margin:0 0 16px 0;font-size:22px;color:#1a1a2e;">
-                Your alert preferences were updated
+                Confirm your preference update
               </h1>
               <p style="margin:0 0 24px 0;font-size:15px;color:#444444;line-height:1.6;">
-                The filters on your Recall Radar subscription have changed. If that was you, no
-                action is needed. If it wasn&#39;t, review them or unsubscribe below.
+                Someone asked to update the filters on your Recall Radar alerts. Click below to
+                apply the change. Your current alerts stay as they are until you do. If this
+                wasn&#39;t you, ignore this email and nothing changes.
               </p>
-              <table cellpadding="0" cellspacing="0">
+              <table cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
                 <tr>
-                  <td style="padding-right:12px;">
-                    <a href="{manage_url}"
-                       style="display:inline-block;padding:10px 20px;background:#1a1a2e;
-                              color:#ffffff;text-decoration:none;font-size:14px;border-radius:4px;">
-                      Review preferences
-                    </a>
-                  </td>
-                  <td>
-                    <a href="{unsub_url}"
-                       style="display:inline-block;padding:10px 20px;background:#e8e8e8;
-                              color:#444444;text-decoration:none;font-size:14px;border-radius:4px;">
-                      Unsubscribe
+                  <td style="background:#1a1a2e;border-radius:4px;">
+                    <a href="{confirm_url}"
+                       style="display:inline-block;padding:12px 24px;color:#ffffff;
+                              text-decoration:none;font-size:15px;font-weight:bold;">
+                      Confirm preference update
                     </a>
                   </td>
                 </tr>
@@ -279,6 +277,16 @@ def _prefs_updated_html(manage_url: str, unsub_url: str) -> str:
           </tr>
           <tr>
             <td style="background:#f9f9f9;padding:20px 32px;border-top:1px solid #e8e8e8;">
+              <p style="margin:0 0 8px 0;font-size:13px;color:#888888;">
+                <a href="{manage_url}"
+                   style="color:#888888;text-decoration:underline;">Manage preferences</a>
+                &nbsp;&middot;&nbsp;
+                <a href="{unsub_url}"
+                   style="color:#888888;text-decoration:underline;">Unsubscribe</a>
+                &nbsp;&middot;&nbsp;
+                <a href="https://brentbutkow.me"
+                   style="color:#888888;text-decoration:underline;">brentbutkow.me</a>
+              </p>
               <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.5;">
                 Recall alerts are best-effort and sent via a free service. Always check
                 FDA&nbsp;/&nbsp;FSIS&nbsp;/&nbsp;FSA&nbsp;/&nbsp;NCC for official notices.

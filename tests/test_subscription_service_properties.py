@@ -118,6 +118,7 @@ class _FakeSub:
         self.updated_at = now
         self.last_digest_at = None
         self.skipped_at = []
+        self.pending_update = None
 
 
 def make_subscription(
@@ -194,16 +195,16 @@ def test_property_1_creation_produces_pending_confirmation(
     filters=filter_fields_st,
 )
 @settings(max_examples=50)
-def test_property_2_resubscribe_updates_active_in_place(
+def test_property_2_resubscribe_active_stages_change(
     email: str,
     countries: list[str],
     filters: dict[str, Any],
 ) -> None:
     """
 
-    When an active subscription already exists for an email, resubscribing updates that row in
-    place — it never creates a second subscription, stays active, takes on the new criteria, and
-    returns the uniform 200 (so the response never reveals the address is registered).
+    When an active subscription already exists for an email, resubscribing never creates a second
+    row and never changes the live criteria. It stages the change for email confirmation, keeps the
+    subscription active, and returns the uniform 200 (so the response never reveals registration).
 
     """
     existing = make_subscription(
@@ -219,33 +220,40 @@ def test_property_2_resubscribe_updates_active_in_place(
 
     data = SubscriptionCreate(email=email, countries=countries, **filters)
 
-    with patch("app.subscriptions.service._try_send_prefs_updated"):
+    with patch("app.subscriptions.service._try_send_update_confirm"):
         status_code, _ = service.create(data, mock_db)
 
     assert status_code == 200
-    # No second subscription row was created for this email.
+    # No second subscription row, and the live criteria are untouched until confirmed.
     assert added_objects == []
-    # The existing row stays active and adopts the new (normalised) criteria.
     assert existing.status == "active"
-    assert existing.countries == sorted(c.lower() for c in countries)
+    assert existing.countries == ["us"]
+    # The new criteria are staged, awaiting confirmation.
+    assert existing.pending_update is not None
+    assert existing.pending_update["criteria"]["countries"] == sorted(c.lower() for c in countries)
+    assert existing.confirmation_token_hash is not None
 
 
-def test_resubscribe_active_sends_preferences_updated_email():
+def test_resubscribe_active_stages_change_and_emails_confirmation():
     existing = make_subscription(email="a@b.com", status="active", entities=["milk"])
     mock_db, added = make_mock_db(existing_rows=[existing])
     data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
 
     with (
-        patch("app.subscriptions.service._try_send_prefs_updated") as prefs,
+        patch("app.subscriptions.service._try_send_update_confirm") as update_confirm,
         patch("app.subscriptions.service._try_send_optin") as optin,
     ):
         status_code, _ = service.create(data, mock_db)
 
     assert status_code == 200
     assert added == []
-    assert existing.entities == ["peanut"]
-    prefs.assert_called_once()  # the verified owner is notified
-    optin.assert_not_called()  # no re-confirmation for an already-active subscription
+    # Live criteria are unchanged; the change is staged for confirmation.
+    assert existing.entities == ["milk"]
+    assert existing.pending_update is not None
+    assert existing.pending_update["criteria"]["entities"] == ["peanut"]
+    assert existing.confirmation_token_hash is not None
+    update_confirm.assert_called_once()  # verified owner gets the confirm-update link
+    optin.assert_not_called()
 
 
 def test_resubscribe_pending_updates_and_resends_optin():
@@ -255,16 +263,18 @@ def test_resubscribe_pending_updates_and_resends_optin():
 
     with (
         patch("app.subscriptions.service._try_send_optin") as optin,
-        patch("app.subscriptions.service._try_send_prefs_updated") as prefs,
+        patch("app.subscriptions.service._try_send_update_confirm") as update_confirm,
     ):
         status_code, _ = service.create(data, mock_db)
 
     assert status_code == 200
     assert added == []
+    # Unconfirmed, so the criteria update immediately and the opt-in is re-sent — no staging.
     assert existing.status == "pending_confirmation"
     assert existing.entities == ["peanut"]
+    assert existing.pending_update is None
     optin.assert_called_once()
-    prefs.assert_not_called()
+    update_confirm.assert_not_called()
 
 
 def test_resubscribe_unsubscribed_restages_as_pending():
@@ -445,6 +455,64 @@ def test_property_6_confirmation_activates_and_invalidates_token(
     assert status_code == 200, f"Expected 200, got {status_code}: {body}"
     assert sub.status == "active"
     assert sub.confirmed_at is not None
+    assert sub.confirmation_token_hash is None
+
+
+def test_confirm_applies_pending_update():
+    raw_token = "update-raw-token"
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    sub = make_subscription(
+        status="active",
+        entities=["milk"],
+        countries=["us"],
+        confirmation_token_hash=token_hash,
+    )
+    sub.pending_update = {
+        "criteria": {
+            "entities": ["peanut"],
+            "companies": [],
+            "countries": ["uk"],
+            "categories": [],
+            "min_severity": None,
+        },
+        "requested_at": datetime.now(UTC).isoformat(),
+    }
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    status_code, body = service.confirm(raw_token, mock_db)
+
+    assert status_code == 200
+    assert body["updated"] is True
+    # Staged criteria are now live; the subscription stays active and the token is consumed.
+    assert sub.entities == ["peanut"]
+    assert sub.countries == ["uk"]
+    assert sub.status == "active"
+    assert sub.pending_update is None
+    assert sub.confirmation_token_hash is None
+
+
+def test_confirm_expired_pending_update_returns_410_and_clears_it():
+    raw_token = "stale-update-token"
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    sub = make_subscription(status="active", entities=["milk"], confirmation_token_hash=token_hash)
+    sub.pending_update = {
+        "criteria": {
+            "entities": ["peanut"],
+            "companies": [],
+            "countries": ["uk"],
+            "categories": [],
+            "min_severity": None,
+        },
+        "requested_at": (datetime.now(UTC) - timedelta(hours=73)).isoformat(),
+    }
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    status_code, _ = service.confirm(raw_token, mock_db)
+
+    assert status_code == 410
+    # The stale request is discarded; live criteria are untouched.
+    assert sub.entities == ["milk"]
+    assert sub.pending_update is None
     assert sub.confirmation_token_hash is None
 
 
