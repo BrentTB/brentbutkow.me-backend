@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import random
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -178,37 +177,15 @@ def test_property_1_creation_produces_pending_confirmation(
     with patch("app.subscriptions.service._try_send_optin"):
         status_code, _ = service.create(data, mock_db)
 
-    assert status_code == 201
+    assert status_code == 200
     assert len(added_objects) == 1
     new_sub = added_objects[0]
     assert new_sub.status == "pending_confirmation"
 
 
 # ---------------------------------------------------------------------------
-# Duplicate active subscription rejected
+# Resubscribing updates the single subscription in place (one per email)
 # ---------------------------------------------------------------------------
-
-
-def _shuffle_preserving_values(lst: list) -> list:
-    """Return a shuffled copy of lst (may be same order for small lists)."""
-    result = list(lst)
-    random.shuffle(result)
-    return result
-
-
-def _vary_case(s: str) -> str:
-    """Return a case-varied version of s (toggle first char case if alphabetic).
-
-    Only toggles when the result stays equal to s under .lower() — the normalisation the service
-    uses for dedup. Some Unicode letters (e.g. 'ŉ', whose upper-case is the two-char 'ʼN') don't
-    round-trip through swapcase().lower(), so toggling them would produce a genuinely *different*
-    string, not a case variant.
-    """
-    if s and s[0].isalpha():
-        varied = s[0].swapcase() + s[1:]
-        if varied.lower() == s.lower():
-            return varied
-    return s
 
 
 @given(
@@ -217,65 +194,94 @@ def _vary_case(s: str) -> str:
     filters=filter_fields_st,
 )
 @settings(max_examples=50)
-def test_property_2_duplicate_active_rejected(
+def test_property_2_resubscribe_updates_active_in_place(
     email: str,
     countries: list[str],
     filters: dict[str, Any],
 ) -> None:
     """
 
-    For any filter criteria, an active subscription already exists → any semantically equivalent
-    variant (shuffled arrays, different case) returns HTTP 409.
+    When an active subscription already exists for an email, resubscribing updates that row in
+    place — it never creates a second subscription, stays active, takes on the new criteria, and
+    returns the uniform 200 (so the response never reveals the address is registered).
 
     """
-    # Normalise the filter values the way service.py does
-    entities = filters.get("entities", [])
-    companies = filters.get("companies", [])
-    categories = filters.get("categories", [])
-    min_severity = filters.get("min_severity", None)
-
-    normalised_entities = sorted(e.lower() for e in entities)
-    normalised_countries = sorted(c.lower() for c in countries)
-    normalised_categories = sorted(c.lower() for c in categories)
-    normalised_companies = sorted(c.lower() for c in companies)
-
-    # Create an existing active subscription with the normalised criteria
     existing = make_subscription(
         email=email,
         status="active",
-        entities=normalised_entities,
-        companies=normalised_companies,
-        countries=normalised_countries,
-        categories=normalised_categories,
-        min_severity=min_severity,
+        entities=[],
+        companies=[],
+        countries=["us"],
+        categories=[],
+        min_severity=None,
     )
+    mock_db, added_objects = make_mock_db(existing_rows=[existing])
 
-    mock_db, _ = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email=email, countries=countries, **filters)
 
-    # Build an equivalent but possibly shuffled/case-varied incoming request
-    equivalent_entities = _shuffle_preserving_values(entities)
-    equivalent_countries = _shuffle_preserving_values(countries)
-    equivalent_categories = _shuffle_preserving_values(categories)
-    equivalent_companies = [_vary_case(c) for c in _shuffle_preserving_values(companies)]
-
-    data = SubscriptionCreate(
-        email=email,
-        countries=equivalent_countries,
-        entities=equivalent_entities,
-        companies=equivalent_companies,
-        categories=equivalent_categories,
-        min_severity=min_severity,
-        **{
-            k: v
-            for k, v in filters.items()
-            if k not in ("entities", "companies", "categories", "min_severity", "countries")
-        },
-    )
-
-    with patch("app.subscriptions.service._try_send_optin"):
+    with patch("app.subscriptions.service._try_send_prefs_updated"):
         status_code, _ = service.create(data, mock_db)
 
-    assert status_code == 409
+    assert status_code == 200
+    # No second subscription row was created for this email.
+    assert added_objects == []
+    # The existing row stays active and adopts the new (normalised) criteria.
+    assert existing.status == "active"
+    assert existing.countries == sorted(c.lower() for c in countries)
+
+
+def test_resubscribe_active_sends_preferences_updated_email():
+    existing = make_subscription(email="a@b.com", status="active", entities=["milk"])
+    mock_db, added = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with (
+        patch("app.subscriptions.service._try_send_prefs_updated") as prefs,
+        patch("app.subscriptions.service._try_send_optin") as optin,
+    ):
+        status_code, _ = service.create(data, mock_db)
+
+    assert status_code == 200
+    assert added == []
+    assert existing.entities == ["peanut"]
+    prefs.assert_called_once()  # the verified owner is notified
+    optin.assert_not_called()  # no re-confirmation for an already-active subscription
+
+
+def test_resubscribe_pending_updates_and_resends_optin():
+    existing = make_subscription(email="a@b.com", status="pending_confirmation", entities=["milk"])
+    mock_db, added = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with (
+        patch("app.subscriptions.service._try_send_optin") as optin,
+        patch("app.subscriptions.service._try_send_prefs_updated") as prefs,
+    ):
+        status_code, _ = service.create(data, mock_db)
+
+    assert status_code == 200
+    assert added == []
+    assert existing.status == "pending_confirmation"
+    assert existing.entities == ["peanut"]
+    optin.assert_called_once()
+    prefs.assert_not_called()
+
+
+def test_resubscribe_unsubscribed_restages_as_pending():
+    existing = make_subscription(email="a@b.com", status="unsubscribed", entities=["milk"])
+    mock_db, added = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with patch("app.subscriptions.service._try_send_optin") as optin:
+        status_code, _ = service.create(data, mock_db)
+
+    assert status_code == 200
+    assert added == []
+    # Re-confirmation is required after an unsubscribe.
+    assert existing.status == "pending_confirmation"
+    assert existing.confirmation_token_hash is not None
+    assert existing.confirmed_at is None
+    optin.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

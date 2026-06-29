@@ -200,6 +200,100 @@ def _optin_html(confirm_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Preferences-updated notice
+# ---------------------------------------------------------------------------
+
+
+def send_prefs_updated_email(email: str, management_token: str) -> None:
+    """
+    Notify a confirmed subscriber that their alert preferences were changed.
+
+    Silently skipped when EMAIL_DISABLED is True. Gives the owner the manage/unsubscribe links so
+    they can review or undo a change they didn't make.
+    """
+    if EMAIL_DISABLED:
+        return
+
+    manage_url = f"https://brentbutkow.me/projects/recall-radar/manage?token={management_token}"
+    unsub_url = f"https://brentbutkow.me/projects/recall-radar/unsubscribe?token={management_token}"
+
+    resend.Emails.send(
+        {
+            "from": FROM_ADDRESS,
+            "to": [email],
+            "subject": "Your Recall Radar alert preferences were updated",
+            "html": _prefs_updated_html(manage_url=manage_url, unsub_url=unsub_url),
+        }
+    )
+
+
+def _prefs_updated_html(manage_url: str, unsub_url: str) -> str:
+    manage_url = _html_escape(manage_url)
+    unsub_url = _html_escape(unsub_url)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0"
+               style="background:#ffffff;border-radius:6px;overflow:hidden;
+                      max-width:600px;width:100%;">
+          <tr>
+            <td style="background:#1a1a2e;padding:24px 32px;">
+              <span style="color:#ffffff;font-size:20px;font-weight:bold;">Recall Radar</span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <h1 style="margin:0 0 16px 0;font-size:22px;color:#1a1a2e;">
+                Your alert preferences were updated
+              </h1>
+              <p style="margin:0 0 24px 0;font-size:15px;color:#444444;line-height:1.6;">
+                The filters on your Recall Radar subscription have changed. If that was you, no
+                action is needed. If it wasn&#39;t, review them or unsubscribe below.
+              </p>
+              <table cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding-right:12px;">
+                    <a href="{manage_url}"
+                       style="display:inline-block;padding:10px 20px;background:#1a1a2e;
+                              color:#ffffff;text-decoration:none;font-size:14px;border-radius:4px;">
+                      Review preferences
+                    </a>
+                  </td>
+                  <td>
+                    <a href="{unsub_url}"
+                       style="display:inline-block;padding:10px 20px;background:#e8e8e8;
+                              color:#444444;text-decoration:none;font-size:14px;border-radius:4px;">
+                      Unsubscribe
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f9f9f9;padding:20px 32px;border-top:1px solid #e8e8e8;">
+              <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.5;">
+                Recall alerts are best-effort and sent via a free service. Always check
+                FDA&nbsp;/&nbsp;FSIS&nbsp;/&nbsp;FSA&nbsp;/&nbsp;NCC for official notices.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
 # Digest email
 # ---------------------------------------------------------------------------
 
