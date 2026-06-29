@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
-
 from app.modules.recalls.models import Recall
 from app.subscriptions.models import SEVERITY_ORDER, Subscription
 
@@ -47,27 +45,3 @@ def recall_matches(recall: Recall, sub: Subscription) -> bool:
             return False
 
     return True
-
-
-def recall_is_new(recall: Recall, sub: Subscription) -> bool:
-    """Return True iff the recall's effective date is strictly after the subscription's reference.
-
-    Effective date: max of report_date and recall_initiation_date (whichever are non-null).
-    Both null → False immediately.
-
-    Reference point: sub.last_digest_at if non-null, else sub.confirmed_at.
-    Reference None (newly activated) → True (every recall is considered new).
-    """
-    # Compute effective date — max of non-null date fields
-    candidates = [d for d in [recall.report_date, recall.recall_initiation_date] if d is not None]
-    if not candidates:
-        return False
-    effective_date: date = max(candidates)
-
-    # Determine reference point
-    reference = sub.last_digest_at if sub.last_digest_at is not None else sub.confirmed_at
-    if reference is None:
-        # Newly activated subscription — every recall is "new"
-        return True
-
-    return effective_date > reference.date()
