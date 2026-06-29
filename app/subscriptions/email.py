@@ -172,6 +172,12 @@ def _optin_html(confirm_url: str, manage_url: str) -> str:
                 </tr>
               </table>
 
+              <p style="margin:0 0 16px 0;font-size:14px;color:#444444;line-height:1.5;">
+                Want to review or change your filters first?
+                <a href="{manage_url}" style="color:#1a1a2e;text-decoration:underline;">
+                  Manage your subscription</a>.
+              </p>
+
               <p style="margin:0 0 8px 0;font-size:14px;color:#666666;line-height:1.5;">
                 This link expires in 72 hours. If you didn&#39;t subscribe, you can safely ignore
                 this email.
