@@ -295,7 +295,7 @@ def test_resubscribe_unsubscribed_restages_as_pending():
 
 
 # ---------------------------------------------------------------------------
-# All-empty filter body rejected with 422
+# A countries-only subscription is allowed (no other filter is required)
 # ---------------------------------------------------------------------------
 
 
@@ -304,65 +304,25 @@ def test_resubscribe_unsubscribed_restages_as_pending():
     countries=countries_st,
 )
 @settings(max_examples=50)
-def test_property_3_empty_filter_body_rejected(
+def test_countries_only_subscription_is_allowed(
     email: str,
     countries: list[str],
 ) -> None:
     """
 
-    For any request body where all filter fields are absent / null / empty,
-    SubscriptionCreate raises ValidationError (HTTP 422).
+    A body with only countries (no entities/companies/categories/min_severity) is valid — it means
+    "every recall in these countries" — and creates a pending subscription.
 
     """
-    with pytest.raises(ValidationError) as exc_info:
-        SubscriptionCreate.model_validate(
-            {
-                "email": email,
-                "countries": countries,
-                "entities": [],
-                "companies": [],
-                "categories": [],
-                "min_severity": None,
-            }
-        )
+    data = SubscriptionCreate(email=email, countries=countries)
+    mock_db, added = make_mock_db(existing_rows=[])
 
-    errors = exc_info.value.errors()
-    error_messages = [str(e) for e in errors]
-    assert any("at_least_one_filter_required" in msg for msg in error_messages), (
-        f"Expected 'at_least_one_filter_required' in errors, got: {error_messages}"
-    )
+    with patch("app.subscriptions.service._try_send_optin"):
+        status_code, _ = service.create(data, mock_db)
 
-
-@given(
-    email=st.emails(),
-    countries=countries_st,
-)
-@settings(max_examples=30)
-def test_property_3_blank_company_also_rejected(
-    email: str,
-    countries: list[str],
-) -> None:
-    """
-
-    A companies list holding only blank strings, with all other filters absent, still raises
-    ValidationError — a blank company name is not a real filter.
-
-    """
-    with pytest.raises(ValidationError) as exc_info:
-        SubscriptionCreate.model_validate(
-            {
-                "email": email,
-                "countries": countries,
-                "entities": [],
-                "companies": ["", "   "],
-                "categories": [],
-                "min_severity": None,
-            }
-        )
-
-    errors = exc_info.value.errors()
-    error_messages = [str(e) for e in errors]
-    assert any("at_least_one_filter_required" in msg for msg in error_messages)
+    assert status_code == 200
+    assert len(added) == 1
+    assert added[0].status == "pending_confirmation"
 
 
 # ---------------------------------------------------------------------------

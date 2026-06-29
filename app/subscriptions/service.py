@@ -270,18 +270,12 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
         return (404, {"detail": "Token not found."})
     if row.status == "unsubscribed":
         return (410, {"detail": "This subscription has been unsubscribed."})
-    # Apply partial update — only fields explicitly set in the patch body
+    # Apply partial update — only fields explicitly set in the patch body. Countries stays non-empty
+    # (the schema rejects an empty list); the other filters may all be cleared, which simply means
+    # "every recall in the selected countries".
     patch_data = patch.model_dump(exclude_unset=True)
     for field, value in patch_data.items():
         setattr(row, field, value)
-    # Validate post-patch state: at least one filter field must be non-empty
-    has_entities = bool(row.entities)
-    has_companies = any(c and c.strip() for c in (row.companies or []))
-    has_categories = bool(row.categories)
-    has_min_severity = row.min_severity is not None
-    if not any([has_entities, has_companies, has_categories, has_min_severity]):
-        db.rollback()
-        return (422, {"detail": "At least one filter field must remain after update."})
     row.updated_at = datetime.now(UTC)
     db.commit()
     return (200, SubscriptionOut.model_validate(row).model_dump())

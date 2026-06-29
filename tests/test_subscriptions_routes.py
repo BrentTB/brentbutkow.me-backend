@@ -40,9 +40,11 @@ def test_create_rejects_empty_countries():
     assert res.status_code == 422
 
 
-def test_create_rejects_all_empty_filters():
+def test_create_accepts_countries_only(monkeypatch):
+    # No other filter is required — a countries-only body passes validation and reaches the service.
+    monkeypatch.setattr(service, "create", lambda payload, db: (200, {"message": "ok"}))
     res = client.post("/subscriptions", json={"email": "a@b.com", "countries": ["us"]})
-    assert res.status_code == 422
+    assert res.status_code == 200
 
 
 def test_confirm_requires_token():

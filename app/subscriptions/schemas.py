@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.modules.recalls.schemas import RecallCategory, RecallCountry
 from app.subscriptions.models import SEVERITY_ORDER
@@ -48,16 +48,6 @@ class SubscriptionCreate(BaseModel):
                 if item not in _VALID_CATEGORIES:
                     raise ValueError("invalid_category")
         return v
-
-    @model_validator(mode="after")
-    def require_at_least_one_filter(self) -> SubscriptionCreate:
-        has_entities = bool(self.entities)
-        has_companies = any(c and c.strip() for c in self.companies)
-        has_categories = bool(self.categories)
-        has_min_severity = self.min_severity is not None
-        if not any([has_entities, has_companies, has_categories, has_min_severity]):
-            raise ValueError("at_least_one_filter_required")
-        return self
 
 
 class SubscriptionOut(BaseModel):
