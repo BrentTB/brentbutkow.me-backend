@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,7 +30,7 @@ class Subscription(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_confirmation")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending_confirmation")
     entities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     companies: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     countries: Mapped[list] = mapped_column(JSONB, nullable=False)
@@ -55,3 +55,17 @@ class Subscription(Base):
     # A confirmed subscriber's requested-but-not-yet-confirmed preference change. Holds
     # {"criteria": <normalised filters>, "requested_at": <iso>}; cleared once confirmed/expired.
     pending_update: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class DispatchState(Base):
+    """Singleton row (id=1) persisting the dispatch cursor across restarts and deploys.
+
+    The dispatcher only sends digests for recalls created after last_run_at; keeping it in the DB
+    (rather than a process-local variable) stops a restart from re-treating the whole backlog as
+    new. A multi-instance deploy would still need a shared lock — see app/internal/router.py.
+    """
+
+    __tablename__ = "dispatch_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

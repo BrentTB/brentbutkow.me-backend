@@ -9,56 +9,94 @@ Usage
     # Called by the ingest pipeline or a scheduled job after new recalls are persisted.
     summary = await run_dispatch(db_session)
 
-Module-level cursor
--------------------
-_last_dispatch_run_at is set to datetime.now(UTC) at the end of every successful cycle.
-On the very first run (None), all recalls with a non-null report_date or
-recall_initiation_date are treated as "new".
+Dispatch cursor
+---------------
+DispatchState.last_run_at is persisted to the DB at the end of every cycle, so a restart or
+deploy doesn't re-treat the whole recall backlog as new. On the very first run (null cursor),
+all recalls with a non-null report_date or recall_initiation_date are treated as "new".
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 
-import httpx
+from resend.exceptions import ResendError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.modules.recalls.models import Recall
 from app.subscriptions.email import (
+    email_disabled,
+    is_permanent_failure,
     send_digest_email,
     send_operator_digest_email,
     send_with_retry,
+    status_code,
 )
 from app.subscriptions.matcher import recall_is_new, recall_matches
-from app.subscriptions.models import Subscription
+from app.subscriptions.models import DispatchState, Subscription
 
 logger = logging.getLogger(__name__)
-
-# Module-level cursor — persists across calls within a single process lifetime.
-_last_dispatch_run_at: datetime | None = None
 
 # Free-tier daily send cap — the operator digest takes the 90th slot, leaving 89 for subscribers.
 _DAILY_SEND_CAP = 89
 
 
+def _load_dispatch_state(db_session: Session) -> DispatchState:
+    """Fetch the singleton dispatch_state row (id=1), creating it on first ever run."""
+    state = db_session.get(DispatchState, 1)
+    if state is None:
+        state = DispatchState(id=1, last_run_at=None)
+        db_session.add(state)
+        db_session.flush()
+    return state
+
+
+def _commit_or_rollback(db_session: Session, context: str) -> bool:
+    """Commit; on failure roll back so a broken session doesn't cascade into the next subscriber.
+
+    Returns True if the commit succeeded.
+    """
+    try:
+        db_session.commit()
+        return True
+    except Exception as exc:
+        db_session.rollback()
+        logger.error("Commit failed (%s) — rolled back: %s", context, exc)
+        return False
+
+
 async def run_dispatch(db_session: Session) -> dict:
     """Run one dispatch cycle. Returns a summary metrics dict."""
-    global _last_dispatch_run_at  # noqa: PLW0603
+    if email_disabled():
+        # No API key → sending is a no-op. Bail before touching subscription state so we don't
+        # mark anyone as "sent" or advance the cursor over recalls that were never delivered.
+        logger.warning("Email disabled (no resend_api_key) — dispatch skipped, no state changed.")
+        return {
+            "newRecalls": 0,
+            "activeSubs": 0,
+            "sent": 0,
+            "skippedCap": 0,
+            "errors": 0,
+            "emailDisabled": True,
+        }
+
+    state = _load_dispatch_state(db_session)
+    last_run_at = state.last_run_at
 
     # ------------------------------------------------------------------
     # 1. Load new recalls
     # ------------------------------------------------------------------
-    if _last_dispatch_run_at is None:
+    if last_run_at is None:
         # First run — treat all recalls that have at least one date as "new"
         stmt_recalls = select(Recall).where(
             (Recall.report_date.isnot(None)) | (Recall.recall_initiation_date.isnot(None))
         )
     else:
-        stmt_recalls = select(Recall).where(Recall.created_at > _last_dispatch_run_at)
+        stmt_recalls = select(Recall).where(Recall.created_at > last_run_at)
 
     new_recalls: list[Recall] = list(db_session.scalars(stmt_recalls).all())
 
@@ -90,13 +128,13 @@ async def run_dispatch(db_session: Session) -> dict:
         )
     ).scalar_one()
 
-    # will_receive_count: number of active subs with at least one matching new recall
-    will_receive_count = 0
-    for sub in active_subs:
-        for recall in new_recalls:
-            if recall_matches(recall, sub) and recall_is_new(recall, sub):
-                will_receive_count += 1
-                break
+    # Match each subscription against the new recalls once, then reuse for both the metric and the
+    # send loop (the matcher is the per-run hot path — O(subs × recalls)).
+    sub_matches: list[tuple[Subscription, list[Recall]]] = [
+        (sub, [r for r in new_recalls if recall_matches(r, sub) and recall_is_new(r, sub)])
+        for sub in active_subs
+    ]
+    will_receive_count = sum(1 for _, matches in sub_matches if matches)
 
     metrics = {
         "new_recall_count": len(new_recalls),
@@ -110,9 +148,9 @@ async def run_dispatch(db_session: Session) -> dict:
     # ------------------------------------------------------------------
     # 4. Send operator digest email first
     # ------------------------------------------------------------------
-    operator_email = os.getenv("OPERATOR_EMAIL", "").strip()
+    operator_email = (settings.operator_email or "").strip()
     if not operator_email:
-        logger.warning("OPERATOR_EMAIL is not set — operator digest will not be sent.")
+        logger.warning("operator_email is not set — operator digest will not be sent.")
     else:
         try:
             await asyncio.to_thread(
@@ -133,23 +171,18 @@ async def run_dispatch(db_session: Session) -> dict:
     skipped_cap_count = 0
     cap_warning_logged = False
 
-    for sub in active_subs:
-        # 5a. Collect matching new recalls for this subscription
-        matching_recalls = [
-            r for r in new_recalls if recall_matches(r, sub) and recall_is_new(r, sub)
-        ]
-
-        # 5b. Skip if zero matches
+    for sub, matching_recalls in sub_matches:
+        # 5a. Skip if zero matches
         if not matching_recalls:
             continue
 
-        # 5c. Daily cap check
+        # 5b. Daily cap check
         if sent_count >= _DAILY_SEND_CAP:
             skipped_cap_count += 1
             # Append today's ISO date to skipped_at (avoid duplicates)
             if today_iso not in sub.skipped_at:
                 sub.skipped_at = list(sub.skipped_at) + [today_iso]
-            db_session.commit()
+            _commit_or_rollback(db_session, f"cap-skip for {sub.id}")
 
             if not cap_warning_logged:
                 logger.warning(
@@ -159,31 +192,27 @@ async def run_dispatch(db_session: Session) -> dict:
                 cap_warning_logged = True
             continue
 
-        # 5d. Send digest with retry
+        # 5c. Send digest with retry
         async def _send(s=sub, r=matching_recalls):  # default-arg capture
             return await asyncio.to_thread(send_digest_email, s, r)
 
         try:
             await send_with_retry(_send)
-            # Success
-            sub.last_digest_at = datetime.now(UTC)
-            sub.skipped_at = []
-            db_session.commit()
-            sent_count += 1
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            if 400 <= status_code < 500:
-                # Permanent 4xx — unsubscribe
+        except ResendError as exc:
+            if is_permanent_failure(exc):
+                # Permanent client error (e.g. invalid/blocked recipient) — stop emailing them
+                # so we don't keep hitting a dead address and harming sender reputation.
                 sub.status = "unsubscribed"
-                db_session.commit()
+                _commit_or_rollback(db_session, f"unsubscribe {sub.id}")
                 logger.error(
-                    "Permanent delivery failure for subscription %s (HTTP %d): %s",
+                    "Permanent delivery failure for subscription %s (HTTP %s) — unsubscribed: %s",
                     sub.id,
-                    status_code,
+                    status_code(exc),
                     exc,
                 )
             else:
-                # Transient exhausted — do not update last_digest_at
+                # Transient failure survived all retries — leave last_digest_at so the next
+                # run retries this subscriber.
                 logger.error(
                     "Transient delivery failure exhausted for subscription %s: %s",
                     sub.id,
@@ -191,21 +220,31 @@ async def run_dispatch(db_session: Session) -> dict:
                 )
             error_count += 1
         except Exception as exc:
-            # Any other exception after send_with_retry raises
+            # Unexpected non-Resend error — log and move on to the next subscriber.
             logger.error(
                 "Delivery failure for subscription %s: %s",
                 sub.id,
                 exc,
             )
             error_count += 1
+        else:
+            # Delivered — advance the digest cursor. If the commit fails, the rollback reverts it,
+            # so count it as an error rather than a phantom success.
+            sub.last_digest_at = datetime.now(UTC)
+            sub.skipped_at = []
+            if _commit_or_rollback(db_session, f"digest for {sub.id}"):
+                sent_count += 1
+            else:
+                error_count += 1
 
     # Update skipped_count in metrics (now we know the real value)
     metrics["skipped_count"] = skipped_cap_count
 
     # ------------------------------------------------------------------
-    # 6. Advance module-level cursor
+    # 6. Advance the persisted dispatch cursor
     # ------------------------------------------------------------------
-    _last_dispatch_run_at = datetime.now(UTC)
+    state.last_run_at = datetime.now(UTC)
+    _commit_or_rollback(db_session, "advance dispatch cursor")
 
     # ------------------------------------------------------------------
     # 7. Summary log
@@ -220,9 +259,9 @@ async def run_dispatch(db_session: Session) -> dict:
     )
 
     return {
-        "new_recalls": len(new_recalls),
-        "active_subs": len(active_subs),
+        "newRecalls": len(new_recalls),
+        "activeSubs": len(active_subs),
         "sent": sent_count,
-        "skipped_cap": skipped_cap_count,
+        "skippedCap": skipped_cap_count,
         "errors": error_count,
     }

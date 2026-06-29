@@ -294,6 +294,53 @@ def test_resubscribe_unsubscribed_restages_as_pending():
     optin.assert_called_once()
 
 
+def test_resubscribe_pending_resets_created_at_so_fresh_link_confirms():
+    # A stale pending row resubscribes: created_at must be reset, otherwise confirm() would 410 the
+    # brand-new opt-in link as "expired" against the old 72h-stale timestamp.
+    stale = datetime.now(UTC) - timedelta(hours=100)
+    existing = make_subscription(
+        email="a@b.com", status="pending_confirmation", entities=["milk"], created_at=stale
+    )
+    mock_db, _ = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with patch("app.subscriptions.service._try_send_optin"):
+        service.create(data, mock_db)
+
+    # created_at is refreshed to ~now (well within the 72h confirm window).
+    assert (datetime.now(UTC) - existing.created_at) < timedelta(minutes=1)
+
+
+def test_confirm_malformed_pending_update_returns_410_not_500():
+    # A partial/garbled pending_update (missing keys) must be treated as an expired link, never
+    # raise an unhandled KeyError → 500.
+    raw_token = "malformed-token"
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    sub = make_subscription(status="active", confirmation_token_hash=token_hash)
+    sub.pending_update = {"criteria": {"countries": ["uk"]}}  # no "requested_at"
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    status_code, _ = service.confirm(raw_token, mock_db)
+
+    assert status_code == 410
+    assert sub.pending_update is None
+    assert sub.confirmation_token_hash is None
+
+
+def test_get_manage_returns_camelcase_keys():
+    # These endpoints follow the app-wide camelCase JSON contract (min_severity → minSeverity).
+    sub = make_subscription(
+        email="brent@example.com", status="active", min_severity="high", management_token="mgmt"
+    )
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    status_code, body = service.get_manage("mgmt", mock_db)
+
+    assert status_code == 200
+    assert "minSeverity" in body
+    assert "min_severity" not in body
+
+
 # ---------------------------------------------------------------------------
 # A countries-only subscription is allowed (no other filter is required)
 # ---------------------------------------------------------------------------

@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     # Shared secret guarding POST /internal/dispatch-alerts (the daily digest trigger). Absent →
     # the endpoint rejects every caller, so a missing secret fails closed rather than open.
     internal_dispatch_token: str | None = None
+    # Email delivery (Resend). resend_api_key absent → email sending is disabled (dev default):
+    # subscriptions still work, confirmation/digest emails are skipped. operator_email absent →
+    # the operator digest is skipped.
+    resend_api_key: str | None = None
+    resend_from_address: str = "recalls@notify.brentbutkow.me"
+    operator_email: str | None = None
     allowed_origin: str = "http://localhost:5173"
     # Optional regex matched in *addition* to allowed_origin, for origins whose hostname is not
     # fixed (e.g. Vercel preview deploys, where the subdomain changes per deployment). Anchor it

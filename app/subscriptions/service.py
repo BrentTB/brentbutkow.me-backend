@@ -44,10 +44,10 @@ def _normalise_criteria(data: SubscriptionCreate) -> dict:
     - Treat None, [], and "" as equivalent (absent → None after normalisation).
     """
     return {
-        "entities": sorted(e.lower() for e in (data.entities or [])),
+        "entities": sorted(e.lower() for e in (data.entities or []) if e and e.strip()),
         "companies": sorted(c.lower() for c in (data.companies or []) if c and c.strip()),
         "countries": sorted(c.lower() for c in (data.countries or [])),
-        "categories": sorted(c.lower() for c in (data.categories or [])),
+        "categories": sorted(c.lower() for c in (data.categories or []) if c and c.strip()),
         "min_severity": (data.min_severity or "").lower() or None,
     }
 
@@ -139,6 +139,9 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
         primary.status = "pending_confirmation"
         primary.confirmation_token_hash = token_hash
         primary.confirmed_at = None
+        # Reset the opt-in clock: confirm() expires links via created_at, so a fresh resubscribe
+        # needs a fresh start or the new link would 410 immediately on an old pending row.
+        primary.created_at = datetime.now(UTC)
         db.commit()
         _try_send_optin(email=data.email, raw_token=raw_token, subscription=primary)
         return _CREATE_RESPONSE
@@ -227,8 +230,18 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
     # The same token mechanism confirms two things: an initial opt-in, or a staged preference
     # change on an already-active subscription. pending_update tells them apart.
     if row.pending_update is not None:
-        requested_at = datetime.fromisoformat(row.pending_update["requested_at"])
-        if (datetime.now(UTC) - requested_at).total_seconds() > 72 * 3600:
+        # pending_update is our own JSONB, but a partial/malformed value must not 500 — treat any
+        # missing field or unparseable timestamp as an expired link.
+        criteria = row.pending_update.get("criteria")
+        requested_at_raw = row.pending_update.get("requested_at")
+        try:
+            requested_at = datetime.fromisoformat(requested_at_raw) if requested_at_raw else None
+        except (TypeError, ValueError):
+            requested_at = None
+        expired = (
+            requested_at is None or (datetime.now(UTC) - requested_at).total_seconds() > 72 * 3600
+        )
+        if criteria is None or expired:
             row.pending_update = None
             row.confirmation_token_hash = None
             db.commit()
@@ -236,7 +249,7 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
                 410,
                 {"detail": "This update link has expired. Please submit your changes again."},
             )
-        _apply_criteria(row, row.pending_update["criteria"])
+        _apply_criteria(row, criteria)
         row.pending_update = None
         row.confirmation_token_hash = None
         db.commit()
@@ -244,7 +257,7 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
             200,
             {
                 "message": "Your alert preferences have been updated.",
-                "management_token": row.management_token,
+                "managementToken": row.management_token,
                 "updated": True,
             },
         )
@@ -265,7 +278,7 @@ def confirm(raw_token: str, db: Session) -> tuple[int, dict]:
             ),
             # Hand back the management token so the just-confirmed visitor can jump straight to
             # managing their preferences. They own this subscription (they followed the email link).
-            "management_token": row.management_token,
+            "managementToken": row.management_token,
             "updated": False,
         },
     )
@@ -278,7 +291,7 @@ def get_manage(management_token: str, db: Session) -> tuple[int, dict]:
         return (404, {"detail": "Token not found."})
     if row.status == "unsubscribed":
         return (410, {"detail": "This subscription has been unsubscribed."})
-    body = SubscriptionOut.model_validate(row).model_dump()
+    body = SubscriptionOut.model_validate(row).model_dump(by_alias=True)
     body["email"] = _mask_email(row.email)
     return (200, body)
 
@@ -298,7 +311,7 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
         setattr(row, field, value)
     row.updated_at = datetime.now(UTC)
     db.commit()
-    body = SubscriptionOut.model_validate(row).model_dump()
+    body = SubscriptionOut.model_validate(row).model_dump(by_alias=True)
     body["email"] = _mask_email(row.email)
     return (200, body)
 

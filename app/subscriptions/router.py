@@ -25,8 +25,9 @@ _RATE_LIMITED: dict[int | str, dict[str, Any]] = {429: {"description": "Rate lim
     summary="Subscribe to recall alerts",
     description=(
         "Public, rate-limited to 5/min per IP. Creates a pending subscription and sends a "
-        "double opt-in email. 201 on a new subscription, 200 when an opt-in is re-sent to an "
-        "already-pending address, 409 on a duplicate active subscription, 422 on validation error."
+        "double opt-in email. Always returns a uniform 200 regardless of the address's prior "
+        "state, so the response never reveals whether an email is already registered "
+        "(422 on validation error)."
     ),
     responses=_RATE_LIMITED,
 )
@@ -56,7 +57,7 @@ def confirm_subscription(
 @router.get(
     "/manage",
     summary="Read subscription preferences",
-    description="Returns the filter criteria for a management token. Never returns the email.",
+    description="Returns the filter criteria and a masked email for a management token.",
 )
 def get_subscription(
     token: str = Query(..., description="Management token from an email link."),

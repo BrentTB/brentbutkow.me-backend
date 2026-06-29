@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator
 
+from app.camel import CamelModel
 from app.modules.recalls.schemas import RecallCategory, RecallCountry
 from app.subscriptions.models import SEVERITY_ORDER
 
@@ -16,7 +17,7 @@ CountriesField = Annotated[
 ]
 
 
-class SubscriptionCreate(BaseModel):
+class SubscriptionCreate(CamelModel):
     email: EmailStr
     countries: CountriesField
     entities: list[Annotated[str, Field(max_length=100)]] = Field(default=[], max_length=50)
@@ -50,9 +51,7 @@ class SubscriptionCreate(BaseModel):
         return v
 
 
-class SubscriptionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class SubscriptionOut(CamelModel):
     # Returned only to the management-token holder (the subscriber managing their own alerts), so
     # they can see which address the subscription belongs to.
     email: str
@@ -64,7 +63,7 @@ class SubscriptionOut(BaseModel):
     min_severity: str | None
 
 
-class SubscriptionPatch(BaseModel):
+class SubscriptionPatch(CamelModel):
     countries: CountriesField | None = None
     entities: list[Annotated[str, Field(max_length=100)]] | None = None
     companies: list[Annotated[str, Field(max_length=200)]] | None = None

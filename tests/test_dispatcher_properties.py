@@ -15,11 +15,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock
 
-import httpx
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from resend.exceptions import ResendError
 
 from app.modules.recalls.schemas import RecallCategory, RecallCountry
+from app.subscriptions.email import is_permanent_failure
 from app.subscriptions.models import SEVERITY_ORDER
 
 # ---------------------------------------------------------------------------
@@ -88,8 +89,6 @@ async def _dispatch_single_subscription(
     Returns (new_sent_count, outcome) where outcome is one of:
       "sent", "skipped_no_match", "skipped_cap", "error_permanent", "error_transient", None
     """
-    import httpx  # noqa: PLC0415
-
     today_iso = datetime.now(UTC).date().isoformat()
 
     # 5b. Skip if zero matches
@@ -117,9 +116,8 @@ async def _dispatch_single_subscription(
         db_commit()
         sent_count += 1
         return sent_count, "sent"
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        if 400 <= status_code < 500:
+    except ResendError as exc:
+        if is_permanent_failure(exc):
             sub.status = "unsubscribed"
             db_commit()
             return sent_count, "error_permanent"
@@ -244,9 +242,9 @@ def test_property_12_last_digest_at_advances_only_on_success(pair):
     )
 
     async def _raise_4xx():
-        response = MagicMock()
-        response.status_code = 400
-        raise httpx.HTTPStatusError(message="Bad Request", request=MagicMock(), response=response)
+        raise ResendError(
+            code=400, error_type="validation_error", message="Bad Request", suggested_action=""
+        )
 
     asyncio.get_event_loop().run_until_complete(
         _dispatch_single_subscription(
@@ -401,3 +399,29 @@ def test_property_13_sending_cap_and_skipped_at_round_trip(extra_count: int):
     assert skipped_sub.last_digest_at is not None, (
         "last_digest_at must be set after a successful send"
     )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch is a no-op when email is disabled (no phantom deliveries / cursor moves)
+# ---------------------------------------------------------------------------
+
+
+def test_run_dispatch_skips_when_email_disabled(monkeypatch):
+    from app.config import settings
+    from app.subscriptions import dispatcher
+
+    # No API key → run_dispatch must bail before touching subscription state, so nobody is marked
+    # "sent" and the persisted cursor isn't advanced over undelivered recalls.
+    monkeypatch.setattr(settings, "resend_api_key", None)
+    session = MagicMock()
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(dispatcher.run_dispatch(session))
+    finally:
+        loop.close()
+
+    assert result["emailDisabled"] is True
+    assert result["sent"] == 0
+    session.get.assert_not_called()  # no dispatch_state load
+    session.commit.assert_not_called()

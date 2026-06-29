@@ -2,84 +2,94 @@
 app/subscriptions/email.py
 Resend SDK wrapper and HTML email templates for Recall Radar subscriptions.
 
-Import-time behaviour
----------------------
+Configuration
+-------------
 - If the `resend` package is not installed → ImportError is raised immediately.
-- If RESEND_API_KEY is absent → WARNING is logged, EMAIL_DISABLED is set to True.
-- If RESEND_API_KEY is present → resend.api_key is configured.
-- RESEND_FROM_ADDRESS defaults to recalls@notify.brentbutkow.me.
+- All settings come from app.config (resend_api_key / resend_from_address / operator_email).
+- resend_api_key absent → email_disabled() returns True: sends are silently skipped.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
-import os
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 # Raise ImportError at import time if resend is unavailable.
 try:
     import resend
+    from resend.exceptions import ResendError
 except ModuleNotFoundError as _e:
     raise ImportError(
         "The 'resend' package is required for email delivery. Install it with: pip install resend"
     ) from _e
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Module-level configuration (evaluated once at import time)
-# ---------------------------------------------------------------------------
-
-_api_key = os.getenv("RESEND_API_KEY")
-if not _api_key:
+if settings.resend_api_key:
+    resend.api_key = settings.resend_api_key
+else:
     logger.warning(
-        "RESEND_API_KEY is not set — email sending is disabled. "
+        "resend_api_key is not set — email sending is disabled. "
         "Subscription creation will still succeed; confirmation emails will be silently skipped."
     )
-    EMAIL_DISABLED = True
-else:
-    resend.api_key = _api_key
-    EMAIL_DISABLED = False
 
-FROM_ADDRESS: str = os.getenv("RESEND_FROM_ADDRESS", "recalls@notify.brentbutkow.me")
+
+def email_disabled() -> bool:
+    """Email sending is disabled when no API key is configured. Read live so tests can override."""
+    return not settings.resend_api_key
+
 
 # ---------------------------------------------------------------------------
 # Retry helper
 # ---------------------------------------------------------------------------
 
-RETRY_DELAYS = [5, 10, 20]  # seconds — 3 total attempts
+RETRY_DELAYS = [5, 10, 20]  # backoff (seconds) before each retry — 4 attempts total
+
+
+def status_code(exc: ResendError) -> int:
+    """Coerce ResendError.code (documented as str | int) to an int HTTP status, default 500."""
+    try:
+        return int(exc.code)
+    except (TypeError, ValueError):
+        return 500
+
+
+def is_permanent_failure(exc: ResendError) -> bool:
+    """A 4xx other than 429 is a permanent client error (bad recipient, invalid payload).
+
+    429 (rate limit / quota) and 5xx are transient and worth retrying.
+    """
+    code = status_code(exc)
+    return 400 <= code < 500 and code != 429
 
 
 async def send_with_retry(send_fn, *args, **kwargs):
     """
-    Call send_fn(*args, **kwargs) with exponential backoff on transient failures.
+    Call send_fn(*args, **kwargs) with backoff on transient Resend failures.
 
-    - On 4xx HTTPStatusError → re-raise immediately (permanent failure, no retry).
-    - On 5xx / network error → retry with delays [5, 10, 20] seconds.
-    - After all retries exhausted → re-raise last exception.
+    The resend SDK wraps every failure — API errors and transport errors alike — in a
+    resend.exceptions.ResendError carrying an HTTP-status `.code`. Permanent client errors
+    (4xx except 429) re-raise immediately; 429 and 5xx are retried before the delays in
+    RETRY_DELAYS. After the final attempt the last exception re-raises.
     """
-    import httpx  # noqa: PLC0415 — already in project deps
-
-    last_exc: Exception | None = None
-    for attempt, delay in enumerate(RETRY_DELAYS):
+    last_exc: ResendError | None = None
+    # One initial attempt, then one retry per backoff delay.
+    for delay in (None, *RETRY_DELAYS):
+        if delay is not None:
+            await asyncio.sleep(delay)
         try:
             return await send_fn(*args, **kwargs)
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            if 400 <= status < 500:
-                # Permanent failure — do not retry.
+        except ResendError as exc:
+            if is_permanent_failure(exc):
                 raise
-            # Transient 5xx — fall through to retry logic.
-            last_exc = exc
-        except httpx.TransportError as exc:
-            # Network-level failure — also transient.
             last_exc = exc
 
-        if attempt < len(RETRY_DELAYS) - 1:
-            await asyncio.sleep(delay)
-
-    assert last_exc is not None  # always set when we reach here
+    assert last_exc is not None  # always set when the retry loop exhausts
     raise last_exc
 
 
@@ -92,7 +102,7 @@ def send_optin_email(email: str, raw_token: str) -> None:
     """
     Send the double opt-in confirmation email.
 
-    Silently skipped when EMAIL_DISABLED is True. No unsubscribe link is shown — a pre-confirmation
+    Silently skipped when email is disabled. No unsubscribe link is shown — a pre-confirmation
     subscription has nothing to manage, and ignoring this email is itself the opt-out.
 
     Parameters
@@ -100,7 +110,7 @@ def send_optin_email(email: str, raw_token: str) -> None:
     email:      Recipient's email address.
     raw_token:  Raw (unhashed) confirmation token.
     """
-    if EMAIL_DISABLED:
+    if email_disabled():
         return
 
     confirm_url = f"https://brentbutkow.me/projects/recall-radar/confirm?token={raw_token}"
@@ -109,7 +119,7 @@ def send_optin_email(email: str, raw_token: str) -> None:
 
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": settings.resend_from_address,
             "to": [email],
             "subject": "Confirm your Recall Radar alert subscription",
             "html": html,
@@ -208,10 +218,10 @@ def send_update_confirm_email(email: str, raw_token: str, management_token: str)
     """
     Email a confirmed subscriber a link to confirm a staged preference change.
 
-    Silently skipped when EMAIL_DISABLED is True. The change only takes effect once this link is
+    Silently skipped when email is disabled. The change only takes effect once this link is
     followed, so an unauthenticated request can never alter a live subscription on its own.
     """
-    if EMAIL_DISABLED:
+    if email_disabled():
         return
 
     confirm_url = f"https://brentbutkow.me/projects/recall-radar/confirm?token={raw_token}"
@@ -220,7 +230,7 @@ def send_update_confirm_email(email: str, raw_token: str, management_token: str)
 
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": settings.resend_from_address,
             "to": [email],
             "subject": "Confirm your Recall Radar preference update",
             "html": _update_confirm_html(
@@ -310,14 +320,14 @@ def send_digest_email(subscription, matching_recalls: list) -> None:
     """
     Send the subscriber daily digest email.
 
-    Silently skipped when EMAIL_DISABLED is True.
+    Silently skipped when email is disabled.
 
     Parameters
     ----------
     subscription:      Subscription ORM instance.
     matching_recalls:  List of Recall ORM instances that matched the subscription.
     """
-    if EMAIL_DISABLED:
+    if email_disabled():
         return
 
     count = len(matching_recalls)
@@ -339,7 +349,7 @@ def send_digest_email(subscription, matching_recalls: list) -> None:
 
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": settings.resend_from_address,
             "to": [subscription.email],
             "subject": subject,
             "html": html,
@@ -472,15 +482,24 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
 </html>"""
 
 
+def _recall_detail_url(recall) -> str:
+    """Build the canonical recall-detail URL with each path segment percent-encoded.
+
+    source and recall_number come from external feeds; quoting each segment (safe="") stops a
+    stray '/', '?', '#' or '@' in the value from rewriting the link target a subscriber clicks.
+    """
+    source = quote(str(recall.source), safe="")
+    recall_number = quote(str(recall.recall_number), safe="")
+    return f"https://brentbutkow.me/projects/recall-radar/{source}/{recall_number}"
+
+
 def _recall_card(recall) -> str:
     """Return an HTML card for a single recall (inline styles only).
 
     Every recall field comes from external ingest feeds, so each is HTML-escaped before
     interpolation to keep feed content from breaking or injecting markup.
     """
-    detail_url = _html_escape(
-        f"https://brentbutkow.me/projects/recall-radar/{recall.source}/{recall.recall_number}"
-    )
+    detail_url = _html_escape(_recall_detail_url(recall))
     company_row = ""
     if recall.company_name:
         company = _html_escape(recall.company_name)
@@ -521,8 +540,8 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
     """
     Send the operator summary email.
 
-    Silently skipped when EMAIL_DISABLED is True.
-    Also skipped (with WARNING) when OPERATOR_EMAIL is absent.
+    Silently skipped when email is disabled.
+    Also skipped (with WARNING) when operator_email is absent.
 
     Parameters
     ----------
@@ -531,12 +550,12 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
     recalls:  All new Recall ORM instances ingested in this run.
     errors:   List of ERROR/WARNING message strings collected during the run.
     """
-    if EMAIL_DISABLED:
+    if email_disabled():
         return
 
-    operator_email = os.getenv("OPERATOR_EMAIL", "").strip()
+    operator_email = (settings.operator_email or "").strip()
     if not operator_email:
-        logger.warning("OPERATOR_EMAIL is not set — operator digest will not be sent.")
+        logger.warning("operator_email is not set — operator digest will not be sent.")
         return
 
     today_date = datetime.now(UTC).date().isoformat()
@@ -551,7 +570,7 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
 
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": settings.resend_from_address,
             "to": [operator_email],
             "subject": subject,
             "html": html,
@@ -700,10 +719,7 @@ def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> st
 def _operator_recall_row(recall) -> str:
     # Recall fields come from external feeds — escape each before interpolation.
     company_part = f" &middot; {_html_escape(recall.company_name)}" if recall.company_name else ""
-    source_url = _html_escape(
-        recall.source_url
-        or f"https://brentbutkow.me/projects/recall-radar/{recall.source}/{recall.recall_number}"
-    )
+    source_url = _html_escape(recall.source_url or _recall_detail_url(recall))
     product_description = _html_escape(recall.product_description)
     country = _html_escape(recall.country)
     category = _html_escape(recall.category)
@@ -723,7 +739,5 @@ def _operator_recall_row(recall) -> str:
 
 
 def _html_escape(text: str) -> str:
-    """Minimal HTML escaping for untrusted strings inserted into email bodies."""
-    return (
-        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-    )
+    """Escape untrusted strings for insertion into HTML email bodies (incl. quoted attributes)."""
+    return html.escape(text, quote=True)
