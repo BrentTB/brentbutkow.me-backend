@@ -59,7 +59,7 @@ class _FakeSubscription:
     email: str = "user@example.com"
     status: str = "active"
     entities: list[str] = field(default_factory=list)
-    company: str | None = None
+    companies: list[str] = field(default_factory=list)
     countries: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     min_severity: str | None = None
@@ -454,6 +454,19 @@ def _mock_session_for_dispatch(
     return session
 
 
+def _make_recall(country: str, entity: str = "testentity") -> _FakeRecall:
+    """A minimal new recall in `country` the guard can group and the matcher can match."""
+    return _FakeRecall(
+        entities=[{"type": "allergen", "value": entity}],
+        company_name=None,
+        country=country,
+        category=VALID_CATEGORIES[0],
+        severity_label=VALID_SEVERITIES[0],
+        report_date=date.today(),
+        recall_initiation_date=None,
+    )
+
+
 def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
     from app.config import settings
     from app.subscriptions import dispatcher
@@ -477,8 +490,10 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
 
     monkeypatch.setattr(dispatcher, "send_digest_email", _must_not_send)
 
-    # First run (last_run_at None) with a batch above the threshold — the 137-style flood.
-    big_batch = [object() for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD + 1)]
+    # First run (last_run_at None), one country's batch above the threshold — the 137-style flood.
+    big_batch = [
+        _make_recall(country="ca") for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD + 1)
+    ]
     session = _mock_session_for_dispatch(recalls=big_batch, subs=[], last_run_at=None)
 
     loop = asyncio.new_event_loop()
@@ -488,11 +503,15 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
         loop.close()
 
     assert result["backfillGuardTripped"] is True
+    assert result["suppressedCountries"] == ["ca"]
+    assert result["suppressedRecalls"] == dispatcher._BACKFILL_GUARD_THRESHOLD + 1
     assert result["sent"] == 0
     # Operator still alerted, with the guard flag and a non-empty errors list.
     assert len(operator_calls) == 1
-    metrics, _recalls, errors = operator_calls[0]
+    metrics, recalls_arg, errors = operator_calls[0]
     assert metrics["backfill_guard_tripped"] is True
+    assert metrics["suppressed_countries"] == ["ca"]
+    assert recalls_arg == [], "suppressed country's recalls must not reach the operator recall list"
     assert errors, "operator digest should carry the guard warning in its errors list"
     # Cursor still advances so the next run returns to normal.
     assert session.get.return_value.last_run_at is not None
@@ -511,7 +530,7 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
     )
 
     # A normal daily delta (at the threshold, not above it) with no subscribers to send to.
-    normal_batch = [object() for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD)]
+    normal_batch = [_make_recall(country="us") for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD)]
     session = _mock_session_for_dispatch(recalls=normal_batch, subs=[], last_run_at=None)
 
     loop = asyncio.new_event_loop()
@@ -521,6 +540,59 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
         loop.close()
 
     assert result["backfillGuardTripped"] is False
+    assert result["suppressedCountries"] == []
+
+
+def test_run_dispatch_backfill_guard_is_per_country(monkeypatch):
+    """A flood in one country is suppressed while another country's recalls still dispatch."""
+    from app.config import settings
+    from app.subscriptions import dispatcher
+
+    monkeypatch.setattr(settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+    monkeypatch.setattr(
+        dispatcher,
+        "send_operator_digest_email",
+        lambda metrics, recalls, errors, messages=None: None,
+    )
+
+    # Record which countries actually reached a subscriber send.
+    sent_countries: list[str] = []
+
+    def _capture_send(sub, matching_recalls):
+        sent_countries.extend(r.country for r in matching_recalls)
+
+    monkeypatch.setattr(dispatcher, "send_digest_email", _capture_send)
+
+    # CA floods (above threshold); US has a single genuine recall the same run.
+    entity = "testentity"
+    ca_flood = [
+        _make_recall(country="ca", entity=entity)
+        for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD + 1)
+    ]
+    us_recall = _make_recall(country="us", entity=entity)
+    # A subscriber to *both* countries — CA should be withheld, US should still arrive.
+    sub = _FakeSubscription(
+        entities=[entity],
+        countries=["us", "ca"],
+        categories=[VALID_CATEGORIES[0]],
+        min_severity=VALID_SEVERITIES[0],
+        last_digest_at=None,
+        confirmed_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    session = _mock_session_for_dispatch(
+        recalls=ca_flood + [us_recall], subs=[sub], last_run_at=None
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(dispatcher.run_dispatch(session))
+    finally:
+        loop.close()
+
+    assert result["suppressedCountries"] == ["ca"]
+    assert result["sent"] == 1  # the subscriber still got their US digest
+    assert sent_countries == ["us"], "only the non-flooded country's recall should be sent"
 
 
 def test_run_dispatch_forwards_contact_messages_to_operator(monkeypatch):
