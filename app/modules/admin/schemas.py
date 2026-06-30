@@ -45,7 +45,9 @@ class RecallCounts(CamelModel):
 
 
 class NullspaceCounts(CamelModel):
-    score_count: int
+    total: int
+    legit: int
+    flagged: int
 
 
 class AdminOverview(CamelModel):
@@ -81,4 +83,32 @@ class SubscriptionAdminOut(CamelModel):
 
 class SubscriptionListResult(CamelModel):
     items: list[SubscriptionAdminOut]
+    total: int
+
+
+class ScoreAdminOut(CamelModel):
+    # Operator view of a Null Space run — fuller than the public ScoreOut: includes the integrity
+    # fields (flagged / flag_reason / ip_address) and the corroborating economy stats, so a
+    # rejected score can be inspected. The public leaderboard never exposes any of these.
+    id: int
+    created_at: datetime
+    name: str
+    score: int
+    kills: int
+    wave: int
+    level: int
+    duration_ms: int
+    ship_kind: str
+    version: str
+    currency: int
+    space_metal: int
+    upgrades_purchased: int
+    ultimates_owned: int
+    ip_address: str | None
+    flagged: bool
+    flag_reason: str | None
+
+
+class ScoreListResult(CamelModel):
+    items: list[ScoreAdminOut]
     total: int

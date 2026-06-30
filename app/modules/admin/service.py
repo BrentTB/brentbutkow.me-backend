@@ -64,7 +64,11 @@ def _recall_counts(session: Session) -> RecallCounts:
 
 
 def _nullspace_counts(session: Session) -> NullspaceCounts:
-    return NullspaceCounts(score_count=session.scalar(select(func.count()).select_from(Score)) or 0)
+    total = session.scalar(select(func.count()).select_from(Score)) or 0
+    flagged = (
+        session.scalar(select(func.count()).select_from(Score).where(Score.flagged.is_(True))) or 0
+    )
+    return NullspaceCounts(total=total, legit=total - flagged, flagged=flagged)
 
 
 def build_overview(session: Session) -> AdminOverview:
@@ -106,6 +110,25 @@ def list_subscriptions(
     items = list(
         session.scalars(
             base.order_by(Subscription.created_at.desc()).limit(limit).offset(offset)
+        ).all()
+    )
+    return items, total
+
+
+def list_scores(
+    session: Session, *, limit: int, offset: int, flagged: bool | None
+) -> tuple[list[Score], int]:
+    # flagged is tri-state: None → all runs, True → only flagged (the rejected-from-leaderboard
+    # ones worth inspecting), False → only the legit scores.
+    base = select(Score)
+    count_q = select(func.count()).select_from(Score)
+    if flagged is not None:
+        base = base.where(Score.flagged.is_(flagged))
+        count_q = count_q.where(Score.flagged.is_(flagged))
+    total = session.scalar(count_q) or 0
+    items = list(
+        session.scalars(
+            base.order_by(Score.created_at.desc(), Score.id.desc()).limit(limit).offset(offset)
         ).all()
     )
     return items, total
