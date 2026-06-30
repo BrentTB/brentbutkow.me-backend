@@ -3,9 +3,10 @@
 [![API status](https://img.shields.io/uptimerobot/status/m803392574-4c73f9eb6ba6700e79132c3e)](https://stats.uptimerobot.com/OrnjJNCLvf)
 
 General-purpose backend for [brentbutkow.me](https://brentbutkow.me). Modular — each feature is a
-self-contained package under `app/modules/`. First module: **Recall Radar**, a US + UK food-recall API
-that ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US) plus UK
-[FSA](https://data.food.gov.uk/food-alerts/) data, categorises it, and serves it to the site.
+self-contained package under `app/modules/`. First module: **Recall Radar**, a multi-country
+food-recall API that ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS
+(US), UK [FSA](https://data.food.gov.uk/food-alerts/), South Africa (NCC + curated seed), and Canada
+([CFIA](https://recalls-rappels.canada.ca/en) food recalls), categorises it, and serves it to the site.
 
 **Stack:** FastAPI · SQLAlchemy 2.0 + Postgres · Pydantic v2 · pytest + ruff. Python is snake_case
 throughout; the API emits **camelCase JSON** via Pydantic aliases.
@@ -40,14 +41,18 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
 | POST | `/recalls/ingest/fsis` | **bearer-only** — fetches USDA FSIS, upserts, records an ingest run |
 | POST | `/recalls/ingest/uk` | **bearer-only** — fetches UK FSA, upserts, records an ingest run |
+| POST | `/recalls/ingest/ncc` | **bearer-only** — crawls the South Africa NCC notices, keeps food recalls, upserts |
+| POST | `/recalls/ingest/seed` | **bearer-only** — upserts the curated SA seed recalls (Woolworths/Shoprite/NRCS) |
+| POST | `/recalls/ingest/cfia` | **bearer-only** — fetches Health Canada's open data, keeps CFIA food recalls, upserts |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
 | POST | `/nullspace/score` | **public**, 10/min per IP — submit a game score; implausible runs are accepted but hidden from the board |
 | GET | `/nullspace/leaderboard?version&limit` | **public** — top scores, highest first; optional `version` scope, `limit` 1–200 |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · contaminant · other`.
-`classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US) · `Product Recall ·
-Allergy Alert · Food Alert for Action` (UK). `country` ∈ `us · uk`; `source` ∈ `fda · usda · uk`.
+`classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US, and CA's Class 1–3
+fold onto Class I–III) · `Product Recall · Allergy Alert · Food Alert for Action` (UK).
+`country` ∈ `us · uk · za · ca`; `source` ∈ `fda · usda · uk · ncc · woolworths · shoprite · nrcs · cfia`.
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
@@ -106,6 +111,7 @@ python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
 python -m scripts.ingest_ncc                 # pull South Africa NCC recall notices (via curl_cffi)
 python -m scripts.ingest_seed                # upsert the curated SA seed recalls (Woolworths/Shoprite/NRCS)
+python -m scripts.ingest_cfia                # pull Canada CFIA food recalls (Health Canada open data)
 python -m scripts.ingest_all                 # run all source ingests, then rebuild analytics + events + stats
 python -m scripts.backfill_fda               # one-time: seed full openFDA history (~26k records)
 python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)

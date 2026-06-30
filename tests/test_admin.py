@@ -98,7 +98,7 @@ def _fake_overview() -> AdminOverview:
             fetched_count=10,
             upserted_count=7,
         ),
-        recalls=RecallCounts(total=100, us=80, uk=15, za=5),
+        recalls=RecallCounts(total=100, us=80, uk=15, za=5, ca=0),
         nullspace=NullspaceCounts(total=42, legit=40, flagged=2),
     )
 

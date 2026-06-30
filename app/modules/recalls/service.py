@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
 
 from app.modules.recalls.anomalies import detect_anomalies
+from app.modules.recalls.cfia_ca import fetch_cfia, normalize_cfia
 from app.modules.recalls.forecast import forecast_series
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
 from app.modules.recalls.fsis import fetch_fsis, normalize_fsis
@@ -62,6 +63,7 @@ _COUNTRY_SOURCES = {
     "us": ("openfda_food", "usda_fsis"),
     "uk": ("uk_fsa",),
     "za": ("ncc_za", "seed_za"),
+    "ca": ("cfia_food",),
 }
 
 # Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
@@ -638,7 +640,7 @@ def rebuild_stats(session: Session) -> dict[str, int]:
     snake-case round-trips).
     """
     now = datetime.now(UTC)
-    countries = list(_COUNTRY_SOURCES)  # the per-country scopes the dashboard requests: us, uk
+    countries = list(_COUNTRY_SOURCES)  # per-country scopes the dashboard requests: us, uk, za, ca
     payloads = {
         country: compute_stats(session, country).model_dump(mode="json") for country in countries
     }
@@ -921,3 +923,8 @@ def run_ncc_ingest(session: Session) -> IngestResult:
 def run_seed_ingest(session: Session) -> IngestResult:
     # Curated SA recalls NCC doesn't carry (Woolworths/Shoprite/NRCS) — see seed_za.py.
     return _run_ingest_job(session, source="seed_za", fetch=fetch_seed, normalize=normalize_seed)
+
+
+def run_cfia_ingest(session: Session) -> IngestResult:
+    # Canada — CFIA food recalls from Health Canada's open-data export (see cfia_ca.py).
+    return _run_ingest_job(session, source="cfia_food", fetch=fetch_cfia, normalize=normalize_cfia)

@@ -548,8 +548,11 @@ def send_operator_digest_email(
     Parameters
     ----------
     metrics:  Dict with keys: new_recall_count, new_message_count, total_active,
-              will_receive_count, skipped_count, stale_pending_count, oldest_last_digest_at.
-    recalls:  All new Recall ORM instances ingested in this run.
+              will_receive_count, skipped_count, stale_pending_count, oldest_last_digest_at, and
+              (when the per-country backfill guard trips) suppressed_recall_count +
+              suppressed_countries.
+    recalls:  The dispatchable new Recall ORM instances this run (guard-suppressed countries are
+              excluded; their counts are reported via the suppressed_* metrics instead).
     errors:   List of ERROR/WARNING message strings collected during the run.
     messages: New (non-spam) contact-form Message instances since the last run.
     """
@@ -566,9 +569,13 @@ def send_operator_digest_email(
     new_count = metrics["new_recall_count"]
     will_receive = metrics["will_receive_count"]
     guard_prefix = "[BACKFILL GUARD] " if metrics.get("backfill_guard_tripped") else ""
+    suppressed_count = metrics.get("suppressed_recall_count", 0)
+    # On a guard trip new_count is the dispatchable-only count, so the subject would understate the
+    # run; surface the held batch alongside it.
+    suppressed_part = f" ({suppressed_count} suppressed)" if suppressed_count else ""
     msg_part = f", {len(messages)} message(s)" if messages else ""
     subject = (
-        f"{guard_prefix}Recall Radar ops: {new_count} new recall(s), "
+        f"{guard_prefix}Recall Radar ops: {new_count} new recall(s){suppressed_part}, "
         f"{will_receive} digest(s) queued{msg_part} \u2014 {today_date}"
     )
 
@@ -593,6 +600,24 @@ def _operator_digest_html(
     oldest_digest = metrics.get("oldest_last_digest_at")
     oldest_str = oldest_digest.isoformat() if oldest_digest else "never"
 
+    # Only shown when the per-country backfill guard held a bulk batch this run, so a normal run's
+    # metrics table is unchanged.
+    suppressed_count = metrics.get("suppressed_recall_count", 0)
+    suppressed_countries = metrics.get("suppressed_countries", [])
+    suppressed_row = (
+        f"""
+        <tr style="background:#fdecea;">
+          <td style="padding:6px 12px 6px 0;font-size:14px;color:#c0392b;">
+            Suppressed (backfill guard)
+          </td>
+          <td style="padding:6px 0;font-size:14px;color:#c0392b;font-weight:bold;">
+            {suppressed_count} &middot; {_html_escape(", ".join(suppressed_countries))}
+          </td>
+        </tr>"""
+        if suppressed_count
+        else ""
+    )
+
     # Metrics table rows
     metrics_rows = f"""
         <tr>
@@ -600,7 +625,7 @@ def _operator_digest_html(
           <td style="padding:6px 0;font-size:14px;color:#1a1a2e;font-weight:bold;">
             {metrics.get("new_recall_count", 0)}
           </td>
-        </tr>
+        </tr>{suppressed_row}
         <tr style="background:#f9f9f9;">
           <td style="padding:6px 12px 6px 0;font-size:14px;color:#444444;">Active subscriptions</td>
           <td style="padding:6px 0;font-size:14px;color:#1a1a2e;font-weight:bold;">

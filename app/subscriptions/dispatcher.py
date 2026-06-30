@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from resend.exceptions import ResendError
@@ -73,11 +74,14 @@ _MESSAGE_COLUMNS = (
 # the batch just ingested.
 _FIRST_RUN_LOOKBACK = timedelta(days=1)
 
-# Backfill circuit breaker. Newness keys off `created_at` (ingest time), so a one-shot backfill,
-# new source, or re-sync that fresh-inserts a big batch would otherwise blast every active
-# subscriber at once. A normal daily delta is a handful of recalls; a run this far above that is a
-# bulk load, not a news day. When tripped we suppress all subscriber sends, alert the operator, and
-# still advance the cursor so the next run returns to normal — the operator decides what to release.
+# Backfill circuit breaker, applied per country. Newness keys off `created_at` (ingest time), so a
+# one-shot backfill, a brand-new country/source, or a re-sync that fresh-inserts a big batch would
+# otherwise blast every active subscriber at once. A normal daily delta is a handful of recalls per
+# country; a country this far above that is a bulk load, not a news day. We suppress only the
+# flooded countries' recalls this run — subscribers to the other countries still get theirs — alert
+# the operator, and still advance the cursor so the next run returns to normal. The operator decides
+# whether to release a held batch. The guard is per-country so seeding one new country (e.g. CA's
+# ~5k-row history) never blocks the genuine US/UK/ZA recalls that landed the same run.
 _BACKFILL_GUARD_THRESHOLD = 50
 
 
@@ -113,10 +117,13 @@ async def run_dispatch(db_session: Session) -> dict:
         logger.warning("Email disabled (no resend_api_key) — dispatch skipped, no state changed.")
         return {
             "newRecalls": 0,
+            "suppressedRecalls": 0,
+            "suppressedCountries": [],
             "activeSubs": 0,
             "sent": 0,
             "skippedCap": 0,
             "errors": 0,
+            "backfillGuardTripped": False,
             "emailDisabled": True,
         }
 
@@ -154,16 +161,24 @@ async def run_dispatch(db_session: Session) -> dict:
     )
     new_messages: list[Message] = list(db_session.scalars(stmt_messages).all())
 
-    # Backfill guard: an abnormally large batch is a bulk load, not a news day. Trip the breaker so
-    # the send loop below is a no-op — the operator still gets a digest (flagged) and the cursor
-    # still advances at the end, so the next run returns to normal.
-    backfill_guard_tripped = len(new_recalls) > _BACKFILL_GUARD_THRESHOLD
-    if backfill_guard_tripped:
+    # Per-country backfill guard: any country whose fresh batch is abnormally large is a bulk load,
+    # not a news day. Suppress only those countries' recalls this run (the rest still dispatch); the
+    # operator still gets a digest (flagged) and the cursor still advances, so next run is normal.
+    # The suppressed batch is NOT auto-re-windowed — once the cursor advances those recalls are no
+    # longer "new", so releasing them to subscribers is a deliberate operator action (rewind
+    # state.last_run_at past them and re-run dispatch).
+    new_by_country: Counter[str] = Counter(recall.country for recall in new_recalls)
+    suppressed_countries = {
+        country for country, count in new_by_country.items() if count > _BACKFILL_GUARD_THRESHOLD
+    }
+    dispatchable_recalls = [r for r in new_recalls if r.country not in suppressed_countries]
+    if suppressed_countries:
         logger.warning(
-            "Backfill guard tripped — %d new recalls exceeds threshold %d. Suppressing all "
-            "subscriber sends this run; operator digest still sent and cursor still advanced.",
-            len(new_recalls),
-            _BACKFILL_GUARD_THRESHOLD,
+            "Backfill guard tripped for %s — suppressing those countries' subscriber sends this "
+            "run (other countries still dispatch); operator digest sent and cursor advanced. "
+            "New-recall counts by country: %s.",
+            ", ".join(sorted(suppressed_countries)),
+            dict(new_by_country),
         )
 
     # ------------------------------------------------------------------
@@ -194,40 +209,41 @@ async def run_dispatch(db_session: Session) -> dict:
         )
     ).scalar_one()
 
-    # Match each subscription against the new recalls once, then reuse for both the metric and the
-    # send loop (the matcher is the per-run hot path — O(subs × recalls)).
-    # When the backfill guard is tripped, leave sub_matches empty so the send loop is a no-op.
-    sub_matches: list[tuple[Subscription, list[Recall]]] = (
-        []
-        if backfill_guard_tripped
-        else [(sub, [r for r in new_recalls if recall_matches(r, sub)]) for sub in active_subs]
-    )
+    # Match each subscription against the dispatchable recalls once, then reuse for both the metric
+    # and the send loop (the matcher is the per-run hot path — O(subs × recalls)). Suppressed
+    # countries are already excluded from dispatchable_recalls, so a flooded country simply produces
+    # no matches and sends nothing.
+    sub_matches: list[tuple[Subscription, list[Recall]]] = [
+        (sub, [r for r in dispatchable_recalls if recall_matches(r, sub)]) for sub in active_subs
+    ]
     will_receive_count = sum(1 for _, matches in sub_matches if matches)
+    suppressed_recall_count = len(new_recalls) - len(dispatchable_recalls)
 
     metrics = {
-        "new_recall_count": len(new_recalls),
+        # `new_recall_count` is the dispatchable count (what the digest list reflects); the held
+        # bulk is reported separately so the two never silently disagree.
+        "new_recall_count": len(dispatchable_recalls),
+        "suppressed_recall_count": suppressed_recall_count,
+        "suppressed_countries": sorted(suppressed_countries),
         "new_message_count": len(new_messages),
         "total_active": len(active_subs),
         "will_receive_count": will_receive_count,
         "skipped_count": 0,  # updated during the send loop
         "stale_pending_count": stale_pending_count_row,
         "oldest_last_digest_at": oldest_last_digest_at,
-        "backfill_guard_tripped": backfill_guard_tripped,
+        "backfill_guard_tripped": bool(suppressed_countries),
     }
 
     # ------------------------------------------------------------------
     # 4. Send operator digest email first
     # ------------------------------------------------------------------
-    # Surface a tripped guard in the operator email's errors section so it can't be missed.
-    operator_errors = (
-        [
-            f"Backfill guard tripped: {len(new_recalls)} new recalls exceeds threshold "
-            f"{_BACKFILL_GUARD_THRESHOLD}. All subscriber digests were suppressed this run — "
-            f"review the batch and dispatch manually if it is legitimate.",
-        ]
-        if backfill_guard_tripped
-        else []
-    )
+    # Surface any tripped country in the operator email's errors section so it can't be missed.
+    operator_errors = [
+        f"Backfill guard tripped for '{country}': {new_by_country[country]} new recalls exceeds "
+        f"threshold {_BACKFILL_GUARD_THRESHOLD}. That country's digests were suppressed this run — "
+        f"review the batch and dispatch manually if it is legitimate."
+        for country in sorted(suppressed_countries)
+    ]
     operator_email = (settings.operator_email or "").strip()
     if not operator_email:
         logger.warning("operator_email is not set — operator digest will not be sent.")
@@ -236,7 +252,7 @@ async def run_dispatch(db_session: Session) -> dict:
             await asyncio.to_thread(
                 send_operator_digest_email,
                 metrics,
-                new_recalls,
+                dispatchable_recalls,
                 operator_errors,
                 new_messages,
             )
@@ -331,21 +347,24 @@ async def run_dispatch(db_session: Session) -> dict:
     # 7. Summary log
     # ------------------------------------------------------------------
     logger.info(
-        "Dispatch complete — new_recalls=%d active_subs=%d sent=%d skipped_cap=%d errors=%d "
-        "backfill_guard=%s",
-        len(new_recalls),
+        "Dispatch complete — dispatchable=%d suppressed=%d active_subs=%d sent=%d skipped_cap=%d "
+        "errors=%d suppressed_countries=%s",
+        len(dispatchable_recalls),
+        suppressed_recall_count,
         len(active_subs),
         sent_count,
         skipped_cap_count,
         error_count,
-        backfill_guard_tripped,
+        sorted(suppressed_countries),
     )
 
     return {
-        "newRecalls": len(new_recalls),
+        "newRecalls": len(dispatchable_recalls),
+        "suppressedRecalls": suppressed_recall_count,
+        "suppressedCountries": sorted(suppressed_countries),
         "activeSubs": len(active_subs),
         "sent": sent_count,
         "skippedCap": skipped_cap_count,
         "errors": error_count,
-        "backfillGuardTripped": backfill_guard_tripped,
+        "backfillGuardTripped": bool(suppressed_countries),
     }

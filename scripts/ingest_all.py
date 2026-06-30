@@ -6,6 +6,7 @@ from app.modules.recalls.events import rebuild_events
 from app.modules.recalls.schemas import IngestResult
 from app.modules.recalls.service import (
     rebuild_stats,
+    run_cfia_ingest,
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
@@ -20,6 +21,7 @@ _INGESTS: tuple[tuple[str, Callable[..., IngestResult]], ...] = (
     ("UK FSA", run_uk_ingest),
     ("NCC", run_ncc_ingest),
     ("Seed ZA", run_seed_ingest),
+    ("CFIA", run_cfia_ingest),
 )
 
 
