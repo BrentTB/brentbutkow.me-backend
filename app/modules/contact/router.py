@@ -4,11 +4,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.auth import require_bearer
 from app.db import get_session
-from app.modules.contact.models import Message
-from app.modules.contact.schemas import ContactResult, ContactSubmission, MessageOut
-from app.modules.contact.service import create_message, list_messages
+from app.modules.contact.schemas import ContactResult, ContactSubmission
+from app.modules.contact.service import create_message
 from app.rate_limit import client_ip, limiter
 
 router = APIRouter()
@@ -70,15 +68,3 @@ def submit_contact(
         bool(submission.email),
     )
     return ContactResult(status="ok")
-
-
-@router.get(
-    "",
-    response_model=list[MessageOut],
-    summary="List contact messages",
-    description="Bearer-protected — stored messages, newest first.",
-    dependencies=[Depends(require_bearer)],
-    responses={401: {"description": "Missing or invalid bearer token."}},
-)
-def get_messages(session: Session = Depends(get_session)) -> list[Message]:
-    return list_messages(session)

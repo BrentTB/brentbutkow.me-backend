@@ -37,22 +37,24 @@ def _count(session, **where):
     return session.scalar(stmt)
 
 
+def _messages(session):
+    # Newest first — enough to inspect what survived a prune in these tests.
+    return list(
+        session.scalars(
+            select(Message).order_by(Message.created_at.desc(), Message.id.desc())
+        ).all()
+    )
+
+
 def test_create_message_persists_and_defaults(session):
     saved = _store(session, "Hello", ip_address="1.2.3.4", user_agent="UA")
     assert saved.id is not None
     assert saved.is_bot is False
-    rows = service.list_messages(session)
+    rows = _messages(session)
     assert len(rows) == 1
     assert rows[0].message == "Hello"
     assert rows[0].ip_address == "1.2.3.4"
     assert rows[0].user_agent == "UA"
-
-
-def test_list_messages_newest_first_and_capped(session, monkeypatch):
-    monkeypatch.setattr(service, "_LIST_LIMIT", 3)
-    for i in range(5):
-        _store(session, f"msg {i}")
-    assert [m.message for m in service.list_messages(session)] == ["msg 4", "msg 3", "msg 2"]
 
 
 def test_prune_caps_total_messages(session, monkeypatch):
@@ -60,7 +62,7 @@ def test_prune_caps_total_messages(session, monkeypatch):
     for i in range(5):
         _store(session, f"msg {i}")
     assert _count(session) == 3
-    assert [m.message for m in service.list_messages(session)] == ["msg 4", "msg 3", "msg 2"]
+    assert [m.message for m in _messages(session)] == ["msg 4", "msg 3", "msg 2"]
 
 
 def test_prune_caps_bot_messages_without_touching_real_ones(session, monkeypatch):
@@ -82,7 +84,7 @@ def test_total_cap_evicts_oldest_bot_before_any_real_message(session, monkeypatc
     _store(session, "real 2")  # over the cap → oldest bot is evicted, no real message touched
     assert _count(session) == 4
     assert _count(session, is_bot=False) == 3  # every real message survives
-    survivors = {m.message for m in service.list_messages(session)}
+    survivors = {m.message for m in _messages(session)}
     assert "bot 0" not in survivors  # oldest bot went first
     assert "bot 1" in survivors
 
@@ -96,4 +98,4 @@ def test_total_cap_falls_back_to_real_messages_once_no_bots_left(session, monkey
     assert _count(session, is_bot=True) == 0
     _store(session, "real 2")  # over again, no bots left → oldest real message evicted
     assert _count(session) == 2
-    assert {m.message for m in service.list_messages(session)} == {"real 1", "real 2"}
+    assert {m.message for m in _messages(session)} == {"real 1", "real 2"}

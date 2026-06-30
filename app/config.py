@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     # Shared secret guarding POST /internal/dispatch-alerts (the daily digest trigger). Absent →
     # the endpoint rejects every caller, so a missing secret fails closed rather than open.
     internal_dispatch_token: str | None = None
+    # Master secret for the operator admin API (POST /admin/login). Absent → admin login rejects
+    # everyone, so a missing secret fails closed rather than open (like internal_dispatch_token).
+    # The session-token signing key is derived from it, so changing it invalidates live sessions.
+    admin_password: str | None = None
+    # Lifetime of an issued admin session token, in seconds (default 24h). Plain config, not a
+    # secret — the login password is exchanged for a token that expires after this window.
+    admin_session_ttl_seconds: int = 86400
     # Email delivery (Resend). resend_api_key absent → email sending is disabled (dev default):
     # subscriptions still work, confirmation/digest emails are skipped. operator_email absent →
     # the operator digest is skipped.
