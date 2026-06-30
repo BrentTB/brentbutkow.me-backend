@@ -2,7 +2,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, tuple_
+from sqlalchemy import delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
@@ -220,8 +220,15 @@ def _recall_conditions(
     if until:
         conditions.append(Recall.report_date <= until)
     if search and search.strip():
+        term = search.strip()
+        # Match either way: full-text search (whole-lexeme, good word/relevance matching) OR a
+        # trigram substring match (catches partial UPCs, codes, and word fragments tsvector misses,
+        # e.g. "882479" inside a 12-digit UPC). The ILIKE is backed by the pg_trgm GIN index.
         conditions.append(
-            Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search.strip()))
+            or_(
+                Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", term)),
+                Recall.search_text.ilike(f"%{term}%"),
+            )
         )
     return conditions
 
