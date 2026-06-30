@@ -432,8 +432,10 @@ def test_run_dispatch_skips_when_email_disabled(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _mock_session_for_dispatch(recalls: list, subs: list, last_run_at):
-    """Build a MagicMock Session that feeds run_dispatch a recall batch and subscription list."""
+def _mock_session_for_dispatch(
+    recalls: list, subs: list, last_run_at, messages: list | None = None
+):
+    """Build a MagicMock Session that feeds run_dispatch a recall batch, message batch, and subs."""
     from types import SimpleNamespace
 
     session = MagicMock()
@@ -441,10 +443,12 @@ def _mock_session_for_dispatch(recalls: list, subs: list, last_run_at):
 
     recalls_scalar = MagicMock()
     recalls_scalar.all.return_value = recalls
+    messages_scalar = MagicMock()
+    messages_scalar.all.return_value = messages or []
     subs_scalar = MagicMock()
     subs_scalar.all.return_value = subs
-    # run_dispatch calls scalars() twice: first for recalls, then for subscriptions.
-    session.scalars.side_effect = [recalls_scalar, subs_scalar]
+    # run_dispatch calls scalars() three times: recalls, then messages, then subscriptions.
+    session.scalars.side_effect = [recalls_scalar, messages_scalar, subs_scalar]
     # Stale-pending and oldest-last-digest metrics — values are irrelevant here.
     session.execute.return_value.scalar_one.return_value = 0
     return session
@@ -462,7 +466,9 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
     monkeypatch.setattr(
         dispatcher,
         "send_operator_digest_email",
-        lambda metrics, recalls, errors: operator_calls.append((metrics, recalls, errors)),
+        lambda metrics, recalls, errors, messages=None: operator_calls.append(
+            (metrics, recalls, errors)
+        ),
     )
 
     # Any subscriber send while the guard is tripped is a bug.
@@ -499,7 +505,9 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
     monkeypatch.setattr(settings, "resend_api_key", "test-key")
     monkeypatch.setattr(settings, "operator_email", "ops@example.com")
     monkeypatch.setattr(
-        dispatcher, "send_operator_digest_email", lambda metrics, recalls, errors: None
+        dispatcher,
+        "send_operator_digest_email",
+        lambda metrics, recalls, errors, messages=None: None,
     )
 
     # A normal daily delta (at the threshold, not above it) with no subscribers to send to.
@@ -513,3 +521,32 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
         loop.close()
 
     assert result["backfillGuardTripped"] is False
+
+
+def test_run_dispatch_forwards_contact_messages_to_operator(monkeypatch):
+    from app.config import settings
+    from app.subscriptions import dispatcher
+
+    monkeypatch.setattr(settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        dispatcher,
+        "send_operator_digest_email",
+        lambda metrics, recalls, errors, messages=None: captured.update(
+            messages=messages, count=metrics.get("new_message_count")
+        ),
+    )
+
+    msgs = [object(), object()]  # opaque — run_dispatch only counts and forwards them
+    session = _mock_session_for_dispatch(recalls=[], subs=[], last_run_at=None, messages=msgs)
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(dispatcher.run_dispatch(session))
+    finally:
+        loop.close()
+
+    assert captured["messages"] == msgs
+    assert captured["count"] == 2

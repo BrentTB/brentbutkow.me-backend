@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
 from app.camel import CamelModel
 from app.modules.contact.schemas import MessageOut
+from app.subscriptions.schemas import SubscriptionPatch
 
 
 class AdminLoginRequest(CamelModel):
@@ -84,6 +86,13 @@ class SubscriptionAdminOut(CamelModel):
 class SubscriptionListResult(CamelModel):
     items: list[SubscriptionAdminOut]
     total: int
+
+
+class AdminSubscriptionUpdate(SubscriptionPatch):
+    # Inherits the filter fields + their validators from SubscriptionPatch (all optional, partial
+    # update). Adds operator-only status control: revoke (unsubscribed), suspend (paused), or
+    # reactivate (active). pending_confirmation is opt-in lifecycle, not an admin action.
+    status: Literal["active", "paused", "unsubscribed"] | None = None
 
 
 class ScoreAdminOut(CamelModel):

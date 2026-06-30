@@ -1,4 +1,5 @@
 import hmac
+import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -12,6 +13,7 @@ from app.modules.admin.schemas import (
     AdminLoginRequest,
     AdminLoginResult,
     AdminOverview,
+    AdminSubscriptionUpdate,
     MessageListResult,
     MessageOut,
     ScoreAdminOut,
@@ -104,6 +106,26 @@ def subscriptions(
     return SubscriptionListResult(
         items=[SubscriptionAdminOut.model_validate(s) for s in items], total=total
     )
+
+
+@router.patch(
+    "/subscriptions/{subscription_id}",
+    response_model=SubscriptionAdminOut,
+    summary="Edit a subscription",
+    description="Revoke (unsubscribed), suspend (paused), reactivate (active), and/or edit filter "
+    "criteria. Applied directly — no subscriber confirmation.",
+    dependencies=[Depends(require_admin)],
+    responses={**_UNAUTHORIZED, 404: {"description": "Subscription not found."}},
+)
+def edit_subscription(
+    subscription_id: uuid.UUID,
+    body: AdminSubscriptionUpdate,
+    session: Session = Depends(get_session),
+) -> SubscriptionAdminOut:
+    row = service.update_subscription(session, subscription_id, body)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+    return SubscriptionAdminOut.model_validate(row)
 
 
 @router.get(
