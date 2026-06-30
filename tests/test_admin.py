@@ -97,7 +97,7 @@ def _fake_overview() -> AdminOverview:
             upserted_count=7,
         ),
         recalls=RecallCounts(total=100, us=80, uk=15, za=5),
-        nullspace=NullspaceCounts(score_count=42),
+        nullspace=NullspaceCounts(total=42, legit=40, flagged=2),
     )
 
 
@@ -109,7 +109,7 @@ def test_overview_returns_summary(monkeypatch):
     assert body["messages"] == {"total": 3, "real": 2, "bot": 1}
     assert body["subscriptions"]["active"] == 4
     assert body["recalls"]["us"] == 80
-    assert body["nullspace"]["scoreCount"] == 42
+    assert body["nullspace"] == {"total": 42, "legit": 40, "flagged": 2}
 
 
 def test_messages_maps_rows_and_total(monkeypatch):
@@ -168,6 +168,52 @@ def test_subscriptions_accepts_valid_status(monkeypatch):
     res = client.get("/admin/subscriptions?status=active", headers=_auth_header())
     assert res.status_code == 200
     assert captured["status"] == "active"
+
+
+def test_nullspace_maps_rows_and_total(monkeypatch):
+    row = SimpleNamespace(
+        id=7,
+        created_at=datetime(2026, 6, 30, tzinfo=UTC),
+        name="Hacker",
+        score=999999,
+        kills=1,
+        wave=1,
+        level=1,
+        duration_ms=1000,
+        ship_kind="fighter",
+        version="1.0.0",
+        currency=0,
+        space_metal=0,
+        upgrades_purchased=0,
+        ultimates_owned=0,
+        ip_address="9.9.9.9",
+        flagged=True,
+        flag_reason="score-exceeds-kills",
+    )
+    monkeypatch.setattr(admin_service, "list_scores", lambda session, **kw: ([row], 1))
+    res = client.get("/admin/nullspace", headers=_auth_header())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] == 1
+    assert body["items"][0]["flagged"] is True
+    assert body["items"][0]["flagReason"] == "score-exceeds-kills"
+
+
+def test_nullspace_forwards_flagged_filter(monkeypatch):
+    captured: dict = {}
+
+    def fake(session, **kw):
+        captured.update(kw)
+        return [], 0
+
+    monkeypatch.setattr(admin_service, "list_scores", fake)
+    res = client.get("/admin/nullspace?flagged=true&limit=5", headers=_auth_header())
+    assert res.status_code == 200
+    assert captured == {"limit": 5, "offset": 0, "flagged": True}
+
+
+def test_nullspace_requires_token():
+    assert client.get("/admin/nullspace").status_code == 401
 
 
 # --- rate limiting -----------------------------------------------------------

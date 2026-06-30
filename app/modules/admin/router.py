@@ -14,6 +14,8 @@ from app.modules.admin.schemas import (
     AdminOverview,
     MessageListResult,
     MessageOut,
+    ScoreAdminOut,
+    ScoreListResult,
     SubscriptionAdminOut,
     SubscriptionListResult,
 )
@@ -102,3 +104,21 @@ def subscriptions(
     return SubscriptionListResult(
         items=[SubscriptionAdminOut.model_validate(s) for s in items], total=total
     )
+
+
+@router.get(
+    "/nullspace",
+    response_model=ScoreListResult,
+    summary="List Null Space scores",
+    description="Paginated, newest first. Filter by flagged status (omit for all runs).",
+    dependencies=[Depends(require_admin)],
+    responses=_UNAUTHORIZED,
+)
+def nullspace(
+    session: Session = Depends(get_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    flagged: bool | None = Query(default=None),
+) -> ScoreListResult:
+    items, total = service.list_scores(session, limit=limit, offset=offset, flagged=flagged)
+    return ScoreListResult(items=[ScoreAdminOut.model_validate(s) for s in items], total=total)
