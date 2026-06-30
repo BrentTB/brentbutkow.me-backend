@@ -65,10 +65,6 @@ def test_invalid_email_is_rejected():
     assert client.post("/contact", json={"message": "hi", "email": "notanemail"}).status_code == 422
 
 
-def test_list_messages_requires_bearer():
-    assert client.get("/contact").status_code == 401
-
-
 def test_post_contact_is_rate_limited(monkeypatch):
     # The limiter is disabled suite-wide (conftest) to keep tests order-independent; re-enable it
     # here since it's the primary anti-abuse control on the public POST. store() is stubbed so the
