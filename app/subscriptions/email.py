@@ -561,8 +561,9 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
     today_date = datetime.now(UTC).date().isoformat()
     new_count = metrics["new_recall_count"]
     will_receive = metrics["will_receive_count"]
+    guard_prefix = "[BACKFILL GUARD] " if metrics.get("backfill_guard_tripped") else ""
     subject = (
-        f"Recall Radar ops: {new_count} new recall(s), "
+        f"{guard_prefix}Recall Radar ops: {new_count} new recall(s), "
         f"{will_receive} digest(s) queued \u2014 {today_date}"
     )
 
