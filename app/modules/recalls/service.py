@@ -213,13 +213,16 @@ def _recall_conditions(
         conditions.append(Recall.report_date <= until)
     if search and search.strip():
         term = search.strip()
+        # Escape LIKE metacharacters so a user's literal % or _ matches literally instead of acting
+        # as a wildcard (the term is already bound, so this is correctness, not injection safety).
+        like_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         # Match either way: full-text search (whole-lexeme, good word/relevance matching) OR a
         # trigram substring match (catches partial UPCs, codes, and word fragments tsvector misses,
         # e.g. "882479" inside a 12-digit UPC). The ILIKE is backed by the pg_trgm GIN index.
         conditions.append(
             or_(
                 Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", term)),
-                Recall.search_text.ilike(f"%{term}%"),
+                Recall.search_text.ilike(f"%{like_term}%", escape="\\"),
             )
         )
     return conditions

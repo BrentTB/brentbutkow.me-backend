@@ -352,6 +352,28 @@ def test_list_recalls_full_text_search_ranks_and_is_injection_safe(session, monk
     assert service.list_recalls(session, limit=50, offset=0, search="   ").total == 3
 
 
+def test_list_recalls_substring_search_matches_fragments_tsvector_misses(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            _record("F-1", product_description="frozen spinach UPC 882479852232"),
+            _record("F-2", product_description="peanut butter UPC 100000000001"),
+            # 50% literal — the % must match literally, not as a LIKE wildcard.
+            _record("F-3", product_description="juice 50% off promo"),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    # A digit fragment inside a 12-digit UPC: tsvector's whole-lexeme @@ never matches it, but the
+    # trigram ILIKE substring path does. This is the behavior the trigram column was added for.
+    partial = service.list_recalls(session, limit=50, offset=0, search="882479")
+    assert {i.recall_number for i in partial.items} == {"F-1"}
+
+    # A literal % is escaped, so it matches the "50%" row only — not every row as a wildcard would.
+    pct = service.list_recalls(session, limit=50, offset=0, search="50%")
+    assert {i.recall_number for i in pct.items} == {"F-3"}
+
+
 def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
