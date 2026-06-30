@@ -63,6 +63,13 @@ _RECALL_COLUMNS = (
 # the batch just ingested.
 _FIRST_RUN_LOOKBACK = timedelta(days=1)
 
+# Backfill circuit breaker. Newness keys off `created_at` (ingest time), so a one-shot backfill,
+# new source, or re-sync that fresh-inserts a big batch would otherwise blast every active
+# subscriber at once. A normal daily delta is a handful of recalls; a run this far above that is a
+# bulk load, not a news day. When tripped we suppress all subscriber sends, alert the operator, and
+# still advance the cursor so the next run returns to normal — the operator decides what to release.
+_BACKFILL_GUARD_THRESHOLD = 50
+
 
 def _load_dispatch_state(db_session: Session) -> DispatchState:
     """Fetch the singleton dispatch_state row (id=1), creating it on first ever run."""
@@ -122,6 +129,18 @@ async def run_dispatch(db_session: Session) -> dict:
     stmt_recalls = stmt_recalls.options(load_only(*_RECALL_COLUMNS))
     new_recalls: list[Recall] = list(db_session.scalars(stmt_recalls).all())
 
+    # Backfill guard: an abnormally large batch is a bulk load, not a news day. Trip the breaker so
+    # the send loop below is a no-op — the operator still gets a digest (flagged) and the cursor
+    # still advances at the end, so the next run returns to normal.
+    backfill_guard_tripped = len(new_recalls) > _BACKFILL_GUARD_THRESHOLD
+    if backfill_guard_tripped:
+        logger.warning(
+            "Backfill guard tripped — %d new recalls exceeds threshold %d. Suppressing all "
+            "subscriber sends this run; operator digest still sent and cursor still advanced.",
+            len(new_recalls),
+            _BACKFILL_GUARD_THRESHOLD,
+        )
+
     # ------------------------------------------------------------------
     # 2. Load all active subscriptions ordered by confirmed_at ASC
     # ------------------------------------------------------------------
@@ -152,9 +171,12 @@ async def run_dispatch(db_session: Session) -> dict:
 
     # Match each subscription against the new recalls once, then reuse for both the metric and the
     # send loop (the matcher is the per-run hot path — O(subs × recalls)).
-    sub_matches: list[tuple[Subscription, list[Recall]]] = [
-        (sub, [r for r in new_recalls if recall_matches(r, sub)]) for sub in active_subs
-    ]
+    # When the backfill guard is tripped, leave sub_matches empty so the send loop is a no-op.
+    sub_matches: list[tuple[Subscription, list[Recall]]] = (
+        []
+        if backfill_guard_tripped
+        else [(sub, [r for r in new_recalls if recall_matches(r, sub)]) for sub in active_subs]
+    )
     will_receive_count = sum(1 for _, matches in sub_matches if matches)
 
     metrics = {
@@ -164,11 +186,22 @@ async def run_dispatch(db_session: Session) -> dict:
         "skipped_count": 0,  # updated during the send loop
         "stale_pending_count": stale_pending_count_row,
         "oldest_last_digest_at": oldest_last_digest_at,
+        "backfill_guard_tripped": backfill_guard_tripped,
     }
 
     # ------------------------------------------------------------------
     # 4. Send operator digest email first
     # ------------------------------------------------------------------
+    # Surface a tripped guard in the operator email's errors section so it can't be missed.
+    operator_errors = (
+        [
+            f"Backfill guard tripped: {len(new_recalls)} new recalls exceeds threshold "
+            f"{_BACKFILL_GUARD_THRESHOLD}. All subscriber digests were suppressed this run — "
+            f"review the batch and dispatch manually if it is legitimate.",
+        ]
+        if backfill_guard_tripped
+        else []
+    )
     operator_email = (settings.operator_email or "").strip()
     if not operator_email:
         logger.warning("operator_email is not set — operator digest will not be sent.")
@@ -178,7 +211,7 @@ async def run_dispatch(db_session: Session) -> dict:
                 send_operator_digest_email,
                 metrics,
                 new_recalls,
-                [],  # errors list — populated later; send an empty list now
+                operator_errors,
             )
         except Exception as exc:
             logger.error("Failed to send operator digest email: %s", exc)
@@ -271,12 +304,14 @@ async def run_dispatch(db_session: Session) -> dict:
     # 7. Summary log
     # ------------------------------------------------------------------
     logger.info(
-        "Dispatch complete — new_recalls=%d active_subs=%d sent=%d skipped_cap=%d errors=%d",
+        "Dispatch complete — new_recalls=%d active_subs=%d sent=%d skipped_cap=%d errors=%d "
+        "backfill_guard=%s",
         len(new_recalls),
         len(active_subs),
         sent_count,
         skipped_cap_count,
         error_count,
+        backfill_guard_tripped,
     )
 
     return {
@@ -285,4 +320,5 @@ async def run_dispatch(db_session: Session) -> dict:
         "sent": sent_count,
         "skippedCap": skipped_cap_count,
         "errors": error_count,
+        "backfillGuardTripped": backfill_guard_tripped,
     }
