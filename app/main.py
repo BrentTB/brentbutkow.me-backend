@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from app.config import settings
 from app.db import engine
 from app.internal.router import router as internal_router
+from app.modules.admin.router import router as admin_router
 from app.modules.contact.router import router as contact_router
 from app.modules.nullspace.router import router as nullspace_router
 from app.modules.recalls.router import router as recalls_router
@@ -43,6 +44,7 @@ OPENAPI_TAGS = [
         "description": "Recall alert subscriptions: create, confirm, manage, unsubscribe.",
     },
     {"name": "internal", "description": "Internal job triggers (ingest-driven alert dispatch)."},
+    {"name": "admin", "description": "Operator admin API (session-token protected)."},
     {"name": "system", "description": "Operational endpoints (liveness)."},
 ]
 
@@ -93,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(nullspace_router, prefix="/nullspace", tags=["nullspace"])
     app.include_router(subscriptions_router, prefix="/subscriptions", tags=["subscriptions"])
     app.include_router(internal_router, prefix="/internal", tags=["internal"])
+    app.include_router(admin_router, prefix="/admin", tags=["admin"])
     return app
 
 
