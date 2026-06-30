@@ -28,6 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, load_only
 
 from app.config import settings
+from app.modules.contact.models import Message
 from app.modules.recalls.models import Recall
 from app.subscriptions.email import (
     email_disabled,
@@ -129,6 +130,20 @@ async def run_dispatch(db_session: Session) -> dict:
     stmt_recalls = stmt_recalls.options(load_only(*_RECALL_COLUMNS))
     new_recalls: list[Recall] = list(db_session.scalars(stmt_recalls).all())
 
+    # ------------------------------------------------------------------
+    # 1b. Load new contact-form messages since the last run
+    # ------------------------------------------------------------------
+    # Folded into the operator digest rather than emailed per-message, so a burst of submissions
+    # can't spam the inbox or burn the free-tier send budget. Spam (is_bot) is excluded here — the
+    # admin console still surfaces it. Same cursor window as recalls.
+    msg_cutoff = (datetime.now(UTC) - _FIRST_RUN_LOOKBACK) if last_run_at is None else last_run_at
+    stmt_messages = (
+        select(Message)
+        .where(Message.is_bot.is_(False), Message.created_at > msg_cutoff)
+        .order_by(Message.created_at.asc())
+    )
+    new_messages: list[Message] = list(db_session.scalars(stmt_messages).all())
+
     # Backfill guard: an abnormally large batch is a bulk load, not a news day. Trip the breaker so
     # the send loop below is a no-op — the operator still gets a digest (flagged) and the cursor
     # still advances at the end, so the next run returns to normal.
@@ -181,6 +196,7 @@ async def run_dispatch(db_session: Session) -> dict:
 
     metrics = {
         "new_recall_count": len(new_recalls),
+        "new_message_count": len(new_messages),
         "total_active": len(active_subs),
         "will_receive_count": will_receive_count,
         "skipped_count": 0,  # updated during the send loop
@@ -212,6 +228,7 @@ async def run_dispatch(db_session: Session) -> dict:
                 metrics,
                 new_recalls,
                 operator_errors,
+                new_messages,
             )
         except Exception as exc:
             logger.error("Failed to send operator digest email: %s", exc)

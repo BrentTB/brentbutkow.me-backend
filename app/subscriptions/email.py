@@ -536,7 +536,9 @@ def _recall_card(recall) -> str:
 # ---------------------------------------------------------------------------
 
 
-def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) -> None:
+def send_operator_digest_email(
+    metrics: dict, recalls: list, errors: list[str], messages: list | None = None
+) -> None:
     """
     Send the operator summary email.
 
@@ -545,10 +547,11 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
 
     Parameters
     ----------
-    metrics:  Dict with keys: new_recall_count, total_active, will_receive_count,
-              skipped_count, stale_pending_count, oldest_last_digest_at.
+    metrics:  Dict with keys: new_recall_count, new_message_count, total_active,
+              will_receive_count, skipped_count, stale_pending_count, oldest_last_digest_at.
     recalls:  All new Recall ORM instances ingested in this run.
     errors:   List of ERROR/WARNING message strings collected during the run.
+    messages: New (non-spam) contact-form Message instances since the last run.
     """
     if email_disabled():
         return
@@ -558,16 +561,18 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
         logger.warning("operator_email is not set — operator digest will not be sent.")
         return
 
+    messages = messages or []
     today_date = datetime.now(UTC).date().isoformat()
     new_count = metrics["new_recall_count"]
     will_receive = metrics["will_receive_count"]
     guard_prefix = "[BACKFILL GUARD] " if metrics.get("backfill_guard_tripped") else ""
+    msg_part = f", {len(messages)} message(s)" if messages else ""
     subject = (
         f"{guard_prefix}Recall Radar ops: {new_count} new recall(s), "
-        f"{will_receive} digest(s) queued \u2014 {today_date}"
+        f"{will_receive} digest(s) queued{msg_part} \u2014 {today_date}"
     )
 
-    html = _operator_digest_html(metrics=metrics, recalls=recalls, errors=errors)
+    html = _operator_digest_html(metrics=metrics, recalls=recalls, errors=errors, messages=messages)
 
     resend.Emails.send(
         {
@@ -579,7 +584,10 @@ def send_operator_digest_email(metrics: dict, recalls: list, errors: list[str]) 
     )
 
 
-def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> str:
+def _operator_digest_html(
+    metrics: dict, recalls: list, errors: list[str], messages: list | None = None
+) -> str:
+    messages = messages or []
     run_timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     oldest_digest = metrics.get("oldest_last_digest_at")
@@ -626,6 +634,14 @@ def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> st
           <td style="padding:6px 0;font-size:14px;color:#1a1a2e;font-weight:bold;">
             {oldest_str}
           </td>
+        </tr>
+        <tr>
+          <td style="padding:6px 12px 6px 0;font-size:14px;color:#444444;">
+            Contact messages this run
+          </td>
+          <td style="padding:6px 0;font-size:14px;color:#1a1a2e;font-weight:bold;">
+            {metrics.get("new_message_count", 0)}
+          </td>
         </tr>"""
 
     # Errors / warnings section
@@ -649,6 +665,11 @@ def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> st
     # Full recall list
     recall_items = "".join(_operator_recall_row(r) for r in recalls) or (
         '<p style="font-size:14px;color:#888888;margin:0;">No new recalls this run.</p>'
+    )
+
+    # Contact-form messages (spam already filtered out upstream)
+    message_items = "".join(_operator_message_row(m) for m in messages) or (
+        '<p style="font-size:14px;color:#888888;margin:0;">No new messages this run.</p>'
     )
 
     return f"""<!DOCTYPE html>
@@ -701,6 +722,21 @@ def _operator_digest_html(metrics: dict, recalls: list, errors: list[str]) -> st
             </td>
           </tr>
 
+          <!-- Contact messages -->
+          <tr>
+            <td style="padding:20px 32px 0 32px;">
+              <h2 style="font-size:18px;color:#1a1a2e;margin:0 0 12px 0;">Contact messages</h2>
+              {message_items}
+            </td>
+          </tr>
+
+          <!-- Divider -->
+          <tr>
+            <td style="padding:20px 32px 0 32px;">
+              <hr style="border:none;border-top:1px solid #e8e8e8;margin:0;">
+            </td>
+          </tr>
+
           <!-- All new recalls -->
           <tr>
             <td style="padding:20px 32px 32px 32px;">
@@ -735,6 +771,21 @@ def _operator_recall_row(recall) -> str:
         f'<a href="{source_url}" style="color:#1a1a2e;text-decoration:underline;">'
         f"{source_url}"
         f"</a>"
+        f"</div>"
+    )
+
+
+def _operator_message_row(message) -> str:
+    # Every field is visitor-supplied — escape all of them before interpolation.
+    name = _html_escape(message.name) if message.name else "Anonymous"
+    sender_email = _html_escape(message.email) if message.email else "no email"
+    when = message.created_at.strftime("%Y-%m-%d %H:%M UTC") if message.created_at else ""
+    body = _html_escape(message.message).replace("\n", "<br>")
+    return (
+        f'<div style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:13px;color:#333333;">'
+        f"<strong>{name}</strong> &middot; {sender_email} &middot; {when}"
+        f"<br>"
+        f'<span style="color:#555555;">{body}</span>'
         f"</div>"
     )
 

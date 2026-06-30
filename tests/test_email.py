@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,46 @@ def test_digest_html_escapes_recall_and_skipped_dates():
     # The skipped-date notice is escaped too.
     assert "<evil>" not in html
     assert "&lt;evil&gt;" in html
+
+
+def _message(**overrides) -> SimpleNamespace:
+    base = {
+        "name": "Ada",
+        "email": "ada@example.com",
+        "message": "Hello there",
+        "created_at": datetime(2026, 6, 30, 9, 30, tzinfo=UTC),
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_operator_message_row_escapes_visitor_fields():
+    row = email_module._operator_message_row(
+        _message(name="<b>x</b>", email="a&b@e.com", message="<script>evil()</script> & co")
+    )
+    assert "<script>" not in row
+    assert "&lt;script&gt;evil()&lt;/script&gt; &amp; co" in row
+    assert "<b>x</b>" not in row
+    assert "a&amp;b@e.com" in row
+
+
+def test_operator_digest_html_includes_messages_section():
+    html = email_module._operator_digest_html(
+        metrics={"new_message_count": 1},
+        recalls=[],
+        errors=[],
+        messages=[_message(message="Please call me <urgent>")],
+    )
+    assert "Contact messages" in html
+    assert "Please call me &lt;urgent&gt;" in html
+    assert "Contact messages this run" in html  # metrics row
+
+
+def test_operator_digest_html_no_messages_placeholder():
+    html = email_module._operator_digest_html(
+        metrics={"new_message_count": 0}, recalls=[], errors=[], messages=[]
+    )
+    assert "No new messages this run." in html
 
 
 def test_operator_recall_row_escapes_fields_and_source_url():
