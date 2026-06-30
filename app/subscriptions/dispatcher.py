@@ -58,6 +58,15 @@ _RECALL_COLUMNS = (
     Recall.entities,
 )
 
+# Only the fields the operator digest row renders — keeps a long backlog of full message bodies
+# from loading wholesale.
+_MESSAGE_COLUMNS = (
+    Message.name,
+    Message.email,
+    Message.message,
+    Message.created_at,
+)
+
 # "New" means "ingested since the last run" (the cursor below). On the first run there's no cursor,
 # so fall back to a 1-day window — a subscriber's first digest is the last day's new recalls, never
 # a backlog. The ingest and dispatch run back-to-back in the same job, so a day comfortably covers
@@ -141,6 +150,7 @@ async def run_dispatch(db_session: Session) -> dict:
         select(Message)
         .where(Message.is_bot.is_(False), Message.created_at > msg_cutoff)
         .order_by(Message.created_at.asc())
+        .options(load_only(*_MESSAGE_COLUMNS))
     )
     new_messages: list[Message] = list(db_session.scalars(stmt_messages).all())
 
