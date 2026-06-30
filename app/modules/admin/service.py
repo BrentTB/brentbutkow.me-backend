@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.admin.schemas import (
     AdminOverview,
+    AdminSubscriptionUpdate,
     IngestSummary,
     MessageCounts,
     NullspaceCounts,
@@ -113,6 +116,31 @@ def list_subscriptions(
         ).all()
     )
     return items, total
+
+
+def update_subscription(
+    session: Session, subscription_id: object, patch: AdminSubscriptionUpdate
+) -> Subscription | None:
+    """Apply an operator edit directly (no double opt-in — admin is trusted). Returns the updated
+    row, or None if no subscription has that id."""
+    row = session.get(Subscription, subscription_id)
+    if row is None:
+        return None
+    # Only fields explicitly set in the body — partial update, mirroring patch_manage.
+    data = patch.model_dump(exclude_unset=True)
+    new_status = data.pop("status", None)
+    for field, value in data.items():
+        setattr(row, field, value)
+    if new_status is not None:
+        # Activating a never-confirmed subscription stamps confirmed_at so the dispatcher's
+        # ordering/metrics (which key off confirmed_at on active rows) stay well-defined.
+        if new_status == "active" and row.confirmed_at is None:
+            row.confirmed_at = datetime.now(UTC)
+        row.status = new_status
+    row.updated_at = datetime.now(UTC)
+    session.commit()
+    session.refresh(row)
+    return row
 
 
 def list_scores(

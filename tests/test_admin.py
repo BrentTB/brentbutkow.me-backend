@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from app.main import app
 from app.modules.admin import service as admin_service
 from app.modules.admin.schemas import (
     AdminOverview,
+    AdminSubscriptionUpdate,
     IngestSummary,
     MessageCounts,
     NullspaceCounts,
@@ -168,6 +170,123 @@ def test_subscriptions_accepts_valid_status(monkeypatch):
     res = client.get("/admin/subscriptions?status=active", headers=_auth_header())
     assert res.status_code == 200
     assert captured["status"] == "active"
+
+
+# --- subscription edit -------------------------------------------------------
+
+_SID = "11111111-1111-1111-1111-111111111111"
+
+
+def _subscription_row(**overrides) -> SimpleNamespace:
+    base = dict(
+        id=uuid.UUID(_SID),
+        email="a@b.com",
+        status="paused",
+        countries=["us"],
+        entities=[],
+        companies=[],
+        categories=[],
+        min_severity=None,
+        confirmed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 30, tzinfo=UTC),
+        last_digest_at=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class _FakeSession:
+    def __init__(self, row):
+        self.row = row
+        self.committed = False
+
+    def get(self, model, ident):
+        return self.row
+
+    def commit(self):
+        self.committed = True
+
+    def refresh(self, row):
+        pass
+
+
+def test_edit_subscription_returns_updated_row(monkeypatch):
+    captured: dict = {}
+
+    def fake(session, subscription_id, patch):
+        captured["id"] = subscription_id
+        captured["patch"] = patch
+        return _subscription_row(status="unsubscribed")
+
+    monkeypatch.setattr(admin_service, "update_subscription", fake)
+    res = client.patch(
+        f"/admin/subscriptions/{_SID}", json={"status": "unsubscribed"}, headers=_auth_header()
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "unsubscribed"
+    assert str(captured["id"]) == _SID
+    assert captured["patch"].status == "unsubscribed"
+
+
+def test_edit_subscription_not_found_is_404(monkeypatch):
+    monkeypatch.setattr(admin_service, "update_subscription", lambda *a, **k: None)
+    res = client.patch(
+        f"/admin/subscriptions/{_SID}", json={"status": "active"}, headers=_auth_header()
+    )
+    assert res.status_code == 404
+
+
+def test_edit_subscription_rejects_lifecycle_status(monkeypatch):
+    # pending_confirmation is part of the opt-in lifecycle, not an operator action → 422.
+    monkeypatch.setattr(admin_service, "update_subscription", lambda *a, **k: None)
+    res = client.patch(
+        f"/admin/subscriptions/{_SID}",
+        json={"status": "pending_confirmation"},
+        headers=_auth_header(),
+    )
+    assert res.status_code == 422
+
+
+def test_edit_subscription_rejects_invalid_country(monkeypatch):
+    monkeypatch.setattr(admin_service, "update_subscription", lambda *a, **k: None)
+    res = client.patch(
+        f"/admin/subscriptions/{_SID}", json={"countries": ["zz"]}, headers=_auth_header()
+    )
+    assert res.status_code == 422
+
+
+def test_edit_subscription_requires_token():
+    assert (
+        client.patch(f"/admin/subscriptions/{_SID}", json={"status": "active"}).status_code == 401
+    )
+
+
+def test_update_subscription_reactivate_stamps_confirmed_at():
+    row = _subscription_row(status="paused", confirmed_at=None)
+    session = _FakeSession(row)
+    out = admin_service.update_subscription(session, _SID, AdminSubscriptionUpdate(status="active"))
+    assert out is row
+    assert row.status == "active"
+    assert row.confirmed_at is not None  # stamped on activation of a never-confirmed row
+    assert session.committed
+
+
+def test_update_subscription_partial_filter_leaves_status(monkeypatch):
+    row = _subscription_row(status="active")
+    session = _FakeSession(row)
+    admin_service.update_subscription(session, _SID, AdminSubscriptionUpdate(countries=["uk"]))
+    assert row.countries == ["uk"]
+    assert row.status == "active"  # untouched when status omitted
+
+
+def test_update_subscription_not_found_returns_none():
+    assert (
+        admin_service.update_subscription(
+            _FakeSession(None), _SID, AdminSubscriptionUpdate(status="active")
+        )
+        is None
+    )
 
 
 def test_nullspace_maps_rows_and_total(monkeypatch):
