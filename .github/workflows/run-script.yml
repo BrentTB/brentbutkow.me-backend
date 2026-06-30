@@ -4,10 +4,10 @@ name: Run script on live DB
 # database, so you don't have to run it from your laptop. The daily automated ingest lives in
 # ingest.yml (which hits the API instead); this one runs the scripts/ modules directly.
 #
-# Requires a DATABASE_URL repo secret pointing at the live DB (Render's *external* connection
-# string — the internal one isn't reachable from GitHub's runners). INGEST_BEARER_TOKEN is also
-# required: app config loads it at import even though these scripts don't use it. OPENFDA_API_KEY
-# is optional (raises openFDA rate limits for the FDA ingest/backfill).
+# Secrets come from the 1Password Developer vault via a read-only service account (the
+# OP_SERVICE_ACCOUNT_TOKEN repo secret): DATABASE_URL resolves to the live Neon connection string,
+# and INGEST_BEARER_TOKEN is loaded too because app config requires it at import even though these
+# scripts don't use it.
 on:
   workflow_dispatch:
     inputs:
@@ -61,6 +61,15 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0 # v2.0.0
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DATABASE_URL: op://Developer/Neon-Postgres/CONNECTION_STRING
+          INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+
       - name: Install dependencies
         # Base deps only (no dev/ml); constraints pin the ML stack to the versions the committed
         # model pickle was built with, so classify() can load it during ingest/reclassify.
@@ -70,10 +79,9 @@ jobs:
 
       - name: Run scripts.${{ inputs.script }}
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
-          OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
-          # Indirect through env rather than interpolating the input into the shell, so the run step
-          # can't be turned into a command-injection vector if this ever becomes a free-form input.
+          # DATABASE_URL + INGEST_BEARER_TOKEN are already in the env (exported by the 1Password
+          # step above). Indirect the input through env rather than interpolating it into the shell,
+          # so the run step can't be turned into a command-injection vector if this ever becomes a
+          # free-form input.
           SCRIPT: ${{ inputs.script }}
         run: python -m "scripts.$SCRIPT"

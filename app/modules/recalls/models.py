@@ -7,13 +7,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.modules.recalls.entities import Entity
 
-# Searchable text for full-text search — kept identical to the migration's generated column.
-_SEARCH_EXPR = (
-    "to_tsvector('english', "
+# The raw searchable text — product/reason/company concatenated. Shared base for both the
+# full-text tsvector and the trigram substring column below; kept identical to the migration.
+_SEARCH_TEXT_EXPR = (
     "coalesce(product_description, '') || ' ' || "
     "coalesce(reason_text, '') || ' ' || "
-    "coalesce(company_name, ''))"
+    "coalesce(company_name, '')"
 )
+# Searchable text for full-text search — kept identical to the migration's generated column.
+_SEARCH_EXPR = f"to_tsvector('english', {_SEARCH_TEXT_EXPR})"
+# Lowercased copy for trigram (pg_trgm) substring/ILIKE search — catches partial UPCs, codes, and
+# word fragments that tsvector's whole-lexeme matching misses. Matches migration ...add_recall_trgm.
+_SEARCH_TEXT_LOWER_EXPR = f"lower({_SEARCH_TEXT_EXPR})"
 
 
 class Recall(Base):
@@ -64,6 +69,11 @@ class Recall(Base):
     # the list query doesn't load it). Expression matches migration ...add_recall_search.
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR, Computed(_SEARCH_EXPR, persisted=True), deferred=True
+    )
+    # Lowercased searchable text for trigram substring/ILIKE search — generated, GIN-indexed with
+    # gin_trgm_ops (deferred so the list query doesn't load it). Expression matches the migration.
+    search_text: Mapped[str | None] = mapped_column(
+        Text, Computed(_SEARCH_TEXT_LOWER_EXPR, persisted=True), deferred=True
     )
     raw: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

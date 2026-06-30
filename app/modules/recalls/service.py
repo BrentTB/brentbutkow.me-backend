@@ -2,12 +2,11 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, tuple_
+from sqlalchemy import delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
 
-from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.forecast import forecast_series
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
@@ -151,13 +150,6 @@ def _upsert_recalls(session: Session, rows: list[NormalizedRecall]) -> None:
         )
 
 
-def _redact_secrets(message: str) -> str:
-    # httpx exception strings embed the request URL, which carries ?api_key=<secret>.
-    # Strip it before the message is persisted to ingest_runs.error_text.
-    secret = settings.openfda_api_key
-    return message.replace(secret, "***") if secret else message
-
-
 def _recall_conditions(
     *,
     country: str | None = None,
@@ -220,8 +212,18 @@ def _recall_conditions(
     if until:
         conditions.append(Recall.report_date <= until)
     if search and search.strip():
+        term = search.strip()
+        # Escape LIKE metacharacters so a user's literal % or _ matches literally instead of acting
+        # as a wildcard (the term is already bound, so this is correctness, not injection safety).
+        like_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        # Match either way: full-text search (whole-lexeme, good word/relevance matching) OR a
+        # trigram substring match (catches partial UPCs, codes, and word fragments tsvector misses,
+        # e.g. "882479" inside a 12-digit UPC). The ILIKE is backed by the pg_trgm GIN index.
         conditions.append(
-            Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", search.strip()))
+            or_(
+                Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", term)),
+                Recall.search_text.ilike(f"%{like_term}%", escape="\\"),
+            )
         )
     return conditions
 
@@ -889,9 +891,7 @@ def _run_ingest_job(
         session.rollback()
         run.status = "error"
         run.finished_at = datetime.now(UTC)
-        # Redact (openFDA exception strings embed ?api_key) before persisting, then bound the
-        # length — redact-then-slice so a secret straddling the cutoff can't survive.
-        run.error_text = _redact_secrets(str(exc))[:2000]
+        run.error_text = str(exc)[:2000]
         session.add(run)
         session.commit()
         raise

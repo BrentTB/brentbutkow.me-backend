@@ -4,7 +4,6 @@ from starlette.requests import Request
 
 from app.auth import require_bearer
 from app.config import settings
-from app.modules.recalls import service
 from app.rate_limit import client_ip
 
 
@@ -29,21 +28,6 @@ def test_require_bearer_rejects_non_ascii_header():
     with pytest.raises(HTTPException) as exc:
         require_bearer(authorization="Bearer café")
     assert exc.value.status_code == 401
-
-
-def test_redact_secrets_strips_api_key(monkeypatch):
-    monkeypatch.setattr(settings, "openfda_api_key", "supersecret")
-    message = (
-        "Client error '429' for url 'https://api.fda.gov/food/enforcement.json?api_key=supersecret'"
-    )
-    redacted = service._redact_secrets(message)
-    assert "supersecret" not in redacted
-    assert "***" in redacted
-
-
-def test_redact_secrets_noop_without_key(monkeypatch):
-    monkeypatch.setattr(settings, "openfda_api_key", None)
-    assert service._redact_secrets("boom") == "boom"
 
 
 def test_client_ip_uses_peer_when_no_trusted_proxy(monkeypatch):
