@@ -161,6 +161,9 @@ async def run_dispatch(db_session: Session) -> dict:
     # Per-country backfill guard: any country whose fresh batch is abnormally large is a bulk load,
     # not a news day. Suppress only those countries' recalls this run (the rest still dispatch); the
     # operator still gets a digest (flagged) and the cursor still advances, so next run is normal.
+    # The suppressed batch is NOT auto-re-windowed — once the cursor advances those recalls are no
+    # longer "new", so releasing them to subscribers is a deliberate operator action (rewind
+    # state.last_run_at past them and re-run dispatch).
     new_by_country: Counter[str] = Counter(recall.country for recall in new_recalls)
     suppressed_countries = {
         country for country, count in new_by_country.items() if count > _BACKFILL_GUARD_THRESHOLD

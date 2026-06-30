@@ -97,7 +97,16 @@ def test_unsubscribe_forwards_service_status(monkeypatch):
 
 
 async def _fake_dispatch(session):
-    return {"newRecalls": 0, "activeSubs": 0, "sent": 0, "skippedCap": 0, "errors": 0}
+    return {
+        "newRecalls": 0,
+        "suppressedRecalls": 0,
+        "suppressedCountries": [],
+        "activeSubs": 0,
+        "sent": 0,
+        "skippedCap": 0,
+        "errors": 0,
+        "backfillGuardTripped": False,
+    }
 
 
 def _reset_lock():

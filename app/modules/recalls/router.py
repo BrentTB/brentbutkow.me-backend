@@ -58,7 +58,7 @@ def _validate_date_range(since: date | None, until: date | None) -> None:
 
 def recall_filters(
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, or za."
+        default=None, description="Filter by country: us, uk, za, or ca."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
@@ -124,7 +124,7 @@ def get_recalls(
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, or za."
+        default=None, description="Filter by country: us, uk, za, or ca."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(

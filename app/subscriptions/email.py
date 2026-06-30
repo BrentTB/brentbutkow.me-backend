@@ -569,9 +569,13 @@ def send_operator_digest_email(
     new_count = metrics["new_recall_count"]
     will_receive = metrics["will_receive_count"]
     guard_prefix = "[BACKFILL GUARD] " if metrics.get("backfill_guard_tripped") else ""
+    suppressed_count = metrics.get("suppressed_recall_count", 0)
+    # On a guard trip new_count is the dispatchable-only count, so the subject would understate the
+    # run; surface the held batch alongside it.
+    suppressed_part = f" ({suppressed_count} suppressed)" if suppressed_count else ""
     msg_part = f", {len(messages)} message(s)" if messages else ""
     subject = (
-        f"{guard_prefix}Recall Radar ops: {new_count} new recall(s), "
+        f"{guard_prefix}Recall Radar ops: {new_count} new recall(s){suppressed_part}, "
         f"{will_receive} digest(s) queued{msg_part} \u2014 {today_date}"
     )
 
