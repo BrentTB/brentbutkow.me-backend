@@ -34,6 +34,7 @@ from app.modules.recalls.service import (
     get_topics,
     get_trend,
     list_recalls,
+    run_cfia_ingest,
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
@@ -527,3 +528,18 @@ def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
     return run_seed_ingest(session)
+
+
+@router.post(
+    "/ingest/cfia",
+    response_model=IngestResult,
+    summary="Trigger a Canada CFIA ingest",
+    description=(
+        "Fetches Health Canada's recalls open-data export, keeps the CFIA human-food recalls, and "
+        "upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_cfia(session: Session = Depends(get_session)) -> IngestResult:
+    return run_cfia_ingest(session)

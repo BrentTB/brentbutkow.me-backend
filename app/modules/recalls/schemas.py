@@ -36,12 +36,14 @@ class RecallSource(StrEnum):
     woolworths = "woolworths"  # South Africa — Woolworths Holdings (curated seed)
     shoprite = "shoprite"  # South Africa — Shoprite / Checkers (curated seed)
     nrcs = "nrcs"  # South Africa — National Regulator for Compulsory Specifications (curated seed)
+    cfia = "cfia"  # Canada — Canadian Food Inspection Agency
 
 
 class RecallCountry(StrEnum):
     us = "us"
     uk = "uk"
     za = "za"
+    ca = "ca"
 
 
 class EntityType(StrEnum):
@@ -71,11 +73,12 @@ class RecallEntity(CamelModel):
 
 
 class RecallOut(CamelModel):
-    country: RecallCountry = Field(description="Country the recall is from: us, uk, or za.")
+    country: RecallCountry = Field(description="Country the recall is from: us, uk, za, or ca.")
     source: RecallSource = Field(
         description=(
-            "Data source: fda (openFDA), usda (FSIS), uk (FSA), ncc (South Africa NCC), and the "
-            "curated SA seed sources woolworths / shoprite / nrcs."
+            "Data source: fda (openFDA), usda (FSIS), uk (FSA), ncc (South Africa NCC), cfia "
+            "(Canadian Food Inspection Agency), and the curated SA seed sources "
+            "woolworths / shoprite / nrcs."
         )
     )
     recall_number: str = Field(

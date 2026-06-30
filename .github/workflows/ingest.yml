@@ -61,6 +61,13 @@ jobs:
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
 
+      - name: Trigger CFIA (Canada) ingest endpoint
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 300 \
+            -X POST "${API_BASE_URL}/recalls/ingest/cfia" \
+            -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
+            -H "Content-Type: application/json"
+
       - name: Dispatch recall alert emails
         # Runs only after every ingest above succeeds — a failed step short-circuits the job, so a
         # digest never claims completeness off a partial ingest (those recalls land next run).
