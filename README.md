@@ -96,9 +96,9 @@ python3 -m venv .venv
 source .venv/bin/activate          # or prefix commands with .venv/bin/
 pip install -e ".[dev]"
 
-cp .env.example .env               # set DATABASE_URL + INGEST_BEARER_TOKEN
+op inject -i .env.tpl -o .env --force   # generate .env from 1Password (see "Secrets" below)
 
-# point DATABASE_URL at a local Postgres (any instance), create that database, then:
+# DATABASE_URL points at a local Postgres by default; create that database, then:
 alembic upgrade head                         # create / update tables (migrations)
 uvicorn app.main:app --reload --port 3000   # http://localhost:3000/health  +  /docs
 python -m scripts.ingest_fda                 # pull the latest openFDA recalls into the DB
@@ -128,8 +128,9 @@ commit it. (Docker and deploys run `alembic upgrade head` automatically on start
 
 **Running scripts against the live DB:** trigger **Actions → Run script on live DB** in GitHub
 (manual only — pick the `scripts.*` module from the dropdown) so you don't have to run them from your
-laptop. It needs a `DATABASE_URL` repo secret set to the live (external) Postgres connection string;
-the daily automated ingest stays in the separate `Daily recall ingest` workflow.
+laptop. It reads the live Neon connection string from 1Password (via the `OP_SERVICE_ACCOUNT_TOKEN`
+repo secret — see [Secrets](#secrets--managed-in-1password)); the daily automated ingest stays in the
+separate `Daily recall ingest` workflow.
 
 > **USDA FSIS ingest:** FSIS sits behind Akamai, which 403s plain Python HTTP clients by TLS
 > fingerprint. The ingest uses `curl_cffi` (browser-impersonating TLS), so it works from any host —
@@ -141,7 +142,7 @@ Runs the whole stack in one command — reads config from your `.env`, but point
 Postgres (`DATABASE_URL` is overridden to the internal `db` service), so it's self-contained:
 
 ```bash
-cp .env.example .env        # first time
+op inject -i .env.tpl -o .env --force   # generate .env from 1Password (first time + after vault changes)
 docker compose up --build   # http://localhost:3000/health  +  /docs
 docker compose exec api python -m scripts.ingest_all # latest recalls (all sources)
 docker compose exec api python -m scripts.backfill_fda # one-time: full history (~26k)
@@ -149,6 +150,30 @@ docker compose down         # stop (add -v to also wipe the DB)
 ```
 
 The Compose file uses the project name `website-backend`, so the stack is consistently addressed as `website-backend-api-1` and `website-backend-db-1`.
+
+## Secrets — managed in 1Password
+
+The **1Password `Developer` vault is the single source of truth** for every secret, across all three
+places they're consumed. You never hand-edit a local `.env` or set env vars in the Render dashboard —
+edit the value in 1Password once, and each consumer picks it up:
+
+| Where | How it resolves | What it needs |
+|---|---|---|
+| **Local dev** | `op inject -i .env.tpl -o .env --force` regenerates the gitignored `.env` from [`.env.tpl`](.env.tpl) | 1Password CLI signed in (desktop-app integration) |
+| **GitHub Actions** | [`1password/load-secrets-action`](https://github.com/1Password/load-secrets-action) resolves `op://` refs per job | `OP_SERVICE_ACCOUNT_TOKEN` repo secret |
+| **Render** | `op run --env-file=.env.render.tpl` resolves refs at container start (see [`Dockerfile`](Dockerfile)) | `OP_SERVICE_ACCOUNT_TOKEN` env var |
+
+**One-time setup:**
+
+- **Local:** `brew install 1password-cli`, then enable *Settings → Developer → "Integrate with 1Password
+  CLI"* in the desktop app. Re-run the `op inject` command above whenever a vault value changes.
+- **CI + Render:** create a 1Password **service account** scoped read-only to the `Developer` vault, then
+  set its token as the `OP_SERVICE_ACCOUNT_TOKEN` GitHub repo secret **and** Render env var. Render's
+  `PORT` stays auto-injected — it's intentionally not in `.env.render.tpl`.
+
+The templates ([`.env.tpl`](.env.tpl) local, [`.env.render.tpl`](.env.render.tpl) production) hold only
+`op://Developer/...` references — no secret values — so they're committed. `.env.example` documents
+each variable; the table below is the canonical list.
 
 ## Environment
 
@@ -159,7 +184,6 @@ The Compose file uses the project name `website-backend`, so the stack is consis
 | `ALLOWED_ORIGIN` | – | CORS origin(s), comma-separated. Defaults to `http://localhost:5173`. |
 | `ALLOWED_ORIGIN_REGEX` | – | Optional regex matched in addition to `ALLOWED_ORIGIN`, for origins whose subdomain changes per deploy (e.g. Vercel previews). Anchor it to your own scope — never a blanket `*.vercel.app`. |
 | `PORT` | – | Server port. Defaults to `3000`. |
-| `OPENFDA_API_KEY` | – | Optional; raises openFDA rate limits. |
 | `TRUSTED_PROXY_HOPS` | – | Reverse-proxy hops in front of the app, so per-IP rate limiting reads the real client from `X-Forwarded-For`. `0` (default) for local/Docker; set `1` behind Render. |
 
 ## License

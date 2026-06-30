@@ -3,7 +3,6 @@ from datetime import date
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from app.config import settings
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_us_state
@@ -92,8 +91,6 @@ MAX_SKIP = 25000
 
 def _fetch_page(skip: int, limit: int) -> list[OpenFdaRecord]:
     params = {"sort": "report_date:desc", "skip": str(skip), "limit": str(limit)}
-    if settings.openfda_api_key:
-        params["api_key"] = settings.openfda_api_key
     response = httpx.get(ENDPOINT, params=params, timeout=30)
     # openFDA returns 404 when a query has no (more) results — treat as end-of-data, not an error.
     if response.status_code == 404:

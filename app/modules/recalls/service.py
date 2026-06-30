@@ -7,7 +7,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import TableValuedAlias
 
-from app.config import settings
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.forecast import forecast_series
 from app.modules.recalls.fsa_uk import fetch_fsa, normalize_fsa
@@ -149,13 +148,6 @@ def _upsert_recalls(session: Session, rows: list[NormalizedRecall]) -> None:
         session.execute(
             insert_stmt.on_conflict_do_update(index_elements=list(_CONFLICT_KEYS), set_=update_set)
         )
-
-
-def _redact_secrets(message: str) -> str:
-    # httpx exception strings embed the request URL, which carries ?api_key=<secret>.
-    # Strip it before the message is persisted to ingest_runs.error_text.
-    secret = settings.openfda_api_key
-    return message.replace(secret, "***") if secret else message
 
 
 def _recall_conditions(
@@ -896,9 +888,7 @@ def _run_ingest_job(
         session.rollback()
         run.status = "error"
         run.finished_at = datetime.now(UTC)
-        # Redact (openFDA exception strings embed ?api_key) before persisting, then bound the
-        # length — redact-then-slice so a secret straddling the cutoff can't survive.
-        run.error_text = _redact_secrets(str(exc))[:2000]
+        run.error_text = str(exc)[:2000]
         session.add(run)
         session.commit()
         raise

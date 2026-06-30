@@ -13,10 +13,20 @@ jobs:
   ingest:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger FDA ingest endpoint
+      # Single source of truth: resolve secrets from the 1Password Developer vault via a read-only
+      # service account (OP_SERVICE_ACCOUNT_TOKEN repo secret). export-env makes them available as
+      # env vars to every step below — no per-step secrets.* plumbing.
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
         env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          API_BASE_URL: op://Developer/API-Backend/API_BASE_URL
+          INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+          INTERNAL_DISPATCH_TOKEN: op://Developer/API-Backend/INTERNAL_DISPATCH_TOKEN
+
+      - name: Trigger FDA ingest endpoint
         run: |
           curl --fail-with-body --silent --show-error \
             -X POST "${API_BASE_URL}/recalls/ingest/fda" \
@@ -24,9 +34,6 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger FSIS ingest endpoint
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/fsis" \
@@ -34,9 +41,6 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger UK FSA ingest endpoint
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/uk" \
@@ -44,9 +48,6 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger NCC (South Africa) ingest endpoint
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/ncc" \
@@ -54,9 +55,6 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger SA curated seed ingest endpoint
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: |
           curl --fail-with-body --silent --show-error --max-time 120 \
             -X POST "${API_BASE_URL}/recalls/ingest/seed" \
@@ -66,12 +64,9 @@ jobs:
       - name: Dispatch recall alert emails
         # Runs only after every ingest above succeeds — a failed step short-circuits the job, so a
         # digest never claims completeness off a partial ingest (those recalls land next run).
-        # Requires an INTERNAL_DISPATCH_TOKEN repo secret matching the backend's env var.
+        # Uses the INTERNAL_DISPATCH_TOKEN resolved from 1Password, matching the backend's env var.
         # --fail-with-body turns a non-2xx into a non-zero exit and --max-time 30 a timeout, so either
         # fails the step and surfaces via GitHub Actions notifications.
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          INTERNAL_DISPATCH_TOKEN: ${{ secrets.INTERNAL_DISPATCH_TOKEN }}
         run: |
           curl --fail-with-body --silent --show-error --max-time 30 \
             -X POST "${API_BASE_URL}/internal/dispatch-alerts" \
@@ -80,8 +75,8 @@ jobs:
 
   # Themes + similar-recall neighbours are a whole-corpus rebuild (TF-IDF + NMF), too heavy to run in
   # the API process — so this runs scripts.build_analytics directly against the live DB on the runner,
-  # after the ingests above land their new recalls. Needs a DATABASE_URL repo secret pointing at the
-  # *external* Postgres connection string (same secret run-script.yml uses).
+  # after the ingests above land their new recalls. DATABASE_URL resolves to the *external* Neon
+  # connection string from 1Password (same value run-script.yml uses).
   rebuild-analytics:
     needs: ingest
     if: ${{ always() }} # rebuild even if a source ingest failed — the others may have added recalls
@@ -94,6 +89,15 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DATABASE_URL: op://Developer/Neon-Postgres/CONNECTION_STRING
+          INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+
       - name: Install dependencies
         # Base deps only (no dev/ml); constraints pin the ML stack to the versions the committed
         # model pickle was built with, matching run-script.yml.
@@ -102,17 +106,11 @@ jobs:
           pip install -e "." -c constraints.txt
 
       - name: Rebuild analytics over the live DB
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: python -m scripts.build_analytics
 
       - name: Rebuild events over the live DB
         # Event/outbreak clusters reuse the neighbour graph the previous step builds, so they run
         # right after it (same job → the analytics rebuild has already committed).
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: python -m scripts.build_events
 
       - name: Rebuild stats over the live DB
@@ -120,7 +118,4 @@ jobs:
         # recomputing the aggregations + anomaly scan + forecast. Independent of analytics/events
         # (it reads only `recalls`), so it runs last and regardless of their outcome.
         if: ${{ always() }}
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INGEST_BEARER_TOKEN: ${{ secrets.INGEST_BEARER_TOKEN }}
         run: python -m scripts.build_stats
