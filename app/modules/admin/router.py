@@ -93,9 +93,12 @@ def subscriptions(
     session: Session = Depends(get_session),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    status: SubscriptionStatus | None = Query(default=None),
+    # Aliased to `status` on the wire; the local name avoids shadowing fastapi's `status` module.
+    status_filter: SubscriptionStatus | None = Query(default=None, alias="status"),
 ) -> SubscriptionListResult:
-    items, total = service.list_subscriptions(session, limit=limit, offset=offset, status=status)
+    items, total = service.list_subscriptions(
+        session, limit=limit, offset=offset, status=status_filter
+    )
     return SubscriptionListResult(
         items=[SubscriptionAdminOut.model_validate(s) for s in items], total=total
     )

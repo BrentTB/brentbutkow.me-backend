@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.modules.contact.models import Message
 from app.modules.contact.schemas import ContactSubmission
 
-_LIST_LIMIT = 100
 # Cap stored spam so the trap can't grow the table without bound.
 _MAX_BOT_ROWS = 200
 # Cap the whole table too: submissions are unauthenticated, so a sender who stays under the bot
@@ -81,13 +80,3 @@ def _prune_bot_messages(session: Session) -> None:
     )
     session.execute(delete(Message).where(Message.is_bot.is_(True), Message.id.not_in(keep)))
     session.commit()
-
-
-def list_messages(session: Session) -> list[Message]:
-    return list(
-        session.scalars(
-            select(Message)
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(_LIST_LIMIT)
-        ).all()
-    )
