@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -119,7 +120,7 @@ def list_subscriptions(
 
 
 def update_subscription(
-    session: Session, subscription_id: object, patch: AdminSubscriptionUpdate
+    session: Session, subscription_id: uuid.UUID, patch: AdminSubscriptionUpdate
 ) -> Subscription | None:
     """Apply an operator edit directly (no double opt-in — admin is trusted). Returns the updated
     row, or None if no subscription has that id."""
