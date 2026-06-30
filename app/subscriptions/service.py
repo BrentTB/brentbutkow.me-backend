@@ -109,6 +109,12 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
     """
     norm = _normalise_criteria(data)
 
+    # Serialise create() per email for the rest of this transaction (released on commit). Without it
+    # two concurrent resubscribes could both select "no row" and each insert one. The unique index
+    # on lower(email) is the hard backstop; this lock turns a would-be IntegrityError into a clean
+    # wait-then-reuse. Keyed on lower(email) to match the index's case-insensitive scope.
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtext(func.lower(data.email)))))
+
     stmt = select(Subscription).where(func.lower(Subscription.email) == func.lower(data.email))
     rows: list[Subscription] = list(db.scalars(stmt).all())
     # One subscription per email: act on a single primary row, preferring an active one.

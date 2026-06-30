@@ -3,7 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,7 +29,10 @@ class Subscription(Base):
             name="ck_subscriptions_status",
         ),
         UniqueConstraint("management_token", name="uq_subscriptions_management_token"),
-        Index("idx_subscriptions_email", "email"),
+        # One subscription per email (case-insensitive): a resubscribe/restage reuses the existing
+        # row rather than inserting a second. Functional unique index — also serves the
+        # func.lower(email) lookup in service.create(), so a plain email index is redundant.
+        Index("uq_subscriptions_email_lower", func.lower(Column("email")), unique=True),
         Index(
             "idx_subscriptions_active",
             "id",
