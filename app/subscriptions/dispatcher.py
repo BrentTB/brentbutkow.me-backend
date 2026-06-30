@@ -117,10 +117,13 @@ async def run_dispatch(db_session: Session) -> dict:
         logger.warning("Email disabled (no resend_api_key) — dispatch skipped, no state changed.")
         return {
             "newRecalls": 0,
+            "suppressedRecalls": 0,
+            "suppressedCountries": [],
             "activeSubs": 0,
             "sent": 0,
             "skippedCap": 0,
             "errors": 0,
+            "backfillGuardTripped": False,
             "emailDisabled": True,
         }
 

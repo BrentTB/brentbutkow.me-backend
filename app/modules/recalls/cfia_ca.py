@@ -57,6 +57,10 @@ def _classification(raw: str | None) -> str | None:
 
 
 def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
+    # The NID is the upsert key; an empty one would collide on the composite PK. fetch_cfia already
+    # filters nid-less rows, so this guards a future caller passing unfiltered records.
+    if not record.nid:
+        raise ValueError("CFIA record has no NID — cannot normalize (NID is the upsert key)")
     reason_text = strip_html(record.issue) or strip_html(record.title)
     category, confidence = classify(reason_text)
     classification = _classification(record.recall_class)
@@ -75,7 +79,7 @@ def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
     return {
         "source": RecallSource.cfia.value,
         "country": RecallCountry.ca.value,
-        "recall_number": record.nid or "",
+        "recall_number": record.nid,
         "source_url": record.url,
         "event_id": None,
         # The feed has no status field; "Archived" flags retired notices, the rest are current.
