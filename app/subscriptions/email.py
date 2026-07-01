@@ -27,8 +27,44 @@ except ModuleNotFoundError as _e:
     ) from _e
 
 from app.config import settings
+from app.modules.recalls.schemas import RecallCountry
 
 logger = logging.getLogger(__name__)
+
+# Each recall country maps to the official agency (or agencies) subscribers should treat as the
+# source of truth for that country. Digest footers list only the agencies covering a subscriber's
+# chosen countries, rather than every agency we ingest — a South-Africa-only subscriber sees "NCC",
+# not the full FDA/FSIS/FSA/NCC/CFIA list.
+_COUNTRY_SOURCES: dict[str, tuple[str, ...]] = {
+    RecallCountry.us.value: ("FDA", "FSIS"),
+    RecallCountry.uk.value: ("FSA",),
+    RecallCountry.za.value: ("NCC",),
+    RecallCountry.ca.value: ("CFIA",),
+}
+
+# Every agency name, in a stable order — the single source of truth for the "source of truth"
+# footers. Adding a country/agency above flows through to every email automatically. The slash form
+# is pre-joined with non-breaking spaces for the static (non-personalized) footers; names are fixed
+# constants, so no HTML-escaping is needed.
+_ALL_SOURCES = [name for names in _COUNTRY_SOURCES.values() for name in names]
+_ALL_SOURCES_SLASH = "&nbsp;/&nbsp;".join(_ALL_SOURCES)
+
+
+def _sources_for(subscription) -> list[str]:
+    """Agency names relevant to a subscriber's countries, in a stable (enum) order.
+
+    An empty `countries` list means the subscription matches every country (see
+    app.subscriptions.matcher), so every agency is listed.
+    """
+    countries = subscription.countries or list(_COUNTRY_SOURCES)
+    labels = [
+        name
+        for country, names in _COUNTRY_SOURCES.items()
+        if country in countries
+        for name in names
+    ]
+    return labels or _ALL_SOURCES
+
 
 if settings.resend_api_key:
     resend.api_key = settings.resend_api_key
@@ -196,7 +232,7 @@ def _optin_html(confirm_url: str) -> str:
               </p>
               <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.5;">
                 Recall alerts are best-effort and sent via a free service. Always check
-                FDA&nbsp;/&nbsp;FSIS&nbsp;/&nbsp;FSA&nbsp;/&nbsp;NCC for official notices.
+                {_ALL_SOURCES_SLASH} for official notices.
               </p>
             </td>
           </tr>
@@ -299,7 +335,7 @@ def _update_confirm_html(confirm_url: str, manage_url: str, unsub_url: str) -> s
               </p>
               <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.5;">
                 Recall alerts are best-effort and sent via a free service. Always check
-                FDA&nbsp;/&nbsp;FSIS&nbsp;/&nbsp;FSA&nbsp;/&nbsp;NCC for official notices.
+                {_ALL_SOURCES_SLASH} for official notices.
               </p>
             </td>
           </tr>
@@ -363,6 +399,11 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
     manage_url = _html_escape(manage_url)
     unsub_url = _html_escape(unsub_url)
 
+    # Agency names are fixed constants (not user input), so they're safe to interpolate unescaped.
+    sources = _sources_for(subscription)
+    sources_slash = "&nbsp;/&nbsp;".join(sources)
+    sources_comma = ", ".join(sources)
+
     # skipped_at notice block
     skipped_notice = ""
     if subscription.skipped_at:
@@ -375,7 +416,7 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
                 <p style="margin:0;font-size:14px;color:#555555;line-height:1.5;">
                   <strong>&#9888; Note:</strong> due to sending limits, you may have missed
                   alerts on {dates_str}. Check the official agency channels
-                  (FDA, FSIS, FSA, NCC) for those dates.
+                  ({sources_comma}) for those dates.
                 </p>
               </div>
             </td>
@@ -458,8 +499,7 @@ def _digest_html(subscription, matching_recalls: list, manage_url: str, unsub_ur
             <td style="background:#f9f9f9;padding:20px 32px;border-top:1px solid #e8e8e8;">
               <p style="margin:0 0 8px 0;font-size:13px;color:#888888;line-height:1.5;">
                 Recall alerts are best-effort and sent via a free service.
-                Always treat FDA&nbsp;/&nbsp;FSIS&nbsp;/&nbsp;FSA&nbsp;/&nbsp;NCC as the
-                source of truth.
+                Always treat {sources_slash} as the source of truth.
               </p>
               <p style="margin:0;font-size:13px;color:#888888;">
                 <a href="{unsub_url}"

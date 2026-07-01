@@ -1,3 +1,5 @@
+import re
+
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -56,6 +58,44 @@ def _classification(raw: str | None) -> str | None:
     return None
 
 
+# Leading listing qualifiers Health Canada puts before a brand on multi-listing recalls
+# ("Various Salem Foods brand ...", "Certain Amy's brand ...") — dropped so the extracted brand is
+# just the brand.
+_BRAND_QUALIFIER_RE = re.compile(
+    r"^(?:various|certain|some|several|a|an|the)(?:\s+|$)", re.IGNORECASE
+)
+
+
+def _brand(title: str | None) -> str | None:
+    """Extract the brand from a CFIA title, or None when there isn't a single one.
+
+    Health Canada titles read "{Brand} brand {Product} recalled due to {reason}", so the brand is
+    the text before the " brand " marker (minus any leading listing qualifier). Titles without the
+    marker are multi-brand or generic-product recalls ("Various brands of cheese ...") that have no
+    single brand to lift, and yield None.
+    """
+    if not title or " brand " not in title:
+        return None
+    brand = _BRAND_QUALIFIER_RE.sub("", title.split(" brand ", 1)[0]).strip()
+    return brand or None
+
+
+def _product_description(record: CfiaRecord) -> str:
+    """Build a product line that carries the brand.
+
+    The feed's Product field is brand-less ("Salad + seasoning"), which reads as meaningless on its
+    own in a digest, and Canadian recalls have no company_name to supply the context. So we prefix
+    the brand (lifted from the Title) to the product. Multi-brand / generic recalls with no single
+    brand fall back to the product name — descriptive enough on its own — then to the raw title.
+    """
+    product = strip_html(record.product)
+    title = strip_html(record.title)
+    brand = _brand(title)
+    if brand and product and brand.lower() not in product.lower():
+        return f"{brand} {product}"
+    return product or title
+
+
 def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
     # The NID is the upsert key; an empty one would collide on the composite PK. fetch_cfia already
     # filters nid-less rows, so this guards a future caller passing unfiltered records.
@@ -85,7 +125,7 @@ def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
         # The feed has no status field; "Archived" flags retired notices, the rest are current.
         "status": "Archived" if record.archived == "1" else "Active",
         "classification": classification,
-        "product_description": strip_html(record.product) or strip_html(record.title),
+        "product_description": _product_description(record),
         "reason_text": reason_text,
         # Not in the feed — Canada doesn't appear in the company leaderboard / type-ahead.
         "company_name": None,
