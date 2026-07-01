@@ -40,6 +40,7 @@ def test_digest_html_escapes_recall_and_skipped_dates():
         management_token="tok",
         email="x@example.com",
         skipped_at=["2026-06-01 <evil>"],
+        countries=["us"],
     )
     recall = _recall(product_description="<img src=x onerror=alert(1)> & co")
     html = email_module._digest_html(
@@ -54,6 +55,59 @@ def test_digest_html_escapes_recall_and_skipped_dates():
     # The skipped-date notice is escaped too.
     assert "<evil>" not in html
     assert "&lt;evil&gt;" in html
+
+
+def _digest_for(countries):
+    subscription = SimpleNamespace(
+        management_token="tok",
+        email="x@example.com",
+        skipped_at=["2026-06-01"],
+        countries=countries,
+    )
+    return email_module._digest_html(
+        subscription,
+        [_recall()],
+        manage_url="https://brentbutkow.me/m?token=tok",
+        unsub_url="https://brentbutkow.me/u?token=tok",
+    )
+
+
+def test_footer_lists_only_subscribed_country_sources():
+    # South-Africa-only subscriber: footer names NCC and nothing else.
+    html = _digest_for(["za"])
+    assert "NCC" in html
+    for agency in ("FDA", "FSIS", "FSA", "CFIA"):
+        assert agency not in html
+
+
+def test_footer_lists_multiple_agencies_for_multi_country():
+    # US covers both FDA and FSIS; Canada adds CFIA. UK's FSA and SA's NCC stay out.
+    html = _digest_for(["us", "ca"])
+    for agency in ("FDA", "FSIS", "CFIA"):
+        assert agency in html
+    assert "FSA" not in html
+    assert "NCC" not in html
+
+
+def test_footer_lists_all_agencies_when_no_country_filter():
+    # An empty countries list matches every country (see matcher), so list every agency.
+    html = _digest_for([])
+    for agency in ("FDA", "FSIS", "FSA", "NCC", "CFIA"):
+        assert agency in html
+
+
+def test_static_email_footers_list_every_agency():
+    # The opt-in and preference-update emails aren't tied to a subscription's countries, so they
+    # list every agency — including CFIA — from the shared constant.
+    optin = email_module._optin_html(confirm_url="https://brentbutkow.me/c?token=tok")
+    update = email_module._update_confirm_html(
+        confirm_url="https://brentbutkow.me/c?token=tok",
+        manage_url="https://brentbutkow.me/m?token=tok",
+        unsub_url="https://brentbutkow.me/u?token=tok",
+    )
+    for agency in ("FDA", "FSIS", "FSA", "NCC", "CFIA"):
+        assert agency in optin
+        assert agency in update
 
 
 def _message(**overrides) -> SimpleNamespace:

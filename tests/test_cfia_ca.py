@@ -1,16 +1,25 @@
 from app.modules.recalls import cfia_ca
-from app.modules.recalls.cfia_ca import CfiaRecord, _classification, fetch_cfia, normalize_cfia
+from app.modules.recalls.cfia_ca import (
+    CfiaRecord,
+    _brand,
+    _classification,
+    _product_description,
+    fetch_cfia,
+    normalize_cfia,
+)
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.schemas import RecallCategory
 from app.modules.recalls.severity import score_severity
 
-# Trimmed from a real Health Canada open-data record (Organization == "CFIA").
+# Trimmed from a real Health Canada open-data record (Organization == "CFIA"). The title follows
+# the feed's "{Brand} brand {Product} recalled due to {reason}" shape; the Product field is
+# brand-less, as it is in the real feed.
 RECALL = {
     "NID": "98765",
-    "Title": "Recalled brand cheese may contain Listeria monocytogenes",
+    "Title": "ACME Foods brand Soft Cheese recalled due to Listeria monocytogenes",
     "URL": "https://recalls-rappels.canada.ca/en/alert-recall/recalled-brand-cheese",
     "Organization": "CFIA",
-    "Product": "ACME Soft Cheese 200g",
+    "Product": "Soft Cheese 200g",
     "Issue": "Microbial contamination - Listeria monocytogenes",
     "Recall class": "Class 1",
     "Last updated": "2026-03-14",
@@ -48,7 +57,8 @@ def test_normalize_recall(monkeypatch):
     assert row["report_date"].isoformat() == "2026-03-14"
     assert row["recall_initiation_date"].isoformat() == "2026-03-14"
     assert "listeria" in row["reason_text"].lower()
-    assert "ACME" in row["product_description"]
+    # The brand-less Product ("Soft Cheese 200g") is prefixed with the brand lifted from the title.
+    assert row["product_description"] == "ACME Foods Soft Cheese 200g"
     assert row["category"] == "pathogen"
     assert {"type": "pathogen", "value": "Listeria"} in row["entities"]
     # No firm name or geography, so severity rests on class + category + entities, like the UK path.
@@ -75,6 +85,49 @@ def test_classification_maps_canadian_classes():
     assert _classification("--") is None
     assert _classification("") is None
     assert _classification(None) is None
+
+
+def test_brand_extraction():
+    # "{Brand} brand {Product}" — the brand is the text before " brand ".
+    assert _brand("Ola-Ola brand Authentic Pounded Yam recalled due to milk") == "Ola-Ola"
+    # Leading listing qualifiers are dropped.
+    assert _brand("Various Salem Foods brand Ground Spices recalled due to wheat") == "Salem Foods"
+    assert _brand("Certain Amy's brand Organic Lentil Soup recalled") == "Amy's"
+    # No " brand " marker → multi-brand / generic recall with no single brand.
+    assert _brand("Various brands of cheese products recalled due to Listeria") is None
+    assert _brand("Pistachio Kernel recalled due to Salmonella") is None
+    assert _brand(None) is None
+
+
+def test_product_description_prefixes_brand():
+    record = CfiaRecord.model_validate(
+        {
+            **RECALL,
+            "Title": "Salem Foods brand Ground Spices recalled due to wheat",
+            "Product": "Ground Spices and Spice Blends",
+        }
+    )
+    assert _product_description(record) == "Salem Foods Ground Spices and Spice Blends"
+
+
+def test_product_description_does_not_duplicate_brand():
+    # Product already names the brand → no double prefix.
+    record = CfiaRecord.model_validate(
+        {**RECALL, "Title": "ACME brand Cheese recalled", "Product": "ACME Soft Cheese 200g"}
+    )
+    assert _product_description(record) == "ACME Soft Cheese 200g"
+
+
+def test_product_description_falls_back_when_no_brand():
+    # Multi-brand recall with no single brand → the product name stands on its own.
+    record = CfiaRecord.model_validate(
+        {
+            **RECALL,
+            "Title": "Various brands of cheese products recalled due to Listeria",
+            "Product": "Certain cheese products",
+        }
+    )
+    assert _product_description(record) == "Certain cheese products"
 
 
 def test_fetch_keeps_only_cfia_food(monkeypatch):
