@@ -61,7 +61,9 @@ def _classification(raw: str | None) -> str | None:
 # Leading listing qualifiers Health Canada puts before a brand on multi-listing recalls
 # ("Various Salem Foods brand ...", "Certain Amy's brand ...") — dropped so the extracted brand is
 # just the brand.
-_BRAND_QUALIFIER_RE = re.compile(r"^(?:various|certain|some|several|a|an|the)\s+", re.IGNORECASE)
+_BRAND_QUALIFIER_RE = re.compile(
+    r"^(?:various|certain|some|several|a|an|the)(?:\s+|$)", re.IGNORECASE
+)
 
 
 def _brand(title: str | None) -> str | None:

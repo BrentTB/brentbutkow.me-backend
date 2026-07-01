@@ -93,6 +93,8 @@ def test_brand_extraction():
     # Leading listing qualifiers are dropped.
     assert _brand("Various Salem Foods brand Ground Spices recalled due to wheat") == "Salem Foods"
     assert _brand("Certain Amy's brand Organic Lentil Soup recalled") == "Amy's"
+    # A bare qualifier before " brand " is not a brand ("Various brand X" → None, not "Various").
+    assert _brand("Various brand cheese products recalled due to Listeria") is None
     # No " brand " marker → multi-brand / generic recall with no single brand.
     assert _brand("Various brands of cheese products recalled due to Listeria") is None
     assert _brand("Pistachio Kernel recalled due to Salmonella") is None
