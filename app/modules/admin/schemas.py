@@ -22,6 +22,9 @@ class MessageCounts(CamelModel):
     total: int
     real: int
     bot: int
+    # Unread inbox badge: non-bot messages not yet marked seen. Bots are excluded — they're never
+    # part of the actionable inbox — so unseen <= real.
+    unseen: int
 
 
 class SubscriptionCounts(CamelModel):
@@ -65,6 +68,11 @@ class AdminOverview(CamelModel):
 class MessageListResult(CamelModel):
     items: list[MessageOut]
     total: int
+
+
+class AdminMessageUpdate(CamelModel):
+    # Operator-only edit of a message. Currently just the read flag, toggled from the admin page.
+    seen: bool
 
 
 class SubscriptionAdminOut(CamelModel):

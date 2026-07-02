@@ -26,3 +26,5 @@ class Message(Base):
     # Spam-trap submissions are kept (capped) under is_bot so they can be inspected, not served.
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     bot_reason: Mapped[str | None] = mapped_column(Text)
+    # Operator "read" flag, toggled from the admin page. New messages arrive unseen.
+    seen: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))

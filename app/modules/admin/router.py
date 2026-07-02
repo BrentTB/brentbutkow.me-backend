@@ -12,6 +12,7 @@ from app.modules.admin import service
 from app.modules.admin.schemas import (
     AdminLoginRequest,
     AdminLoginResult,
+    AdminMessageUpdate,
     AdminOverview,
     AdminSubscriptionUpdate,
     MessageListResult,
@@ -69,7 +70,8 @@ def overview(session: Session = Depends(get_session)) -> AdminOverview:
     "/messages",
     response_model=MessageListResult,
     summary="List contact messages",
-    description="Paginated, newest first. Spam/bot rows are excluded unless includeBots=true.",
+    description="Paginated, newest first. Spam/bot rows are excluded unless includeBots=true. "
+    "Filter by read state with seen=true (read) or seen=false (unread); omit for all.",
     dependencies=[Depends(require_admin)],
     responses=_UNAUTHORIZED,
 )
@@ -78,11 +80,31 @@ def messages(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     include_bots: bool = Query(default=False, alias="includeBots"),
+    seen: bool | None = Query(default=None),
 ) -> MessageListResult:
     items, total = service.list_messages(
-        session, limit=limit, offset=offset, include_bots=include_bots
+        session, limit=limit, offset=offset, include_bots=include_bots, seen=seen
     )
     return MessageListResult(items=[MessageOut.model_validate(m) for m in items], total=total)
+
+
+@router.patch(
+    "/messages/{message_id}",
+    response_model=MessageOut,
+    summary="Edit a contact message",
+    description="Toggle the seen (read) flag on a message. Applied directly.",
+    dependencies=[Depends(require_admin)],
+    responses={**_UNAUTHORIZED, 404: {"description": "Message not found."}},
+)
+def edit_message(
+    message_id: int,
+    body: AdminMessageUpdate,
+    session: Session = Depends(get_session),
+) -> MessageOut:
+    row = service.update_message(session, message_id, body)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    return MessageOut.model_validate(row)
 
 
 @router.get(

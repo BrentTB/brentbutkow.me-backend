@@ -2,7 +2,10 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.auth import issue_admin_token, verify_admin_token
 from app.config import settings
@@ -10,6 +13,7 @@ from app.db import get_session
 from app.main import app
 from app.modules.admin import service as admin_service
 from app.modules.admin.schemas import (
+    AdminMessageUpdate,
     AdminOverview,
     AdminSubscriptionUpdate,
     IngestSummary,
@@ -18,6 +22,7 @@ from app.modules.admin.schemas import (
     RecallCounts,
     SubscriptionCounts,
 )
+from app.modules.contact.models import Message
 from app.rate_limit import limiter
 
 app.dependency_overrides[get_session] = lambda: None
@@ -88,7 +93,7 @@ def test_expired_token_is_rejected(monkeypatch):
 
 def _fake_overview() -> AdminOverview:
     return AdminOverview(
-        messages=MessageCounts(total=3, real=2, bot=1),
+        messages=MessageCounts(total=3, real=2, bot=1, unseen=1),
         subscriptions=SubscriptionCounts(
             total=5, active=4, pending_confirmation=1, paused=0, unsubscribed=0
         ),
@@ -108,7 +113,7 @@ def test_overview_returns_summary(monkeypatch):
     res = client.get("/admin/overview", headers=_auth_header())
     assert res.status_code == 200
     body = res.json()
-    assert body["messages"] == {"total": 3, "real": 2, "bot": 1}
+    assert body["messages"] == {"total": 3, "real": 2, "bot": 1, "unseen": 1}
     assert body["subscriptions"]["active"] == 4
     assert body["recalls"]["us"] == 80
     assert body["nullspace"] == {"total": 42, "legit": 40, "flagged": 2}
@@ -130,6 +135,7 @@ def test_messages_maps_rows_and_total(monkeypatch):
         country="US",
         is_bot=False,
         bot_reason=None,
+        seen=False,
     )
     monkeypatch.setattr(admin_service, "list_messages", lambda session, **kw: ([row], 1))
     res = client.get("/admin/messages", headers=_auth_header())
@@ -138,6 +144,7 @@ def test_messages_maps_rows_and_total(monkeypatch):
     assert body["total"] == 1
     assert body["items"][0]["message"] == "hello"
     assert body["items"][0]["isBot"] is False
+    assert body["items"][0]["seen"] is False
 
 
 def test_messages_forwards_pagination_and_bot_flag(monkeypatch):
@@ -150,7 +157,20 @@ def test_messages_forwards_pagination_and_bot_flag(monkeypatch):
     monkeypatch.setattr(admin_service, "list_messages", fake)
     res = client.get("/admin/messages?limit=10&offset=20&includeBots=true", headers=_auth_header())
     assert res.status_code == 200
-    assert captured == {"limit": 10, "offset": 20, "include_bots": True}
+    assert captured == {"limit": 10, "offset": 20, "include_bots": True, "seen": None}
+
+
+def test_messages_forwards_seen_filter(monkeypatch):
+    captured: dict = {}
+
+    def fake(session, **kw):
+        captured.update(kw)
+        return [], 0
+
+    monkeypatch.setattr(admin_service, "list_messages", fake)
+    res = client.get("/admin/messages?seen=false", headers=_auth_header())
+    assert res.status_code == 200
+    assert captured["seen"] is False
 
 
 def test_subscriptions_rejects_invalid_status(monkeypatch):
@@ -287,6 +307,123 @@ def test_update_subscription_not_found_returns_none():
         )
         is None
     )
+
+
+# --- message edit ------------------------------------------------------------
+
+
+def _message_row(**overrides) -> SimpleNamespace:
+    base = dict(
+        id=1,
+        created_at=datetime(2026, 6, 30, tzinfo=UTC),
+        message="hello",
+        name="Ada",
+        email="ada@example.com",
+        timezone="UTC",
+        locale="en",
+        referrer=None,
+        user_agent="curl",
+        accept_language="en",
+        ip_address="1.2.3.4",
+        country="US",
+        is_bot=False,
+        bot_reason=None,
+        seen=False,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_edit_message_returns_updated_row(monkeypatch):
+    captured: dict = {}
+
+    def fake(session, message_id, patch):
+        captured["id"] = message_id
+        captured["patch"] = patch
+        return _message_row(seen=True)
+
+    monkeypatch.setattr(admin_service, "update_message", fake)
+    res = client.patch("/admin/messages/1", json={"seen": True}, headers=_auth_header())
+    assert res.status_code == 200
+    assert res.json()["seen"] is True
+    assert captured["id"] == 1
+    assert captured["patch"].seen is True
+
+
+def test_edit_message_not_found_is_404(monkeypatch):
+    monkeypatch.setattr(admin_service, "update_message", lambda *a, **k: None)
+    res = client.patch("/admin/messages/999", json={"seen": True}, headers=_auth_header())
+    assert res.status_code == 404
+
+
+def test_edit_message_requires_seen(monkeypatch):
+    monkeypatch.setattr(admin_service, "update_message", lambda *a, **k: None)
+    res = client.patch("/admin/messages/1", json={}, headers=_auth_header())
+    assert res.status_code == 422
+
+
+def test_edit_message_requires_token():
+    assert client.patch("/admin/messages/1", json={"seen": True}).status_code == 401
+
+
+def test_update_message_sets_seen_and_commits():
+    row = _message_row(seen=False)
+    session = _FakeSession(row)
+    out = admin_service.update_message(session, 1, AdminMessageUpdate(seen=True))
+    assert out is row
+    assert row.seen is True
+    assert session.committed
+
+
+def test_update_message_not_found_returns_none():
+    assert (
+        admin_service.update_message(_FakeSession(None), 1, AdminMessageUpdate(seen=True)) is None
+    )
+
+
+# --- message seen count + filter (DB-backed) ---------------------------------
+
+
+@pytest.fixture
+def db_session():
+    # In-memory SQLite with only the messages table — enough to exercise the seen-count and
+    # seen-filter SQL without a Postgres dependency (mirrors tests/test_contact_service.py).
+    engine = create_engine("sqlite://")
+    Message.__table__.create(engine)
+    maker = sessionmaker(bind=engine, expire_on_commit=False)
+    with maker() as db:
+        yield db
+    engine.dispose()
+
+
+def _add_message(session, *, is_bot=False, seen=False):
+    session.add(Message(message="hi", is_bot=is_bot, seen=seen))
+    session.commit()
+
+
+def test_message_counts_unseen_excludes_bots_and_seen(db_session):
+    _add_message(db_session, seen=False)  # unread real
+    _add_message(db_session, seen=True)  # read real
+    _add_message(db_session, is_bot=True, seen=False)  # unread bot — must not count
+    counts = admin_service._message_counts(db_session)
+    assert (counts.total, counts.real, counts.bot, counts.unseen) == (3, 2, 1, 1)
+
+
+def test_list_messages_seen_filter(db_session):
+    _add_message(db_session, seen=False)
+    _add_message(db_session, seen=True)
+    unread, unread_total = admin_service.list_messages(
+        db_session, limit=50, offset=0, include_bots=False, seen=False
+    )
+    assert unread_total == 1 and all(m.seen is False for m in unread)
+    read, read_total = admin_service.list_messages(
+        db_session, limit=50, offset=0, include_bots=False, seen=True
+    )
+    assert read_total == 1 and all(m.seen is True for m in read)
+    _, all_total = admin_service.list_messages(
+        db_session, limit=50, offset=0, include_bots=False, seen=None
+    )
+    assert all_total == 2
 
 
 def test_nullspace_maps_rows_and_total(monkeypatch):

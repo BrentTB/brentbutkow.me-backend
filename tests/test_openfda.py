@@ -45,6 +45,23 @@ def test_normalize_maps_openfda_fields_to_domain(monkeypatch):
     assert result["severity_label"] == expected_label
 
 
+def test_normalize_decodes_html_entities(monkeypatch):
+    # openFDA payloads carry HTML entities ("Reser&#039;s"); the normalizer must decode them once so
+    # the stored value — and every downstream consumer (API, dashboard, alert emails) — is plain.
+    monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.other, 0.0))
+    result = normalize_recall(
+        OpenFdaRecord(
+            recall_number="H-1",
+            recalling_firm="Reser&#039;s Fine Foods",
+            product_description="Chicken &amp; Rice Bowl",
+            reason_for_recall="May contain undeclared milk &amp; soy.",
+        )
+    )
+    assert result["company_name"] == "Reser's Fine Foods"
+    assert result["product_description"] == "Chicken & Rice Bowl"
+    assert result["reason_text"] == "May contain undeclared milk & soy."
+
+
 def test_normalize_handles_missing_and_invalid_values(monkeypatch):
     monkeypatch.setattr(openfda, "classify", lambda _text: (RecallCategory.other, 0.0))
     result = normalize_recall(OpenFdaRecord(recall_number="X-1", classification="Bogus"))
