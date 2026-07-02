@@ -1,5 +1,5 @@
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.modules.recalls.models import Recall
 from app.modules.recalls.normalize import strip_html
@@ -27,6 +27,7 @@ def status(session: Session) -> tuple[bool, str]:
     # (e.g. FDA rows seeded before openfda.py decoded at ingest). Read-only re-decode of a sample.
     sample = session.scalars(
         select(Recall)
+        .options(defer(Recall.raw))  # the probe never reads raw; keep the sample load light
         .order_by(Recall.report_date.desc())  # deterministic, newest-first probe
         .limit(_PROBE_SAMPLE)
     ).all()
