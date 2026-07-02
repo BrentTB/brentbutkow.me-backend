@@ -5,7 +5,12 @@ from pydantic import BaseModel, ConfigDict
 
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
-from app.modules.recalls.normalize import NormalizedRecall, parse_class, parse_us_state
+from app.modules.recalls.normalize import (
+    NormalizedRecall,
+    parse_class,
+    parse_us_state,
+    strip_html,
+)
 from app.modules.recalls.schemas import RecallCountry, RecallSource
 from app.modules.recalls.severity import score_severity
 
@@ -43,7 +48,10 @@ def _parse_date(raw: str | None) -> date | None:
 
 
 def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
-    reason_text = record.reason_for_recall or ""
+    # openFDA payloads carry HTML entities ("Reser&#039;s Fine Foods"); decode once here so every
+    # consumer — API, dashboard, alert emails — and the downstream classifier/entity extraction all
+    # see plain text. Matches what the CFIA/FSIS normalizers already do via strip_html.
+    reason_text = strip_html(record.reason_for_recall)
     category, confidence = classify(reason_text)
     classification = parse_class(record.classification)
     # The recalling firm's state — only a real US code feeds the map / filter. Foreign firms report
@@ -67,9 +75,10 @@ def normalize_recall(record: OpenFdaRecord) -> NormalizedRecall:
         "event_id": record.event_id,
         "status": record.status,
         "classification": classification,
-        "product_description": record.product_description or "",
+        "product_description": strip_html(record.product_description),
         "reason_text": reason_text,
-        "company_name": record.recalling_firm,
+        # strip_html returns "" for a missing firm; keep the column nullable as before.
+        "company_name": strip_html(record.recalling_firm) or None,
         "state": state,
         "states": states,
         "distribution_pattern": record.distribution_pattern,

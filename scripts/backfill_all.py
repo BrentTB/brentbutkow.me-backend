@@ -3,6 +3,9 @@
 Recompute-dependency map — what each derived field is built from, and how to re-derive it over the
 existing corpus. New rows get all of this at ingest; these scripts re-stage it for older rows.
 
+  decoded text (product_desc,    HTML entities decoded + tags stripped over the stored corpus; new
+  reason_text, company_name)     rows are decoded at ingest by each source normalizer (strip_html)
+                                 -> scripts.backfill_html_decode
   entities                       from reason_text + the gazetteer (entities.py)
                                  -> scripts.backfill_entities
   category (+ confidence)        from reason_text + the model (classifier.joblib)
@@ -40,6 +43,7 @@ from app.db import SessionLocal
 from scripts import (
     backfill_entities,
     backfill_fda,
+    backfill_html_decode,
     backfill_severity,
     build_analytics,
     build_events,
@@ -66,6 +70,7 @@ class _Backfill(Protocol):
 # produces), and build_stats last (it materializes the payload from the now fully-derived recalls).
 _BACKFILLS: list[_Backfill] = [
     backfill_fda,
+    backfill_html_decode,
     backfill_entities,
     backfill_severity,
     build_analytics,
@@ -83,6 +88,9 @@ _BACKFILLS: list[_Backfill] = [
 #
 #   backfill_fda      seeds ~26k history rows. New rows self-populate entities/severity/category at
 #                     ingest, so only the whole-corpus rebuilds need a rerun.
+#   backfill_html_decode  rewrites reason_text/product_description in place, so it re-stages
+#                     entities (-> severity -> stats) and build_analytics (-> events) — the same
+#                     fan-out as changing the reason_text/product_description mapping.
 #   backfill_entities feeds severity (deadliest-pathogen bonus) and the stats entity aggregates.
 #   backfill_severity feeds the stats severity aggregates.
 #   build_analytics   produces the neighbour graph build_events consumes. It does NOT trigger stats:
@@ -94,6 +102,7 @@ _BACKFILLS: list[_Backfill] = [
 # Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
 _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
     backfill_fda: (build_analytics, build_events, build_stats),
+    backfill_html_decode: (backfill_entities, build_analytics),
     backfill_entities: (backfill_severity, build_stats),
     backfill_severity: (build_stats,),
     build_analytics: (build_events,),
