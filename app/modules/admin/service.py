@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.admin.schemas import (
+    AdminMessageUpdate,
     AdminOverview,
     AdminSubscriptionUpdate,
     IngestSummary,
@@ -25,7 +26,16 @@ def _message_counts(session: Session) -> MessageCounts:
         session.scalar(select(func.count()).select_from(Message).where(Message.is_bot.is_(True)))
         or 0
     )
-    return MessageCounts(total=total, real=total - bot, bot=bot)
+    # Unread inbox: non-bot messages not yet marked seen (bots never count toward the badge).
+    unseen = (
+        session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.is_bot.is_(False), Message.seen.is_(False))
+        )
+        or 0
+    )
+    return MessageCounts(total=total, real=total - bot, bot=bot, unseen=unseen)
 
 
 def _subscription_counts(session: Session) -> SubscriptionCounts:
@@ -87,13 +97,17 @@ def build_overview(session: Session) -> AdminOverview:
 
 
 def list_messages(
-    session: Session, *, limit: int, offset: int, include_bots: bool
+    session: Session, *, limit: int, offset: int, include_bots: bool, seen: bool | None = None
 ) -> tuple[list[Message], int]:
     base = select(Message)
     count_q = select(func.count()).select_from(Message)
     if not include_bots:
         base = base.where(Message.is_bot.is_(False))
         count_q = count_q.where(Message.is_bot.is_(False))
+    # seen is tri-state: None → all, True → read only, False → unread only.
+    if seen is not None:
+        base = base.where(Message.seen.is_(seen))
+        count_q = count_q.where(Message.seen.is_(seen))
     total = session.scalar(count_q) or 0
     items = list(
         session.scalars(
@@ -101,6 +115,18 @@ def list_messages(
         ).all()
     )
     return items, total
+
+
+def update_message(session: Session, message_id: int, patch: AdminMessageUpdate) -> Message | None:
+    """Apply an operator edit to a message (currently just the seen flag). Returns the updated row,
+    or None if no message has that id."""
+    row = session.get(Message, message_id)
+    if row is None:
+        return None
+    row.seen = patch.seen
+    session.commit()
+    session.refresh(row)
+    return row
 
 
 def list_subscriptions(

@@ -56,3 +56,4 @@ class MessageOut(CamelModel):
     country: str | None
     is_bot: bool
     bot_reason: str | None
+    seen: bool
