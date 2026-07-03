@@ -50,6 +50,11 @@ The expensive part (full diffs + surrounding context + grep output) must **not**
 
 Only review what the user changed. Unstaged/untracked files are out of scope.
 
+When the user scopes the review themselves ("the latest commit", "just what I staged"), resolve it
+literally before reading anything: "latest commit" means **local HEAD** (`git log -1 --oneline`),
+not the latest pushed commit — state the SHA you're reviewing. If the user excludes already-reviewed
+commits, don't re-review them.
+
 Run as **separate, bare commands** — no `$(...)` capture, no `||`, no redirects — so each matches an
 allowlist prefix and runs without a prompt:
 
@@ -140,7 +145,10 @@ Changes in one place that should have rippled elsewhere — confirm each with a 
   `create_all`, so a changed model against an existing DB needs a migration (Alembic is the planned tool).
   Flag the gap.
 - **Enum / discriminator values**: a new `StrEnum` member added but the keyword rules, labels,
-  DB-stored values, or the frontend contract not updated.
+  DB-stored values, or the frontend contract not updated. Also grep the **values themselves**
+  (`"us, uk"`, agency names like `"FDA"`/`"NCC"`) — stale lists hide in Query `description=`
+  strings, docstrings, and email templates, outside any diff hunk. A new country/source member must
+  be checked against the CLAUDE.md "Adding a recall country/source" checklist.
 - **camelCase contract**: a new schema field — does it serialize correctly through the alias generator
   (snake_case ↔ camelCase), and does the frontend expect that key?
 - **Config / env**: a new `config.py` setting not reflected in `.env.example`, the README, the Dockerfile,
@@ -246,6 +254,7 @@ When fixing:
 
 - Apply clear-cut, low-risk fixes directly.
 - For anything with a judgment call or behavior change, confirm the approach first.
-- After editing, re-run `.venv/bin/ruff check .` and `.venv/bin/pytest` (use the project's isolated venv).
-  Report results.
+- After editing, re-run `.venv/bin/ruff check .`, `.venv/bin/mypy app scripts`, and
+  `.venv/bin/pytest` (the project's isolated venv). mypy is not optional — type errors have twice
+  surfaced only at commit time after fixes were declared done. Report results.
 - Keep fixes scoped to the review — no out-of-scope changes.
