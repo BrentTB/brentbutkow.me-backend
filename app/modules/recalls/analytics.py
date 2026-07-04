@@ -1,17 +1,20 @@
 """Offline analytics over the recall corpus — themes (k-means over neural embeddings) + similarity
 (cosine neighbours in embedding space).
 
-Each recall's reason (weighted ~2×) + a heavily-stripped product description is embedded with
-Model2Vec `potion-base-8M` (app/modules/recalls/embeddings.py). The L2-normalised rows power both
-features: k-means clusters them into themes — membership is semantic closeness to the theme's
-centroid, gated so a recall gets *no* theme rather than a misleading one — and dot products give
-cosine similarity for "related recalls". Theme labels still come from TF-IDF terms over each
-cluster's members (c-TF-IDF style), so the curated stop-word lists keep names on hazards and
-foods, not "net wt oz" or brand names. Benchmarked against the previous pure-TF-IDF build on FDA
-event_id ground truth (scripts/eval_embeddings.py): hit@1 0.967 vs 0.941. Both features are
-precomputed by `scripts/build_analytics.py` into the `recall_topics` / `recall_neighbors` tables
-and the `recalls.topic_id` column, so serving is plain indexed reads — neither sklearn nor the
-embedding model is ever imported by the app.
+Each recall's reason + a heavily-stripped product description is embedded with Model2Vec
+`potion-base-8M` (app/modules/recalls/embeddings.py). The L2-normalised rows power both features:
+k-means clusters them into themes — membership is semantic closeness to the theme's centroid, gated
+so a recall gets *no* theme rather than a misleading one — and dot products give cosine similarity
+for "related recalls". The two features weight the text differently (see the weight constants):
+neighbours keep product context (a recall is "like" another by cause *and* product), while themes
+up-weight the reason so a long product blurb can't drag a short cause into a generic product
+cluster. Theme labels come from TF-IDF terms over each cluster's members (c-TF-IDF style), so the
+curated stop-word lists keep names on hazards and foods, not "net wt oz" or brand names. The
+neighbour representation is benchmarked against the previous pure-TF-IDF build on FDA event_id
+ground truth (scripts/eval_embeddings.py): hit@1 0.967 vs 0.941. Both features are precomputed by
+`scripts/build_analytics.py` into the `recall_topics` / `recall_neighbors` tables and the
+`recalls.topic_id` column, so serving is plain indexed reads — neither sklearn nor the embedding
+model is ever imported by the app.
 
 Pure compute lives in `build_analytics` (texts + embedding rows in; no model, no DB — testable
 with synthetic vectors); `rebuild_analytics` embeds each country's corpus and does the DB I/O.
@@ -65,12 +68,21 @@ _MIN_DOCS = 3
 # Rows per executemany when rewriting the neighbour table.
 _DB_CHUNK = 1000
 
-# Reason weighted 2:1 over the product description (reason counted 2× product). Repetition scales
-# both representations the same way: TF-IDF term frequencies (IDF unchanged) and the token-mean
-# embedding (reason tokens carry 2× the mass). Reason is the cause signal; product adds a little
-# food context.
+# Reason is up-weighted over the product description by repetition. Repetition scales both
+# representations the same way: TF-IDF term frequencies (IDF unchanged) and the token-mean embedding
+# (reason tokens carry proportionally more mass). Reason is the cause signal; product adds food
+# context. Two weightings, because themes and neighbours answer different questions:
+#   * NEIGHBOURS / events (2:1) — "what recall is like this one?" wants product in the mix (two
+#     recalls of the same product line are related); this is the ratio benchmarked in
+#     scripts/eval_embeddings.py against FDA event_id.
+#   * THEMES (4:1) — "what is the cause?" A long product blurb (packaging, weights, origin)
+#     otherwise drowns a short cause ("Undeclared fish.") and drags the recall into a generic
+#     product cluster; up-weighting reason lands it on its actual cause. Product is kept (not
+#     dropped) so a theme can still lean on food context where the reason is sparse.
 _REASON_WEIGHT = 2
 _PRODUCT_WEIGHT = 1
+_THEME_REASON_WEIGHT = 4
+_THEME_PRODUCT_WEIGHT = 1
 
 # Packaging / quantity / legal-entity / format boilerplate with no bearing on the recall cause.
 _DOMAIN_STOP = {
@@ -319,10 +331,17 @@ def _strip_company(text: str, company: str | None) -> str:
     return " ".join(word for word in text.split() if word.lower() not in names)
 
 
-def _compose_text(reason: str, product: str, company: str | None) -> str:
+def _compose_text(
+    reason: str,
+    product: str,
+    company: str | None,
+    *,
+    reason_weight: int = _REASON_WEIGHT,
+    product_weight: int = _PRODUCT_WEIGHT,
+) -> str:
     reason_text = _strip_company(reason, company)
     product_text = _strip_company(product, company)
-    return " ".join([reason_text] * _REASON_WEIGHT + [product_text] * _PRODUCT_WEIGHT).strip()
+    return " ".join([reason_text] * reason_weight + [product_text] * product_weight).strip()
 
 
 @dataclass
@@ -460,6 +479,8 @@ def build_analytics(
     texts: list[str],
     embeddings: np.ndarray,
     *,
+    theme_texts: list[str] | None = None,
+    theme_embeddings: np.ndarray | None = None,
     n_topics: int = _N_TOPICS,
     n_terms: int = _N_TERMS,
     n_neighbors: int = _N_NEIGHBORS,
@@ -467,31 +488,43 @@ def build_analytics(
     min_topic_docs: int = _MIN_DOCS,
     min_topic_sim: float = _MIN_TOPIC_SIM,
 ) -> AnalyticsResult:
-    """Cluster `texts` (via their L2-normalised `embeddings` rows, aligned 1:1) into themes +
-    nearest neighbours. Docs with no usable text (and the whole corpus when it's too small) get no
-    topic and no neighbours, never an error.
+    """Cluster the corpus into themes + nearest neighbours from its L2-normalised embedding rows.
 
-    Themes are only clustered when the corpus has at least `min_topic_docs` usable documents; below
-    that they'd be one-off brand noise, so no topics are produced while neighbours still build
-    (they degrade gracefully). The caller sets the floor — `rebuild_analytics` uses a high one per
-    country; the default stays low so small corpora (tests) keep their topics."""
-    if len(texts) != embeddings.shape[0]:
-        raise ValueError(f"{len(texts)} texts but {embeddings.shape[0]} embedding rows")
+    Neighbours use `texts`/`embeddings`; themes cluster on (and are labelled from)
+    `theme_texts`/`theme_embeddings`, which default to the same. `rebuild_analytics` passes a
+    reason-dominant embedding for themes (cause-focused) while keeping the product-aware one for
+    neighbours — see the weight constants. All four arrays are aligned 1:1 with `texts`.
+
+    Docs with no usable text (and the whole corpus when it's too small) get no topic and no
+    neighbours, never an error. Themes are only clustered when the corpus has at least
+    `min_topic_docs` usable documents; below that they'd be one-off brand noise, so no topics are
+    produced while neighbours still build (they degrade gracefully). The caller sets the floor —
+    `rebuild_analytics` uses a high one per country; the default stays low so small corpora (tests)
+    keep their topics."""
+    theme_texts = texts if theme_texts is None else theme_texts
+    theme_embeddings = embeddings if theme_embeddings is None else theme_embeddings
+    for name, array in (("embeddings", embeddings), ("theme_embeddings", theme_embeddings)):
+        if len(texts) != array.shape[0]:
+            raise ValueError(f"{len(texts)} texts but {array.shape[0]} {name} rows")
+    if len(theme_texts) != len(texts):
+        raise ValueError(f"{len(texts)} texts but {len(theme_texts)} theme_texts")
     topic_ids: list[int | None] = [None] * len(texts)
     neighbors: list[list[tuple[int, float]]] = [[] for _ in texts]
 
+    # A recall is empty for both weightings together (both are empty only when reason and product
+    # are both blank), so one nonempty index set aligns the neighbour and theme arrays alike.
     nonempty = [i for i, text in enumerate(texts) if text and text.strip()]
     if len(nonempty) < _MIN_DOCS:
         return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors)
 
-    corpus = [texts[i] for i in nonempty]
     vectors = embeddings[nonempty]
 
     topics: list[TopicInfo] = []
-    if len(corpus) >= min_topic_docs:
+    theme_corpus = [theme_texts[i] for i in nonempty]
+    if len(theme_corpus) >= min_topic_docs:
         clustered = _cluster_topics(
-            corpus,
-            vectors,
+            theme_corpus,
+            theme_embeddings[nonempty],
             n_topics=n_topics,
             n_terms=n_terms,
             min_df=min_df,
@@ -527,8 +560,9 @@ def _unique_slug(label: str, topic_id: int, seen: set[str]) -> str:
 def rebuild_analytics(session: Session) -> dict[str, int]:
     """Recompute topics + neighbours and replace the materialised tables. Themes are computed **per
     country** (US and UK recall structures differ, and the dashboard is country-scoped), and
-    similarity stays within a country too — each country's corpus is embedded once and reused for
-    both. Called by scripts/build_analytics.py. One transaction."""
+    similarity stays within a country too. Each country's corpus is embedded twice — a
+    product-aware text for neighbours and a reason-dominant one for themes (see the weight
+    constants). Called by scripts/build_analytics.py. One transaction."""
     # Only the text + country columns feed the work (PKs load automatically; topic_id is written
     # back, not read) — so skip the heavy `raw` JSONB to bound memory over the whole corpus.
     recalls = list(
@@ -563,11 +597,25 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     next_topic_id = 0  # surrogate ids, unique across countries so recalls.topic_id stays one int
     for country in sorted(by_country):
         group = by_country[country]
-        texts = [_compose_text(r.reason_text, r.product_description, r.company_name) for r in group]
+        neighbor_texts = [
+            _compose_text(r.reason_text, r.product_description, r.company_name) for r in group
+        ]
+        theme_texts = [
+            _compose_text(
+                r.reason_text,
+                r.product_description,
+                r.company_name,
+                reason_weight=_THEME_REASON_WEIGHT,
+                product_weight=_THEME_PRODUCT_WEIGHT,
+            )
+            for r in group
+        ]
         # Skip themes for a low-volume country (no topics, neighbours still build); US/UK clear it.
         result = build_analytics(
-            texts,
-            embed_texts(texts),
+            neighbor_texts,
+            embed_texts(neighbor_texts),
+            theme_texts=theme_texts,
+            theme_embeddings=embed_texts(theme_texts),
             min_df=_corpus_min_df(len(group)),
             min_topic_docs=_MIN_TOPIC_CORPUS,
         )

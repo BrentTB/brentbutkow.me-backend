@@ -100,6 +100,42 @@ def test_embeddings_must_align_with_texts():
         build_analytics(["a", "b"], _rows((1.0, 0.0)))
 
 
+def test_theme_embeddings_drive_clustering_independently_of_neighbours():
+    # rebuild_analytics feeds a reason-dominant embedding for themes and a product-aware one for
+    # neighbours. Craft the two so they disagree: under the neighbour vectors docs {0,1} pair and
+    # {2,3} pair, but under the theme vectors the grouping is {0,2} vs {1,3}. Themes must follow the
+    # theme vectors; neighbours must follow the neighbour vectors.
+    texts = ["listeria deli", "peanut cookie", "listeria cheese", "peanut candy"]
+    neighbor_emb = _rows((1.0, 0.05), (1.0, -0.05), (-1.0, 0.05), (-1.0, -0.05))
+    theme_emb = _rows((0.05, 1.0), (0.05, -1.0), (-0.05, 1.0), (-0.05, -1.0))
+    result = build_analytics(
+        texts,
+        neighbor_emb,
+        theme_texts=texts,
+        theme_embeddings=theme_emb,
+        n_topics=2,
+        n_neighbors=1,
+        min_df=1,
+    )
+
+    # Neighbours follow neighbor_emb: 0↔1 and 2↔3.
+    assert result.neighbors[0][0][0] == 1
+    assert result.neighbors[2][0][0] == 3
+    # Themes follow theme_emb: 0 with 2 (top halves), 1 with 3 (bottom halves).
+    assert result.topic_ids[0] == result.topic_ids[2]
+    assert result.topic_ids[1] == result.topic_ids[3]
+    assert result.topic_ids[0] != result.topic_ids[1]
+
+
+def test_theme_embeddings_must_align_with_texts():
+    with pytest.raises(ValueError):
+        build_analytics(
+            ["a", "b", "c"],
+            _rows((1.0, 0.0), (0.0, 1.0), (1.0, 1.0)),
+            theme_embeddings=_rows((1.0, 0.0), (0.0, 1.0)),
+        )
+
+
 def test_too_small_a_corpus_returns_no_topics_or_neighbours():
     result = build_analytics(["only one document here"], _rows((1.0, 0.0)), n_topics=3)
     assert result.topics == []
