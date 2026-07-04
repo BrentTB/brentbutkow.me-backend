@@ -19,7 +19,7 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · severity · anomalies · embeddings · analytics (embedding themes + similarity) · service · router
+  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · class_predictor (cross-country class, model/) · entities · severity · anomalies · embeddings · analytics (embedding themes + similarity + novelty) · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
   modules/nullspace/ schemas · models · service · router — Null Space game leaderboard (rate-limited, server-side score plausibility checks)
 scripts/           per-source ingest + ingest_all · backfill + backfill_all (detects what's needed) · reclassify · classifier training
@@ -31,7 +31,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` · `novelty` (most unusual first) |
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, forecast, lastIngestAt }` |
 | GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
@@ -76,8 +76,22 @@ and `app/modules/recalls/embeddings.py`). `event` likewise scopes to an
 `/recalls/events?country` lists a country's clusters — recalls grouped into one incident by a shared
 pathogen within a time window or the same FDA event, with the multi-recall pathogen-driven ones
 flagged as outbreaks — materialised by `scripts/build_events.py` (connected components over the
-similarity graph; see `app/modules/recalls/events.py`). `stats.anomalies` flags months that
-*already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
+similarity graph; see `app/modules/recalls/events.py`). Each recall also carries a `noveltyScore`
+in [0, 1] — how unlike its nearest neighbours it is in embedding space (1 − mean top-k neighbour
+cosine, missing slots floored at 0, materialised alongside the neighbours); `sort=novelty` surfaces
+the "unusual recalls" feed, with the most isolated recalls scoring highest (null only when the
+corpus is too small to compare). And recalls from countries with no native class
+ladder (UK, ZA) carry a `predictedClass` (`"Class I"` = serious, or `"not Class I"`) +
+`predictedClassConfidence` — a Model2Vec-embedding + logistic-regression model trained on the
+countries that do (US FDA + CA CFIA, Class II/III collapsed) and applied to the ones that don't,
+materialised by `scripts/build_predictions.py` (see `app/modules/recalls/class_predictor.py` and its
+model card). The task is binary on purpose — Class-I-vs-rest is where the signal is; II vs III turns
+on facts the notice doesn't state. A `Class I` prediction also **lifts that recall's `severityScore`**
+(scaled by confidence, bounded so it modulates rather than anchors), so severity reads on one scale
+across all four countries. It is a **prediction, not a regulator's ruling** — cross-country transfer
+is imperfect (the card reports the honest train-US/test-CA accuracy), so it always rides with its
+confidence. `stats.anomalies` flags months that *already* broke from their recent baseline (robust
+z-score, **detect never predict**); `stats.forecast`
 looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,
 from a self-built multiplicative seasonal model (a 12-month seasonal index + linear trend fit in log
 space, pure numpy; empty when history is too short). `scripts/anomaly_methodology.py` and

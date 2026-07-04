@@ -292,6 +292,14 @@ def list_recalls(
         stmt = stmt.outerjoin(RecallEvent, Recall.event_cluster_id == RecallEvent.id)
         ordering.append(Recall.severity_score.desc().nulls_last())
         ordering.append(RecallEvent.recall_count.desc().nulls_last())
+    if sort == RecallSort.novelty.value:
+        # The "unusual recalls" feed: most novel first. Exclude recalls with no novelty score (too
+        # few neighbours to judge) so the feed isn't padded by text-sparse rows rather than letting
+        # them sink to the bottom.
+        novelty_present = Recall.novelty_score.is_not(None)
+        stmt = stmt.where(novelty_present)
+        count_stmt = count_stmt.where(novelty_present)
+        ordering.append(Recall.novelty_score.desc())
     ordering.append(Recall.report_date.desc().nulls_last())
     rows = session.scalars(stmt.order_by(*ordering).limit(limit).offset(offset)).all()
     total = session.scalar(count_stmt) or 0

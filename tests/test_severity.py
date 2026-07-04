@@ -1,9 +1,57 @@
+from app.modules.recalls.class_predictor import NEGATIVE_CLASS
 from app.modules.recalls.schemas import RecallCategory, RecallClass, SeverityLabel
 from app.modules.recalls.severity import score_severity
 
 
 def _ent(type_: str, value: str) -> dict[str, str]:
     return {"type": type_, "value": value}
+
+
+def test_predicted_class_i_lifts_uk_severity_scaled_by_confidence():
+    # A UK Allergy Alert (no native class) with a confident predicted Class I reads more serious
+    # than the same recall with no prediction, and more so than a hesitant prediction.
+    base_kwargs = dict(
+        classification=RecallClass.allergy_alert.value,
+        category=RecallCategory.allergen.value,
+        entities=[],
+    )
+    unpredicted, _ = score_severity(**base_kwargs)
+    hesitant, _ = score_severity(
+        **base_kwargs, predicted_class=RecallClass.class_i.value, predicted_class_confidence=0.55
+    )
+    confident, _ = score_severity(
+        **base_kwargs, predicted_class=RecallClass.class_i.value, predicted_class_confidence=0.95
+    )
+    assert unpredicted < hesitant < confident
+
+
+def test_predicted_not_class_i_does_not_change_severity():
+    # Only a positive (Class I) prediction nudges; "not Class I" leaves the score at its anchor.
+    base_kwargs = dict(
+        classification=RecallClass.allergy_alert.value,
+        category=RecallCategory.allergen.value,
+        entities=[],
+    )
+    unpredicted, _ = score_severity(**base_kwargs)
+    negative, _ = score_severity(
+        **base_kwargs, predicted_class=NEGATIVE_CLASS, predicted_class_confidence=0.9
+    )
+    assert negative == unpredicted
+
+
+def test_predicted_class_i_lift_modulates_never_anchors():
+    # The lift modulates a low-base recall, it never single-handedly anchors it into the severe band
+    # (only a real Class I / true anchor should). A fully-confident predicted Class I on an
+    # otherwise low-base allergy alert must stay below the severe threshold (75).
+    score, label = score_severity(
+        classification=RecallClass.allergy_alert.value,
+        category=RecallCategory.allergen.value,
+        entities=[],
+        predicted_class=RecallClass.class_i.value,
+        predicted_class_confidence=1.0,
+    )
+    assert score < 75
+    assert label != SeverityLabel.severe.value
 
 
 def test_class_i_is_always_severe():

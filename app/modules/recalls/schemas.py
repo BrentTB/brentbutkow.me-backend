@@ -65,6 +65,7 @@ class SeverityLabel(StrEnum):
 class RecallSort(StrEnum):
     recency = "recency"  # most recent report_date first (the default)
     severity = "severity"  # highest severity_score first, then larger outbreaks, then most recent
+    novelty = "novelty"  # most novel (unlike its neighbours) first — the "unusual recalls" feed
 
 
 class RecallEntity(CamelModel):
@@ -118,6 +119,27 @@ class RecallOut(CamelModel):
     event_cluster_id: int | None = Field(
         default=None,
         description="Event/outbreak cluster id (recall_events.id); null until events are built.",
+    )
+    predicted_class: str | None = Field(
+        default=None,
+        description=(
+            'Model prediction "Class I" (serious) or "not Class I" for recalls from countries with '
+            "no native class ladder (UK, ZA); null for US/CA, which carry a real classification, "
+            "and until the predictions build runs. A prediction, not a regulator's call — a "
+            "Class I prediction also lifts the recall's severityScore."
+        ),
+    )
+    predicted_class_confidence: float | None = Field(
+        default=None,
+        description="Confidence in [0, 1] for predictedClass; null when there is no prediction.",
+    )
+    novelty_score: float | None = Field(
+        default=None,
+        description=(
+            "How unlike its nearest neighbours this recall is, in [0, 1] (higher = more unusual); "
+            "an isolated recall scores highest. Null only when the corpus is too small to compare "
+            "and until the analytics build runs."
+        ),
     )
     entities: list[RecallEntity] = Field(
         default_factory=list,
