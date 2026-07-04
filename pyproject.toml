@@ -18,12 +18,14 @@ dependencies = [
     "numpy>=2",
     "scikit-learn>=1.5",
     "joblib>=1.4",
+    "model2vec>=0.8",  # embeddings for the analytics build (offline, like sklearn — never at request time)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "hypothesis>=6", "ruff>=0.7", "mypy>=1.13", "pre-commit>=3.7"]
-# Offline only — scripts/anomaly_methodology.py uses STL to validate the runtime z-score detector.
-# Never imported by the app, so the deploy build stays light. Install with: pip install -e '.[ml]'.
+# Offline only — statsmodels validates the runtime anomaly/forecast methods against heavier
+# reference models. Never imported by the app, so the deploy build stays light.
+# Install with: pip install -e '.[ml]'.
 ml = ["statsmodels>=0.14"]
 
 [build-system]

@@ -113,7 +113,7 @@ class RecallOut(CamelModel):
     )
     topic_id: int | None = Field(
         default=None,
-        description="NMF theme id (recall_topics.id); null until the analytics build runs.",
+        description="Theme id (recall_topics.id); null until the analytics build runs.",
     )
     event_cluster_id: int | None = Field(
         default=None,

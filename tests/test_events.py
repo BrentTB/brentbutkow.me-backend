@@ -32,7 +32,7 @@ def test_shared_pathogen_time_and_text_link_across_companies():
         _rec(date(2026, 1, 15), pathogens=("Listeria",), company="B"),
         _rec(date(2026, 1, 28), pathogens=("Listeria",), company="C"),
     ]
-    result = cluster_events(recalls, [(0, 1, 0.6), (1, 2, 0.6)])
+    result = cluster_events(recalls, [(0, 1, 0.9), (1, 2, 0.9)])
     assert len({result.cluster_ids[i] for i in range(3)}) == 1  # all in one cluster
     cluster = result.clusters[result.cluster_ids[0]]
     assert cluster.is_outbreak  # ≥3 recalls + shared pathogen
@@ -64,7 +64,9 @@ def test_below_min_score_does_not_link():
         _rec(date(2026, 1, 1), pathogens=("Listeria",)),
         _rec(date(2026, 1, 5), pathogens=("Listeria",)),
     ]
-    result = cluster_events(recalls, [(0, 1, 0.2)])  # weak similarity
+    # 0.7 would have cleared the old TF-IDF bar (0.50) but sits below the embedding-calibrated
+    # threshold — embedding cosines run high, so a mid-range score is weak evidence.
+    result = cluster_events(recalls, [(0, 1, 0.7)])
     assert result.clusters == []
 
 
@@ -88,7 +90,7 @@ def test_two_recall_pathogen_cluster_is_event_not_outbreak():
         _rec(date(2026, 1, 1), pathogens=("Listeria",)),
         _rec(date(2026, 1, 5), pathogens=("Listeria",)),
     ]
-    result = cluster_events(recalls, [(0, 1, 0.7)])
+    result = cluster_events(recalls, [(0, 1, 0.9)])
     assert len(result.clusters) == 1
     assert not result.clusters[0].is_outbreak  # size 2 is below the outbreak floor
 
@@ -129,7 +131,7 @@ def test_cluster_metadata():
             date(2026, 1, 20), pathogens=("Salmonella",), company="A", states=("CA",), severity=70
         ),
     ]
-    result = cluster_events(recalls, [(0, 1, 0.7), (1, 2, 0.7)])
+    result = cluster_events(recalls, [(0, 1, 0.9), (1, 2, 0.9)])
     cluster = result.clusters[result.cluster_ids[0]]
     assert cluster.company_count == 2  # A, B
     assert cluster.state_count == 3  # CA, NY, TX

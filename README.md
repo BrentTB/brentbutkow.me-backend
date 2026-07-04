@@ -19,7 +19,7 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · severity · anomalies · analytics (TF-IDF themes + similarity) · service · router
+  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · entities · severity · anomalies · embeddings · analytics (embedding themes + similarity) · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
   modules/nullspace/ schemas · models · service · router — Null Space game leaderboard (rate-limited, server-side score plausibility checks)
 scripts/           per-source ingest + ingest_all · backfill + backfill_all (detects what's needed) · reclassify · classifier training
@@ -35,7 +35,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, forecast, lastIngestAt }` |
 | GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
-| GET | `/recalls/topics?country` | per-country themes (NMF over reason/product text), largest first → `TopicOut[]` |
+| GET | `/recalls/topics?country` | per-country themes (k-means clusters over neural text embeddings), largest first → `TopicOut[]` |
 | GET | `/recalls/{source}/{recallNumber}/similar?limit` | recalls most similar by reason/product text (precomputed cosine neighbours) → `SimilarRecall[]` |
 | GET | `/recalls/events?country&outbreaksOnly` | recall clusters — recalls grouped into one incident (shared pathogen within a time window, or same FDA event); outbreaks first → `EventOut[]` |
 | POST | `/recalls/ingest/fda` | **bearer-only** — fetches openFDA, upserts, records an ingest run |
@@ -68,9 +68,10 @@ casualty counts). `severity` filters to one band, `minSeverity` to recalls at or
 breaks the corpus down by band. `topic` scopes to a theme by its **stable slug** (e.g.
 `listeria-deli-meat`, from `/recalls/topics`) so a bookmarked theme survives an analytics rebuild,
 where the surrogate id would not; each recall also carries its `topicId`. `/recalls/topics?country`
-lists that country's themes (NMF runs per country) and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
-— both materialised offline by `scripts/build_analytics.py` from one shared TF-IDF matrix (NMF themes
-+ cosine similarity; see `app/modules/recalls/analytics.py`). `event` likewise scopes to an
+lists that country's themes (clustering runs per country) and `/recalls/{source}/{recallNumber}/similar` returns a recall's nearest neighbours
+— both materialised offline by `scripts/build_analytics.py` from shared Model2Vec text embeddings
+(k-means themes labelled by TF-IDF terms + cosine similarity; see `app/modules/recalls/analytics.py`
+and `app/modules/recalls/embeddings.py`). `event` likewise scopes to an
 **event/outbreak cluster** by its stable slug and each recall carries its `eventClusterId`;
 `/recalls/events?country` lists a country's clusters — recalls grouped into one incident by a shared
 pathogen within a time window or the same FDA event, with the multi-recall pathogen-driven ones

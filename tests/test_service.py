@@ -451,9 +451,12 @@ def test_rebuild_stats_materializes_a_row_per_country(session, monkeypatch):
 
     summary = service.rebuild_stats(session)
 
-    assert summary == {"countries": 2}
+    # rebuild_stats materializes a row for every dashboard country (us, uk, za, ca — see
+    # _COUNTRY_SOURCES), not just the ones ingested here, so the endpoint always has a cached
+    # payload. za/ca simply come back empty.
+    assert summary == {"countries": 4}
     cached = {row.country for row in session.scalars(select(RecallStatsCache)).all()}
-    assert cached == {"us", "uk"}
+    assert cached == {"us", "uk", "za", "ca"}
     # The stored JSONB payload reconstructs into the same RecallStats shape get_stats returns.
     assert service.get_stats(session, "us").total == 1
     assert service.get_stats(session, "uk").total == 1
@@ -629,13 +632,14 @@ def test_get_trend_groups_by_dimension(session, monkeypatch):
     src = {(b.month, b.group): b.count for b in service.get_trend(session, group="source").buckets}
     assert src[("2024-01", "fda")] == 2
 
-    # Severity bands: the Class I allergen + Class II listeria land severe; unclassified soy is
-    # moderate (category-only base).
+    # Severity bands: the Class I allergen + Class II listeria land severe; unclassified soy sits at
+    # high — its allergen category base (46) plus the cause nudge lifts it just past the high floor
+    # (55) under the diminishing-returns scoring (severity.py, #15).
     sev = {
         (b.month, b.group): b.count for b in service.get_trend(session, group="severity").buckets
     }
     assert sev[("2024-01", "severe")] == 2
-    assert sev[("2024-03", "moderate")] == 1
+    assert sev[("2024-03", "high")] == 1
 
     # Classification — the nullable column is coalesced so unclassified soy gets its own segment.
     cls = {
@@ -860,8 +864,11 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
         [
-            # Class III allergen → low; Class I Listeria → severe; Class II mislabel → moderate.
-            _record("V-1", reason_for_recall="undeclared milk", classification="Class III"),
+            # Class III quality defect → low; Class I Listeria → severe; Class II mislabel →
+            # moderate. (A Class III *allergen* now lands moderate, not low, under the #15
+            # diminishing-returns lift — the allergen category nudge alone clears the floor — so
+            # this low-band case uses an other-category defect instead.)
+            _record("V-1", reason_for_recall="product quality defect", classification="Class III"),
             _record(
                 "V-2",
                 reason_for_recall="Listeria monocytogenes contamination",
@@ -899,12 +906,13 @@ def test_severity_scores_sort_filter_and_breakdown(session, monkeypatch):
 def test_analytics_topics_neighbours_and_topic_filter(session, monkeypatch):
     from app.modules.recalls import analytics
 
-    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
-    # surface no themes; lower it here so this small fixture still factors topics to assert on.
+    # rebuild_analytics gates themes on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume
+    # countries surface no themes; lower it here so this small fixture still clusters to assert on.
     monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
 
-    # Three pairs of near-duplicate recalls so every doc shares ≥2-document-frequency terms with its
-    # partner — the default min_df keeps them, so every recall gets a topic + neighbours.
+    # Three pairs of near-duplicate recalls: their embeddings sit tight on the cluster centroids
+    # (clearing the assignment gate), and every doc shares ≥2-document-frequency terms with its
+    # partner so the default min_df keeps label vocabulary for every theme.
     _patch_fetch(
         monkeypatch,
         [
@@ -1044,8 +1052,8 @@ def test_rebuild_writes_derived_ids_without_bumping_updated_at(session, monkeypa
     # test above never exercises.
     from app.modules.recalls import analytics, events
 
-    # rebuild_analytics gates NMF on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume countries
-    # surface no themes; lower it here so this small fixture still factors topics to write back.
+    # rebuild_analytics gates themes on a real-corpus floor (_MIN_TOPIC_CORPUS) so low-volume
+    # countries surface no themes; lower it here so this small fixture still writes topics back.
     monkeypatch.setattr(analytics, "_MIN_TOPIC_CORPUS", 3)
 
     _patch_fetch(

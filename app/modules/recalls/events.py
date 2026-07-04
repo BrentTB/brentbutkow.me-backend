@@ -32,11 +32,15 @@ from sqlalchemy.orm import Session, load_only
 from app.modules.recalls.models import Recall, RecallEvent, RecallNeighbor
 from app.modules.recalls.schemas import EntityType
 
-# Linkage thresholds — tuned empirically on the real corpus (see git history). A pair links on text
-# only above this cosine score, and only if their report dates are within the window. Kept fairly
-# tight: pathogen reason-text is boilerplate-heavy ("possible Salmonella contamination"), so a loose
-# score chains distinct outbreak waves into one blob via transitive links.
-_MIN_SCORE = 0.50
+# Linkage thresholds — tuned empirically on the real corpus. A pair links on text only above this
+# cosine score, and only if their report dates are within the window. Embedding cosines
+# (potion-base-8M, see analytics/embeddings) run far higher than the old sparse TF-IDF ones, so
+# the bar sits high: calibrated against FDA event_id ground truth over the stored neighbour pairs
+# (Jul 2026), 0.85 classifies same-event edges at precision 0.948 / recall 0.896, while the old
+# TF-IDF value 0.50 would keep essentially every embedding pair (precision 0.65). Kept tight
+# because connected components chain transitively — a loose score chains distinct outbreak waves
+# into one blob.
+_MIN_SCORE = 0.85
 _WINDOW_DAYS = 60
 
 # A cluster needs ≥ this many recalls to exist at all; an outbreak needs ≥ this many AND a shared
