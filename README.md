@@ -78,8 +78,9 @@ pathogen within a time window or the same FDA event, with the multi-recall patho
 flagged as outbreaks — materialised by `scripts/build_events.py` (connected components over the
 similarity graph; see `app/modules/recalls/events.py`). Each recall also carries a `noveltyScore`
 in [0, 1] — how unlike its nearest neighbours it is in embedding space (1 − mean top-k neighbour
-cosine, materialised alongside the neighbours); `sort=novelty` surfaces the "unusual recalls" feed,
-omitting recalls with too few neighbours to score. And recalls from countries with no native class
+cosine, missing slots floored at 0, materialised alongside the neighbours); `sort=novelty` surfaces
+the "unusual recalls" feed, with the most isolated recalls scoring highest (null only when the
+corpus is too small to compare). And recalls from countries with no native class
 ladder (UK, ZA) carry a `predictedClass` (`"Class I"` = serious, or `"not Class I"`) +
 `predictedClassConfidence` — a Model2Vec-embedding + logistic-regression model trained on the
 countries that do (US FDA + CA CFIA, Class II/III collapsed) and applied to the ones that don't,

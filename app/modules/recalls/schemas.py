@@ -137,7 +137,8 @@ class RecallOut(CamelModel):
         default=None,
         description=(
             "How unlike its nearest neighbours this recall is, in [0, 1] (higher = more unusual); "
-            "null for recalls with too few neighbours to judge and until the analytics build runs."
+            "an isolated recall scores highest. Null only when the corpus is too small to compare "
+            "and until the analytics build runs."
         ),
     )
     entities: list[RecallEntity] = Field(

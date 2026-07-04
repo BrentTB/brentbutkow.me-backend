@@ -102,17 +102,22 @@ def test_embeddings_must_align_with_texts():
 
 def test_novelty_is_one_minus_mean_of_top_k():
     # Neighbours arrive sorted by descending cosine; novelty averages the closest _NOVELTY_K (3).
-    assert _novelty([(0, 0.9), (1, 0.8), (2, 0.7), (3, 0.1)]) == pytest.approx(0.2)
+    assert _novelty([(0, 0.9), (1, 0.8), (2, 0.7), (3, 0.1)], available=6) == pytest.approx(0.2)
     # A crowded neighbourhood (all near 1.0) is ordinary → low novelty.
-    assert _novelty([(0, 1.0), (1, 1.0), (2, 1.0)]) == pytest.approx(0.0)
-    # Too few neighbours to judge → no score, not a misleadingly-high one.
-    assert _novelty([(0, 0.9), (1, 0.8)]) is None
-    assert _novelty([]) is None
+    assert _novelty([(0, 1.0), (1, 1.0), (2, 1.0)], available=6) == pytest.approx(0.0)
+    # Fewer than K positive neighbours: the missing slots floor at cosine 0, so an isolated recall
+    # scores as *more* novel rather than dropping out of the "unusual recalls" feed.
+    assert _novelty([(0, 0.9), (1, 0.8)], available=6) == pytest.approx(0.4333)
+    assert _novelty([], available=6) == pytest.approx(1.0)
+    # None only when the corpus itself is too small to hold _NOVELTY_K other recalls to compare.
+    assert _novelty([(0, 0.9), (1, 0.8)], available=2) is None
+    assert _novelty([], available=0) is None
 
 
 def test_build_analytics_scores_novelty_and_leaves_isolated_recalls_most_novel():
-    # Two tight clusters plus one point weakly related to everything: it is the most novel, and
-    # every scored recall needs >= 3 neighbours (else None).
+    # Two tight clusters plus one point weakly related to everything: it is the most novel. The
+    # corpus holds >= _NOVELTY_K other recalls, so every recall is scored (None only for a corpus
+    # too small to compare).
     texts = ["a", "b", "c", "d", "e", "f", "g"]
     embeddings = _rows(
         (1.0, 0.02, 0.02),

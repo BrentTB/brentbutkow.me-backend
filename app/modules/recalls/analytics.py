@@ -62,10 +62,11 @@ _MIN_TOPIC_SIM = 0.55
 # Similarity: nearest neighbours kept per recall.
 _N_NEIGHBORS = 8
 
-# Novelty — 1 − the mean cosine of a recall's top-_NOVELTY_K neighbours. A recall whose nearest
-# neighbours are all far away is unlike anything else in the corpus (a first-of-its-kind hazard or
-# product). It needs at least this many neighbours to judge — below that the mean is too noisy, so
-# no score (the "unusual recalls" feed then can't surface a recall isolated merely by sparse text).
+# Novelty — 1 − the mean cosine of a recall's top-_NOVELTY_K neighbours, missing slots floored at
+# cosine 0. A recall whose nearest neighbours are all far away (or which has fewer than _NOVELTY_K
+# positive-cosine neighbours at all) is unlike anything else in the corpus — a first-of-its-kind
+# hazard or product — and scores as maximally novel, so the "unusual recalls" feed surfaces exactly
+# these. Scored only once the corpus holds at least this many other recalls to compare against.
 _NOVELTY_K = 3
 
 # Below this many usable documents there's nothing meaningful to factor or compare.
@@ -370,13 +371,18 @@ class AnalyticsResult:
     topics: list[TopicInfo] = field(default_factory=list)
 
 
-def _novelty(neighbor_scores: list[tuple[int, float]]) -> float | None:
+def _novelty(neighbor_scores: list[tuple[int, float]], available: int) -> float | None:
     # Neighbours arrive sorted by descending cosine, so [:k] is the closest k. High mean cosine →
-    # crowded neighbourhood → ordinary; low → isolated → novel. None below the minimum count.
-    if len(neighbor_scores) < _NOVELTY_K:
+    # crowded neighbourhood → ordinary; low → isolated → novel. A recall with fewer than _NOVELTY_K
+    # positive-cosine neighbours is the *most* isolated, so its missing slots floor at cosine 0
+    # (maximally novel) rather than nulling the score — otherwise the "unusual recalls" feed would
+    # drop exactly the recalls it exists to surface. None only when the corpus itself holds fewer
+    # than _NOVELTY_K other recalls, so there is genuinely nothing to compare against.
+    if available < _NOVELTY_K:
         return None
     top = [score for _, score in neighbor_scores[:_NOVELTY_K]]
-    return round(1.0 - sum(top) / len(top), 4)
+    top += [0.0] * (_NOVELTY_K - len(top))
+    return round(1.0 - sum(top) / _NOVELTY_K, 4)
 
 
 def _compute_neighbors(
@@ -556,9 +562,10 @@ def build_analytics(
                     topic_ids[original] = assignments[position]
 
     corpus_neighbors = _compute_neighbors(vectors, n_neighbors)
+    available = len(nonempty) - 1  # other recalls each doc could neighbour with
     for position, original in enumerate(nonempty):
         neighbors[original] = [(nonempty[j], score) for j, score in corpus_neighbors[position]]
-        novelty[original] = _novelty(neighbors[original])
+        novelty[original] = _novelty(neighbors[original], available)
     return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, novelty=novelty, topics=topics)
 
 

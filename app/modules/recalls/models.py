@@ -67,8 +67,9 @@ class Recall(Base):
     predicted_class: Mapped[str | None] = mapped_column(Text)
     predicted_class_confidence: Mapped[float | None] = mapped_column(Float)
     # Novelty from scripts/build_analytics.py — how unlike its nearest neighbours a recall is
-    # (1 − mean top-k neighbour cosine), in embedding space. Indexed for `sort=novelty`. NULL for
-    # recalls with too few neighbours to judge and until the analytics build runs. Derived.
+    # (1 − mean top-k neighbour cosine, missing slots floored at 0), in embedding space. Indexed
+    # for `sort=novelty`. An isolated recall scores as most novel; NULL only when the corpus is too
+    # small to compare, and until the analytics build runs. Derived.
     novelty_score: Mapped[float | None] = mapped_column(Float, index=True)
     # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
     # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
