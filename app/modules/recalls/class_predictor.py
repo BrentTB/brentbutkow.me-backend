@@ -30,12 +30,18 @@ from app.modules.recalls.analytics import _compose_text
 from app.modules.recalls.embeddings import embed_texts
 from app.modules.recalls.models import Recall
 from app.modules.recalls.schemas import RecallClass
+from app.modules.recalls.severity import score_severity
 
 MODEL_PATH = Path(__file__).parent / "model" / "class_predictor.joblib"
 
-# Only the graded classes are predicted (US Public Health Alerts and unclassified rows are excluded
-# from training) — the label space is exactly these three.
-CLASS_LABELS = [RecallClass.class_i.value, RecallClass.class_ii.value, RecallClass.class_iii.value]
+# Binary task: is this a Class I (serious) recall, or not? The three-way I/II/III split was barely
+# learnable from text (II vs III turns on facts the notice doesn't state); Class-I-vs-rest is where
+# the real signal is, and it's the question that matters for severity. Class II/III (and, in
+# training, they alone — Public Health Alerts and unclassified rows are excluded) collapse into the
+# negative label.
+POSITIVE_CLASS = RecallClass.class_i.value  # "Class I"
+NEGATIVE_CLASS = "not Class I"
+CLASS_LABELS = [POSITIVE_CLASS, NEGATIVE_CLASS]
 
 # Countries with no native class system, so a prediction is meaningful there. US/CA carry a real
 # `classification`, so they are never overwritten with a guess.
@@ -75,12 +81,17 @@ def predict_classes(texts: list[str]) -> tuple[list[str | None], list[float]]:
 
 
 def rebuild_predictions(session: Session) -> dict[str, int]:
-    """Predict + materialise `predicted_class` / `predicted_class_confidence` for the countries with
-    no native class system (UK, ZA). Called by scripts/build_predictions.py. One transaction.
+    """Predict the class for the countries with no native class system (UK, ZA) and materialise it
+    into `predicted_class` / `predicted_class_confidence`, then **re-score their severity** so a
+    likely-Class-I recall reads as serious on the shared 0–100 scale. Called by
+    scripts/build_predictions.py. One transaction.
 
     A recall with no usable text (and every recall when no model is committed) gets a NULL
-    prediction rather than a low-signal guess. Like the analytics build, the write preserves
-    `updated_at` — predicted_class is a derived column, not a source change."""
+    prediction and its severity is recomputed with no predicted-class lift (as at ingest). Like the
+    analytics build, the write preserves `updated_at`: predicted_class is derived, and the severity
+    re-score is a derived consequence of it — build_stats reruns after this in the pipeline (and the
+    backfill graph has an explicit edge), so the stats stay in sync without a spurious source-change
+    flag."""
     recalls = list(
         session.scalars(
             select(Recall)
@@ -88,6 +99,11 @@ def rebuild_predictions(session: Session) -> dict[str, int]:
                 load_only(
                     Recall.source,
                     Recall.recall_number,
+                    Recall.classification,
+                    Recall.category,
+                    Recall.entities,
+                    Recall.states,
+                    Recall.distribution_pattern,
                     Recall.reason_text,
                     Recall.product_description,
                     Recall.company_name,
@@ -108,15 +124,28 @@ def rebuild_predictions(session: Session) -> dict[str, int]:
         predicted[original] = labels[position]
         confidence[original] = confidences[position]
 
-    rows = [
-        {
-            "b_source": recall.source,
-            "b_number": recall.recall_number,
-            "b_class": predicted[i],
-            "b_conf": confidence[i],
-        }
-        for i, recall in enumerate(recalls)
-    ]
+    rows = []
+    for i, recall in enumerate(recalls):
+        severity_score, severity_label = score_severity(
+            classification=recall.classification,
+            category=recall.category,
+            entities=recall.entities,
+            states=recall.states,
+            distribution_pattern=recall.distribution_pattern,
+            reason_text=recall.reason_text,
+            predicted_class=predicted[i],
+            predicted_class_confidence=confidence[i],
+        )
+        rows.append(
+            {
+                "b_source": recall.source,
+                "b_number": recall.recall_number,
+                "b_class": predicted[i],
+                "b_conf": confidence[i],
+                "b_sev": severity_score,
+                "b_sev_label": severity_label,
+            }
+        )
 
     # Core UPDATE preserving updated_at (see rebuild_analytics for why): derived columns must not
     # look like a source change to the stats/analytics staleness checks.
@@ -129,6 +158,8 @@ def rebuild_predictions(session: Session) -> dict[str, int]:
             .values(
                 predicted_class=bindparam("b_class"),
                 predicted_class_confidence=bindparam("b_conf"),
+                severity_score=bindparam("b_sev"),
+                severity_label=bindparam("b_sev_label"),
                 updated_at=recall_table.c.updated_at,
             ),
             rows[start : start + _DB_CHUNK],

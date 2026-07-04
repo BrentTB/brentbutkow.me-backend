@@ -1110,14 +1110,14 @@ def test_rebuild_writes_derived_ids_without_bumping_updated_at(session, monkeypa
     assert session.scalar(select(func.max(Recall.updated_at))) == before
 
 
-def test_rebuild_predictions_writes_class_for_uk_without_bumping_updated_at(session, monkeypatch):
+def test_rebuild_predictions_writes_class_and_lifts_uk_severity(session, monkeypatch):
     from app.modules.recalls import class_predictor
 
-    # Deterministic prediction so the test needs neither the trained model nor the embedder.
+    # Deterministic Class I prediction so the test needs neither the trained model nor the embedder.
     monkeypatch.setattr(
         class_predictor,
         "predict_classes",
-        lambda texts: (["Class II"] * len(texts), [0.8] * len(texts)),
+        lambda texts: (["Class I"] * len(texts), [0.9] * len(texts)),
     )
     _patch_fsa(
         monkeypatch,
@@ -1131,18 +1131,24 @@ def test_rebuild_predictions_writes_class_for_uk_without_bumping_updated_at(sess
         ],
     )
     service.run_uk_ingest(session)
-    # A US recall carries a real class and must never be given a prediction.
+    # A US recall carries a real class and must never be given a prediction or re-scored.
     _patch_fetch(monkeypatch, [_record("US-1", reason_for_recall="undeclared milk")])
     service.run_fda_ingest(session)
     before = session.scalar(select(func.max(Recall.updated_at)))
+    uk_severity_before = session.get(Recall, ("uk", "UK-1")).severity_score
+    us_severity_before = session.get(Recall, ("fda", "US-1")).severity_score
 
     summary = class_predictor.rebuild_predictions(session)
     assert summary["predicted"] == 1  # only the UK recall
 
     uk = session.get(Recall, ("uk", "UK-1"))
-    assert uk.predicted_class == "Class II"
-    assert uk.predicted_class_confidence == 0.8
+    assert uk.predicted_class == "Class I"
+    assert uk.predicted_class_confidence == 0.9
+    # The Class I prediction lifted the UK recall's severity above its prediction-free ingest score.
+    assert uk.severity_score > uk_severity_before
+
     us = session.get(Recall, ("fda", "US-1"))
     assert us.predicted_class is None  # US carries a real classification, never a guess
-    # predicted_class is derived, so the write must not look like a source change.
+    assert us.severity_score == us_severity_before  # and is never re-scored
+    # Both writes are derived, so they must not look like a source change.
     assert session.scalar(select(func.max(Recall.updated_at))) == before

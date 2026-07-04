@@ -24,17 +24,18 @@ def test_predict_classes_empty_input():
 
 
 def test_predict_classes_reads_argmax_and_confidence(monkeypatch):
+    # Binary task: sklearn sorts the two labels, so classes_ is ["Class I", "not Class I"].
     class _FakeModel:
-        classes_ = np.array(["Class I", "Class II", "Class III"])
+        classes_ = np.array(["Class I", "not Class I"])
 
         def predict_proba(self, features):
             # One row per input; the highest-probability class is the prediction.
-            return np.array([[0.1, 0.7, 0.2], [0.6, 0.25, 0.15]])
+            return np.array([[0.82, 0.18], [0.3, 0.7]])
 
     monkeypatch.setattr(class_predictor, "_get_model", lambda: _FakeModel())
     # Skip the real embedder (no model download); its output is unused by the fake.
     monkeypatch.setattr(class_predictor, "embed_texts", lambda texts: np.zeros((len(texts), 4)))
 
     labels, confidences = class_predictor.predict_classes(["a", "b"])
-    assert labels == ["Class II", "Class I"]
-    assert confidences == [pytest.approx(0.7), pytest.approx(0.6)]
+    assert labels == ["Class I", "not Class I"]
+    assert confidences == [pytest.approx(0.82), pytest.approx(0.7)]

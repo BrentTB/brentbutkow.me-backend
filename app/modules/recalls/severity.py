@@ -127,6 +127,15 @@ _WIDE_BONUS = 6.0  # 6+ affected states
 _MULTI_BONUS = 3.0  # 2–5 affected states
 _WIDE_STATE_COUNT = 6
 
+# Predicted Class I — the cross-country class model (app/modules/recalls/class_predictor.py) fills
+# `predicted_class` for the countries with no native class ladder (UK, ZA). When it flags a recall
+# as likely Class I (serious), lift the score, scaled by the model's confidence so a hesitant guess
+# barely moves it and a confident one carries a UK/ZA recall toward severe. Bounded like the other
+# content modifiers — it modulates, never anchors (the prediction is imperfect, so it can't be the
+# sole basis for a band). US/CA never carry a prediction (they have a real classification), so their
+# scores are unchanged and this is applied only when re-scored by build_predictions.
+_PREDICTED_CLASS_I_BONUS = 22.0
+
 # Score → band thresholds (inclusive lower bound). Class I always clears 75 via the base alone.
 # `critical` is the worst-of-the-worst tier above severe — a top-class recall whose named lethal
 # hazard is compounded by reported harm or nationwide spread (a natural gap in the data sits below).
@@ -205,6 +214,8 @@ def score_severity(
     states: list[str] | None = None,
     distribution_pattern: str | None = None,
     reason_text: str | None = None,
+    predicted_class: str | None = None,
+    predicted_class_confidence: float | None = None,
 ) -> tuple[float, str]:
     """Return ``(severity_score, severity_label)`` for a recall from fields the normalizers already
     parse — so it's set at ingest time alongside the category, exactly like ``classify``.
@@ -212,6 +223,11 @@ def score_severity(
     ``classification`` is the parsed/validated value (one of ``RecallClass``) or ``None``; an
     unrecognised value falls back to the category base, like a missing one. ``reason_text`` is the
     free text entities + category were derived from; it feeds the reported-harm signal.
+
+    ``predicted_class`` / ``predicted_class_confidence`` are the cross-country class model's output,
+    passed only when re-scoring a UK/ZA recall after the prediction build (never at ingest, where
+    the prediction doesn't exist yet, and never for US/CA, which carry a real ``classification``). A
+    predicted ``Class I`` lifts the score, scaled by confidence.
     """
     class_base = _CLASS_BASE.get(classification) if classification else None
     base = (
@@ -220,13 +236,20 @@ def score_severity(
         else _CATEGORY_BASE.get(category, _CATEGORY_BASE[RecallCategory.other.value])
     )
 
-    # Sum the content modifiers: cause nudge, named hazard, allergen tier, reported harm, breadth.
+    # Sum the content modifiers: cause nudge, named hazard, allergen tier, reported harm, breadth,
+    # and — for UK/ZA — a predicted-Class-I lift scaled by the model's confidence.
+    predicted_class_i = (
+        _PREDICTED_CLASS_I_BONUS * predicted_class_confidence
+        if predicted_class == RecallClass.class_i.value and predicted_class_confidence
+        else 0.0
+    )
     modifiers = (
         _CATEGORY_NUDGE.get(category, 0.0)
         + _entity_bonus(entities)
         + _allergen_adjust(entities)
         + _harm_bonus(reason_text)
         + _breadth_bonus(states, distribution_pattern)
+        + predicted_class_i
     )
 
     # Positive modifiers lift the score into the headroom above the base with diminishing returns,

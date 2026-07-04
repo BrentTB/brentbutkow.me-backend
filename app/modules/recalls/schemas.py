@@ -120,12 +120,13 @@ class RecallOut(CamelModel):
         default=None,
         description="Event/outbreak cluster id (recall_events.id); null until events are built.",
     )
-    predicted_class: RecallClass | None = Field(
+    predicted_class: str | None = Field(
         default=None,
         description=(
-            "Model-predicted FDA-style class (I/II/III) for recalls from countries with no native "
-            "class system (UK, ZA); null for US/CA, which carry a real classification, and until "
-            "the predictions build runs. A prediction, not a regulator's call."
+            'Model prediction "Class I" (serious) or "not Class I" for recalls from countries with '
+            "no native class ladder (UK, ZA); null for US/CA, which carry a real classification, "
+            "and until the predictions build runs. A prediction, not a regulator's call — a "
+            "Class I prediction also lifts the recall's severityScore."
         ),
     )
     predicted_class_confidence: float | None = Field(

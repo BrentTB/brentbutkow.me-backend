@@ -1,24 +1,32 @@
 # Recall class predictor — model card
 
-**Model:** Model2Vec `potion-base-8M` text embeddings + multinomial Logistic Regression
-(scikit-learn, balanced class weights). Features are the same static neural embeddings the analytics
-build uses — a learned representation, not a gazetteer.
+**Model:** Model2Vec `potion-base-8M` text embeddings + binary Logistic Regression (scikit-learn,
+balanced class weights). Features are the same static neural embeddings the analytics build uses —
+a learned representation, not a gazetteer.
 
-**Task:** predict a recall's FDA-style class (['Class I', 'Class II', 'Class III']) from its reason + product text, for
-recalls from countries with no native class system (UK, ZA).
+**Task:** predict whether a recall is **Class I** (serious) or **not** (['Class I', 'not Class I']) from its
+reason + product text, for recalls from countries with no native class ladder (UK, ZA). The task is
+binary on purpose: the three-way I/II/III split was barely learnable from text alone (II vs III
+turns on facts the notice doesn't state), while Class-I-vs-rest carries real signal and is the
+distinction that matters for severity.
 
 **Training data:** 32411 recalls that carry a real class — US (FDA Class I–III) and CA (CFIA
-Class 1–3, folded onto I–III at ingest). Per country: ca: 5219, us: 27192.
+Class 1–3, folded onto I–III at ingest), with Class II/III collapsed into the negative label. Per
+country: ca: 5219, us: 27192.
 
-**In-domain accuracy:** 0.692 — stratified 20% held-out split of the combined US+CA
-corpus. How well it reproduces the class where it has seen that country's prose.
+**In-domain accuracy:** 0.784 — stratified 20% held-out split of the combined US+CA
+corpus. How well it reproduces the Class-I-vs-rest label where it has seen that country's prose.
 
-**Cross-country accuracy:** 0.469 — trained on US only, tested on CA only. A genuine
-out-of-distribution check and the closest proxy for the UK/ZA transfer we care about, since no
-UK/ZA class labels exist. Expect the applied-to-UK/ZA accuracy to be no better than this.
+**Cross-country accuracy:** 0.614 raw / **0.634 balanced** — trained on US
+only, tested on CA only. A genuine out-of-distribution check and the closest proxy for the UK/ZA
+transfer we care about (no UK/ZA class labels exist). Read the *balanced* number: CA is
+63% "not Class I", so a do-nothing majority guesser scores 0.632 raw
+while catching zero Class I recalls — the model earns its keep by actually identifying Class I
+cases (balanced accuracy over both classes), which is what the severity lift needs, at the cost of
+some false positives. Expect the applied-to-UK/ZA quality to be no better than this.
 
-**Honest limits:** the class often turns on facts not in the recall text (distribution, exposure,
-firm remediation), so the ceiling is well under 1.0 — the model is strongest at Class I vs. not,
-weakest at separating II from III. UK/ZA prose is templated differently from US/CA, so predictions
-there are less calibrated than the in-domain number suggests. Surfaced as `predictedClass` with its
-confidence and labelled a prediction, never a regulator's ruling.
+**How it's used:** surfaced as `predictedClass` (+ confidence) on UK/ZA recalls, and — when the
+prediction is Class I — it lifts that recall's severity score (scaled by confidence, bounded so it
+modulates rather than anchors). Always labelled a prediction, never a regulator's ruling; UK/ZA
+prose is templated differently from the US/CA text the model learnt on, so treat it as a calibrated
+guess.

@@ -80,12 +80,16 @@ similarity graph; see `app/modules/recalls/events.py`). Each recall also carries
 in [0, 1] — how unlike its nearest neighbours it is in embedding space (1 − mean top-k neighbour
 cosine, materialised alongside the neighbours); `sort=novelty` surfaces the "unusual recalls" feed,
 omitting recalls with too few neighbours to score. And recalls from countries with no native class
-system (UK, ZA) carry a `predictedClass` (Class I/II/III) + `predictedClassConfidence` — a
-Model2Vec-embedding + logistic-regression model trained on the countries that do (US FDA + CA CFIA)
-and applied to the ones that don't, materialised by `scripts/build_predictions.py` (see
-`app/modules/recalls/class_predictor.py` and its model card). It is a **prediction, not a
-regulator's ruling** — cross-country transfer is imperfect (the card reports the honest
-train-US/test-CA accuracy), so it always rides with its confidence. `stats.anomalies` flags months
+ladder (UK, ZA) carry a `predictedClass` (`"Class I"` = serious, or `"not Class I"`) +
+`predictedClassConfidence` — a Model2Vec-embedding + logistic-regression model trained on the
+countries that do (US FDA + CA CFIA, Class II/III collapsed) and applied to the ones that don't,
+materialised by `scripts/build_predictions.py` (see `app/modules/recalls/class_predictor.py` and its
+model card). The task is binary on purpose — Class-I-vs-rest is where the signal is; II vs III turns
+on facts the notice doesn't state. A `Class I` prediction also **lifts that recall's `severityScore`**
+(scaled by confidence, bounded so it modulates rather than anchors), so severity reads on one scale
+across all four countries. It is a **prediction, not a regulator's ruling** — cross-country transfer
+is imperfect (the card reports the honest train-US/test-CA accuracy), so it always rides with its
+confidence. `stats.anomalies` flags months
 that
 *already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
 looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,

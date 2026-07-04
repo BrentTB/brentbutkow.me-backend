@@ -100,9 +100,12 @@ _BACKFILLS: list[_Backfill] = [
 #                     leaves updated_at untouched, so it can't trip stats.status.
 #   build_events      writes only event_cluster_id, which nothing here reads (stats ignores it, and
 #                     the write preserves updated_at), so it invalidates nothing — no edges.
-#   build_predictions writes only predicted_class/confidence for UK/ZA (nothing here reads them, and
-#                     the write preserves updated_at) — no edges. The US-only backfills don't touch
-#                     UK/ZA text, so none of them trigger it; its own status() gates the first run.
+#   build_predictions writes predicted_class/confidence for UK/ZA AND re-scores their severity from
+#                     the prediction, so it feeds the stats severity aggregates -> triggers
+#                     build_stats. (The write preserves updated_at, so build_stats.status can't see
+#                     the change on its own — this explicit edge is what reruns it.) The US-only
+#                     backfills don't touch UK/ZA text, so none of them trigger build_predictions;
+#                     its own status() gates the first run.
 #
 # Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
 _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
@@ -111,6 +114,7 @@ _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
     backfill_entities: (backfill_severity, build_stats),
     backfill_severity: (build_stats,),
     build_analytics: (build_events,),
+    build_predictions: (build_stats,),
 }
 
 
