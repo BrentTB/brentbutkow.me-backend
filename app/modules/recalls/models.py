@@ -52,8 +52,9 @@ class Recall(Base):
     # server defaults only seed pre-existing rows until scripts/backfill_severity.py runs.
     severity_score: Mapped[float] = mapped_column(Float, index=True, server_default=text("0"))
     severity_label: Mapped[str] = mapped_column(Text, server_default=text("'low'"))
-    # NMF topic assigned by scripts/build_analytics.py (recall_topics.id). Indexed for the `topic`
-    # filter. NULL until the analytics build runs (and for rows with no usable text).
+    # Embedding-cluster theme assigned by scripts/build_analytics.py (recall_topics.id). Indexed
+    # for the `topic` filter. NULL until the analytics build runs (and for rows with no usable
+    # text or too far from every theme centroid).
     topic_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # Event cluster from build_events.py (recall_events.id) — the incident this recall belongs to.
     # Distinct from `event_id` (FDA's raw field). Indexed for the `event` filter; NULL until the
@@ -98,8 +99,8 @@ class IngestRun(Base):
     error_text: Mapped[str | None] = mapped_column(Text)
 
 
-# Derived analytics, materialized offline by scripts/build_analytics.py from one shared TF-IDF
-# matrix. Served as cheap indexed reads — the model is never loaded at request time.
+# Derived analytics, materialized offline by scripts/build_analytics.py from the shared text
+# embeddings. Served as cheap indexed reads — no model is ever loaded at request time.
 class RecallTopic(Base):
     __tablename__ = "recall_topics"
 
@@ -119,7 +120,7 @@ class RecallNeighbor(Base):
     __tablename__ = "recall_neighbors"
 
     # The recall whose neighbors these are (FK-ish to recalls' composite PK), its rank-ordered
-    # nearest neighbors by cosine similarity over the TF-IDF matrix. Top-K rows per recall.
+    # nearest neighbors by cosine similarity in embedding space. Top-K rows per recall.
     source: Mapped[str] = mapped_column(Text, primary_key=True)
     recall_number: Mapped[str] = mapped_column(Text, primary_key=True)
     rank: Mapped[int] = mapped_column(Integer, primary_key=True)

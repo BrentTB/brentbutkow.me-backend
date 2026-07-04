@@ -25,8 +25,9 @@ def status(session: Session) -> tuple[bool, str]:
     return False, f"themes + neighbours built ({topics} topics)"
 
 
-# Rebuilds the derived analytics over every stored recall, from one shared TF-IDF matrix: NMF themes
-# (recall_topics + recalls.topic_id) and cosine nearest-neighbour similarity (recall_neighbors). Run
+# Rebuilds the derived analytics over every stored recall, from shared text embeddings: k-means
+# themes (recall_topics + recalls.topic_id) and cosine nearest-neighbour similarity
+# (recall_neighbors). Run
 # after ingest, or after changing the analytics params: `python -m scripts.build_analytics`.
 def main() -> None:
     session = SessionLocal()

@@ -8,3 +8,8 @@ joblib==1.5.3
 numpy==2.4.6
 scipy==1.17.1
 threadpoolctl==3.6.0
+
+# Embeddings for the analytics build (app/modules/recalls/embeddings.py). Not pickle-bound like
+# the stack above, but pinned so the daily CI build and local runs embed identically — a version
+# drift here would silently shift every neighbour score and theme boundary.
+model2vec==0.8.2

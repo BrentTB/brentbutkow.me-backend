@@ -375,8 +375,8 @@ def recall_companies(
     response_model=list[TopicOut],
     summary="Recall themes",
     description=(
-        "Themes discovered across recalls (NMF over the reason/product text), largest first. "
-        "Scope the list or trend to one with `topic=<slug>`."
+        "Themes discovered across recalls (k-means clusters over neural text embeddings), largest "
+        "first. Scope the list or trend to one with `topic=<slug>`."
     ),
     responses=_RATE_LIMITED,
 )
@@ -441,7 +441,7 @@ def recall_detail(
     summary="Similar recalls",
     description=(
         "Recalls most similar to this one by reason/product text — precomputed cosine nearest "
-        "neighbours over the shared TF-IDF matrix."
+        "neighbours in neural embedding space."
     ),
     responses=_RATE_LIMITED,
 )

@@ -717,7 +717,7 @@ def get_trend(
 
 
 def get_topics(session: Session, country: str | None = None) -> list[TopicOut]:
-    # The materialised NMF themes for a country, largest first; empty topics are hidden.
+    # The materialised embedding-cluster themes for a country, largest first; empty ones hidden.
     stmt = select(RecallTopic).where(RecallTopic.size > 0)
     if country:
         stmt = stmt.where(RecallTopic.country == country)
