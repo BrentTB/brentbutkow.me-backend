@@ -120,6 +120,13 @@ jobs:
         # right after it (same job → the analytics rebuild has already committed).
         run: python -m scripts.build_events
 
+      - name: Rebuild class predictions over the live DB
+        # Predicts a Class I/II/III for the no-native-class countries (UK, ZA) with the committed
+        # class_predictor.joblib. Independent of analytics/events (reads only recall text + the
+        # model), so it runs regardless of their outcome.
+        if: ${{ always() }}
+        run: python -m scripts.build_predictions
+
       - name: Rebuild stats over the live DB
         # Materializes the /recalls/stats payload per country so the API reads a row instead of
         # recomputing the aggregations + anomaly scan + forecast. Independent of analytics/events

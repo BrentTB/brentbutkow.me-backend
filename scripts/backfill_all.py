@@ -47,6 +47,7 @@ from scripts import (
     backfill_severity,
     build_analytics,
     build_events,
+    build_predictions,
     build_stats,
 )
 
@@ -75,6 +76,7 @@ _BACKFILLS: list[_Backfill] = [
     backfill_severity,
     build_analytics,
     build_events,
+    build_predictions,
     build_stats,
 ]
 
@@ -98,6 +100,9 @@ _BACKFILLS: list[_Backfill] = [
 #                     leaves updated_at untouched, so it can't trip stats.status.
 #   build_events      writes only event_cluster_id, which nothing here reads (stats ignores it, and
 #                     the write preserves updated_at), so it invalidates nothing — no edges.
+#   build_predictions writes only predicted_class/confidence for UK/ZA (nothing here reads them, and
+#                     the write preserves updated_at) — no edges. The US-only backfills don't touch
+#                     UK/ZA text, so none of them trigger it; its own status() gates the first run.
 #
 # Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
 _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {

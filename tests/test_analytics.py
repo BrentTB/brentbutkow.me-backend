@@ -8,7 +8,7 @@ model-dependent."""
 import numpy as np
 import pytest
 
-from app.modules.recalls.analytics import _compute_neighbors, build_analytics
+from app.modules.recalls.analytics import _compute_neighbors, _novelty, build_analytics
 
 
 def _rows(*vectors: tuple[float, ...]) -> np.ndarray:
@@ -98,6 +98,39 @@ def test_centroid_gate_drops_far_from_theme_recalls():
 def test_embeddings_must_align_with_texts():
     with pytest.raises(ValueError):
         build_analytics(["a", "b"], _rows((1.0, 0.0)))
+
+
+def test_novelty_is_one_minus_mean_of_top_k():
+    # Neighbours arrive sorted by descending cosine; novelty averages the closest _NOVELTY_K (3).
+    assert _novelty([(0, 0.9), (1, 0.8), (2, 0.7), (3, 0.1)]) == pytest.approx(0.2)
+    # A crowded neighbourhood (all near 1.0) is ordinary → low novelty.
+    assert _novelty([(0, 1.0), (1, 1.0), (2, 1.0)]) == pytest.approx(0.0)
+    # Too few neighbours to judge → no score, not a misleadingly-high one.
+    assert _novelty([(0, 0.9), (1, 0.8)]) is None
+    assert _novelty([]) is None
+
+
+def test_build_analytics_scores_novelty_and_leaves_isolated_recalls_most_novel():
+    # Two tight clusters plus one point weakly related to everything: it is the most novel, and
+    # every scored recall needs >= 3 neighbours (else None).
+    texts = ["a", "b", "c", "d", "e", "f", "g"]
+    embeddings = _rows(
+        (1.0, 0.02, 0.02),
+        (1.0, 0.03, 0.01),
+        (0.98, 0.05, 0.0),
+        (0.02, 1.0, 0.02),
+        (0.01, 1.0, 0.03),
+        (0.0, 0.98, 0.05),
+        (0.35, 0.35, 0.5),  # weakly aligned to both clusters — isolated, but still has neighbours
+    )
+    result = build_analytics(texts, embeddings, n_neighbors=3, min_df=1, min_topic_docs=100)
+
+    assert len(result.novelty) == len(texts)
+    assert all(0.0 <= n <= 1.0 for n in result.novelty if n is not None)
+    isolated = result.novelty[6]
+    assert isolated is not None
+    # The isolated point is more novel than any cluster member.
+    assert all(isolated > result.novelty[i] for i in range(6))
 
 
 def test_theme_embeddings_drive_clustering_independently_of_neighbours():

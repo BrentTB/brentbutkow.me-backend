@@ -64,18 +64,3 @@ Write body to `/tmp/pr-body.md` with the **Write tool**, then:
 - **PR exists:** `gh pr edit --body-file /tmp/pr-body.md`
 
 Print the URL.
-
-## 5. Keep local `main` up to date
-
-Solo repo — local `main` should always reflect the merged feature work. After the PR is
-created/updated, merge the feature branch into local `main` so it never falls behind:
-
-```bash
-git rev-parse --abbrev-ref HEAD   # feature branch — substitute literally below
-git checkout main
-git merge --ff-only my-branch     # fast-forward main to the feature branch
-git checkout my-branch            # return to the feature branch
-```
-
-If `--ff-only` fails (main has diverged), stop and report — don't force a merge commit or reset
-without the user's say-so.

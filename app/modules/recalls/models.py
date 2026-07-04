@@ -60,6 +60,16 @@ class Recall(Base):
     # Distinct from `event_id` (FDA's raw field). Indexed for the `event` filter; NULL until the
     # events build runs and for recalls that join no multi-recall cluster.
     event_cluster_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Cross-country class prediction from scripts/build_predictions.py — a Class I/II/III guess for
+    # recalls from countries with no native class system (UK, ZA), with its confidence. NULL for
+    # US/CA (they carry a real `classification`) and until the predictions build runs. Derived, so
+    # its write must not bump updated_at (like topic_id).
+    predicted_class: Mapped[str | None] = mapped_column(Text)
+    predicted_class_confidence: Mapped[float | None] = mapped_column(Float)
+    # Novelty from scripts/build_analytics.py — how unlike its nearest neighbours a recall is
+    # (1 − mean top-k neighbour cosine), in embedding space. Indexed for `sort=novelty`. NULL for
+    # recalls with too few neighbours to judge and until the analytics build runs. Derived.
+    novelty_score: Mapped[float | None] = mapped_column(Float, index=True)
     # Allergens / pathogens / hazards / contaminants extracted from reason_text (gazetteer match)
     # as [{type, value}]. GIN-indexed for the `@>` entity filter (the by-entity aggregation unnests,
     # so it can't use the index).

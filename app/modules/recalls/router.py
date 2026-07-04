@@ -181,7 +181,10 @@ def get_recalls(
     ),
     sort: RecallSort = Query(
         default=RecallSort.recency,
-        description="Order: recency (newest first, the default) or severity (most severe first).",
+        description=(
+            "Order: recency (newest first, the default), severity (most severe first), or novelty "
+            "(most unusual first — recalls with too few neighbours to score are omitted)."
+        ),
     ),
 ) -> RecallListResult:
     _validate_date_range(since, until)

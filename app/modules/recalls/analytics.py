@@ -62,6 +62,12 @@ _MIN_TOPIC_SIM = 0.55
 # Similarity: nearest neighbours kept per recall.
 _N_NEIGHBORS = 8
 
+# Novelty — 1 − the mean cosine of a recall's top-_NOVELTY_K neighbours. A recall whose nearest
+# neighbours are all far away is unlike anything else in the corpus (a first-of-its-kind hazard or
+# product). It needs at least this many neighbours to judge — below that the mean is too noisy, so
+# no score (the "unusual recalls" feed then can't surface a recall isolated merely by sparse text).
+_NOVELTY_K = 3
+
 # Below this many usable documents there's nothing meaningful to factor or compare.
 _MIN_DOCS = 3
 
@@ -356,10 +362,21 @@ class TopicInfo:
 @dataclass
 class AnalyticsResult:
     # Aligned 1:1 with the input `texts`: the topic each doc belongs to (None if it has no usable
-    # text), and its ranked nearest neighbours as (index-into-texts, cosine score) pairs.
+    # text), its ranked nearest neighbours as (index-into-texts, cosine score) pairs, and its
+    # novelty in [0, 1] (None when it has too few neighbours to judge).
     topic_ids: list[int | None]
     neighbors: list[list[tuple[int, float]]]
+    novelty: list[float | None] = field(default_factory=list)
     topics: list[TopicInfo] = field(default_factory=list)
+
+
+def _novelty(neighbor_scores: list[tuple[int, float]]) -> float | None:
+    # Neighbours arrive sorted by descending cosine, so [:k] is the closest k. High mean cosine →
+    # crowded neighbourhood → ordinary; low → isolated → novel. None below the minimum count.
+    if len(neighbor_scores) < _NOVELTY_K:
+        return None
+    top = [score for _, score in neighbor_scores[:_NOVELTY_K]]
+    return round(1.0 - sum(top) / len(top), 4)
 
 
 def _compute_neighbors(
@@ -511,12 +528,13 @@ def build_analytics(
         raise ValueError(f"{len(texts)} texts but {len(theme_texts)} theme_texts")
     topic_ids: list[int | None] = [None] * len(texts)
     neighbors: list[list[tuple[int, float]]] = [[] for _ in texts]
+    novelty: list[float | None] = [None] * len(texts)
 
     # A recall is empty for both weightings together (both are empty only when reason and product
     # are both blank), so one nonempty index set aligns the neighbour and theme arrays alike.
     nonempty = [i for i, text in enumerate(texts) if text and text.strip()]
     if len(nonempty) < _MIN_DOCS:
-        return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors)
+        return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, novelty=novelty)
 
     vectors = embeddings[nonempty]
 
@@ -540,7 +558,8 @@ def build_analytics(
     corpus_neighbors = _compute_neighbors(vectors, n_neighbors)
     for position, original in enumerate(nonempty):
         neighbors[original] = [(nonempty[j], score) for j, score in corpus_neighbors[position]]
-    return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, topics=topics)
+        novelty[original] = _novelty(neighbors[original])
+    return AnalyticsResult(topic_ids=topic_ids, neighbors=neighbors, novelty=novelty, topics=topics)
 
 
 def _slugify(label: str) -> str:
@@ -637,12 +656,13 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
             )
             next_topic_id += 1
 
-        for recall, topic_id in zip(group, result.topic_ids, strict=True):
+        for recall, topic_id, novelty in zip(group, result.topic_ids, result.novelty, strict=True):
             topic_ids.append(
                 {
                     "b_source": recall.source,
                     "b_number": recall.recall_number,
                     "b_topic": local_to_global[topic_id] if topic_id is not None else None,
+                    "b_novelty": novelty,
                 }
             )
 
@@ -665,17 +685,22 @@ def rebuild_analytics(session: Session) -> dict[str, int]:
     for start in range(0, len(neighbor_rows), _DB_CHUNK):
         session.execute(insert(RecallNeighbor), neighbor_rows[start : start + _DB_CHUNK])
 
-    # Write topic_id while preserving updated_at: setting updated_at to itself keeps the column in
-    # the UPDATE's SET clause, so the onupdate=func.now() default doesn't fire and a topic-id-only
-    # change can't masquerade as a source change to status(). A Core table UPDATE (not the ORM
-    # update(Recall)) keeps this a plain executemany, not an ORM bulk-update-by-primary-key.
+    # Write the derived topic_id + novelty_score while preserving updated_at: setting updated_at to
+    # itself keeps the column in the UPDATE's SET clause, so the onupdate=func.now() default doesn't
+    # fire and a derived-column change can't masquerade as a source change to status(). A Core table
+    # UPDATE (not the ORM update(Recall)) keeps this a plain executemany, not an ORM
+    # bulk-update-by-primary-key.
     recall_table = cast(Table, Recall.__table__)
     for start in range(0, len(topic_ids), _DB_CHUNK):
         session.execute(
             update(recall_table)
             .where(recall_table.c.source == bindparam("b_source"))
             .where(recall_table.c.recall_number == bindparam("b_number"))
-            .values(topic_id=bindparam("b_topic"), updated_at=recall_table.c.updated_at),
+            .values(
+                topic_id=bindparam("b_topic"),
+                novelty_score=bindparam("b_novelty"),
+                updated_at=recall_table.c.updated_at,
+            ),
             topic_ids[start : start + _DB_CHUNK],
         )
 

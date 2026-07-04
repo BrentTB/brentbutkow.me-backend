@@ -36,7 +36,21 @@ run it even for "trivial" changes (missed twice, surfacing only at commit time).
    they hide in Query descriptions and docstrings outside any diff hunk (#27)
 7. The dispatch backfill guard is per-country: seeding a new country's history must not suppress
    other countries' digests (#26)
-8. Tests (fixtures from real feed records) + README
+8. Class prediction (app/modules/recalls/class_predictor.py): a new country WITH a native
+   Class I/II/III system joins the training set (train_class_predictor.py `_TRAIN_COUNTRIES`, then
+   retrain + re-commit the joblib); one WITHOUT joins `PREDICT_COUNTRIES` so build_predictions fills
+   its `predicted_class`. Never predict for a country that has a real `classification`.
+9. Tests (fixtures from real feed records) + README
+
+## Derived analytics columns (topic_id, event_cluster_id, predicted_class, novelty_score)
+
+These are materialized offline (build_analytics / build_events / build_predictions), never at
+ingest. Every write MUST preserve `recalls.updated_at` (set it to itself in a Core UPDATE) — it's
+the "source changed" signal build_stats/build_analytics read for staleness, so a derived write that
+bumps it makes every rebuild re-run forever. novelty rides in build_analytics' topic_id UPDATE;
+predicted_class in build_predictions'. The models (classifier.joblib, class_predictor.joblib) load
+ONLY in offline scripts — never import class_predictor from the request path (constraints.txt pins
+the sklearn stack the pickles were built with; re-pin + retrain together).
 
 ## External feeds (openfda / fsis / fsa_uk / ncc_za / cfia_ca)
 
