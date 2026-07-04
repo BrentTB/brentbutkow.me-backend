@@ -10,9 +10,25 @@ Offline-only, like sklearn: imported by the analytics build and scripts, never o
 path. The model downloads from Hugging Face on first use and is cached locally after that.
 """
 
+from functools import lru_cache
+from typing import TYPE_CHECKING
+
 import numpy as np
 
+if TYPE_CHECKING:
+    from model2vec import StaticModel
+
 MODEL_NAME = "minishlab/potion-base-8M"
+
+
+@lru_cache(maxsize=1)
+def _load_model(model_name: str) -> "StaticModel":
+    # Lazy: keeps importing this module (and analytics) free of the model dependency, so the app
+    # and the DB-free test suite never touch it. Cached so a multi-country rebuild loads the
+    # ~30 MB artifact once, not once per embed_texts call.
+    from model2vec import StaticModel
+
+    return StaticModel.from_pretrained(model_name)
 
 
 def embed_texts(texts: list[str], model_name: str = MODEL_NAME) -> np.ndarray:
@@ -21,11 +37,7 @@ def embed_texts(texts: list[str], model_name: str = MODEL_NAME) -> np.ndarray:
     An empty (or fully out-of-vocabulary) text embeds to the zero vector and stays zero after the
     norm guard — it can never clear a similarity threshold, mirroring how such rows already get no
     neighbours and no theme."""
-    # Lazy: keeps importing this module (and analytics) free of the model dependency, so the app
-    # and the DB-free test suite never touch it.
-    from model2vec import StaticModel
-
-    model = StaticModel.from_pretrained(model_name)
+    model = _load_model(model_name)
     embeddings = np.asarray(model.encode(list(texts)), dtype=np.float32)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     return embeddings / np.maximum(norms, 1e-12)
