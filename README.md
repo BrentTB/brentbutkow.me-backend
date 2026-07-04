@@ -89,9 +89,8 @@ on facts the notice doesn't state. A `Class I` prediction also **lifts that reca
 (scaled by confidence, bounded so it modulates rather than anchors), so severity reads on one scale
 across all four countries. It is a **prediction, not a regulator's ruling** — cross-country transfer
 is imperfect (the card reports the honest train-US/test-CA accuracy), so it always rides with its
-confidence. `stats.anomalies` flags months
-that
-*already* broke from their recent baseline (robust z-score, **detect never predict**); `stats.forecast`
+confidence. `stats.anomalies` flags months that *already* broke from their recent baseline (robust
+z-score, **detect never predict**); `stats.forecast`
 looks the other way — a short-horizon projection of overall monthly volume with a typical-error band,
 from a self-built multiplicative seasonal model (a 12-month seasonal index + linear trend fit in log
 space, pure numpy; empty when history is too short). `scripts/anomaly_methodology.py` and

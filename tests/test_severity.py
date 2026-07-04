@@ -1,3 +1,4 @@
+from app.modules.recalls.class_predictor import NEGATIVE_CLASS
 from app.modules.recalls.schemas import RecallCategory, RecallClass, SeverityLabel
 from app.modules.recalls.severity import score_severity
 
@@ -33,9 +34,24 @@ def test_predicted_not_class_i_does_not_change_severity():
     )
     unpredicted, _ = score_severity(**base_kwargs)
     negative, _ = score_severity(
-        **base_kwargs, predicted_class="not Class I", predicted_class_confidence=0.9
+        **base_kwargs, predicted_class=NEGATIVE_CLASS, predicted_class_confidence=0.9
     )
     assert negative == unpredicted
+
+
+def test_predicted_class_i_lift_modulates_never_anchors():
+    # The lift modulates a low-base recall, it never single-handedly anchors it into the severe band
+    # (only a real Class I / true anchor should). A fully-confident predicted Class I on an
+    # otherwise low-base allergy alert must stay below the severe threshold (75).
+    score, label = score_severity(
+        classification=RecallClass.allergy_alert.value,
+        category=RecallCategory.allergen.value,
+        entities=[],
+        predicted_class=RecallClass.class_i.value,
+        predicted_class_confidence=1.0,
+    )
+    assert score < 75
+    assert label != SeverityLabel.severe.value
 
 
 def test_class_i_is_always_severe():

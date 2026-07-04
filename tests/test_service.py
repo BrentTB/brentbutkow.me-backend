@@ -1139,7 +1139,9 @@ def test_rebuild_predictions_writes_class_and_lifts_uk_severity(session, monkeyp
     us_severity_before = session.get(Recall, ("fda", "US-1")).severity_score
 
     summary = class_predictor.rebuild_predictions(session)
-    assert summary["predicted"] == 1  # only the UK recall
+    # "predicted" counts UK/ZA rows with usable text; the US row is excluded from the query, so the
+    # single UK recall is the only candidate. (US-exclusion is pinned directly below.)
+    assert summary["predicted"] == 1
 
     uk = session.get(Recall, ("uk", "UK-1"))
     assert uk.predicted_class == "Class I"

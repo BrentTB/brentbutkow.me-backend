@@ -20,9 +20,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Cross-country class prediction (scripts/build_predictions.py): a Class I/II/III guess for
-    # recalls from countries with no native class system (UK, ZA). NULL for US/CA (they carry a real
-    # `classification`) and until the build runs. Derived, like topic_id — no server_default.
+    # Cross-country class prediction (scripts/build_predictions.py): a binary Class-I-vs-not guess
+    # for recalls from countries with no native class system (UK, ZA). NULL for US/CA (they carry a
+    # real `classification`) and until the build runs. Derived, like topic_id — no server_default.
     op.add_column("recalls", sa.Column("predicted_class", sa.Text(), nullable=True))
     op.add_column("recalls", sa.Column("predicted_class_confidence", sa.Float(), nullable=True))
     # Novelty (scripts/build_analytics.py): how unlike its nearest neighbours a recall is, in
