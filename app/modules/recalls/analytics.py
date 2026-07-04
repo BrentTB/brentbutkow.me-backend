@@ -11,7 +11,7 @@ up-weight the reason so a long product blurb can't drag a short cause into a gen
 cluster. Theme labels come from TF-IDF terms over each cluster's members (c-TF-IDF style), so the
 curated stop-word lists keep names on hazards and foods, not "net wt oz" or brand names. The
 neighbour representation is benchmarked against the previous pure-TF-IDF build on FDA event_id
-ground truth (scripts/eval_embeddings.py): hit@1 0.967 vs 0.941. Both features are precomputed by
+ground truth (scripts/eval_embeddings.py): hit@1 0.966 vs 0.942. Both features are precomputed by
 `scripts/build_analytics.py` into the `recall_topics` / `recall_neighbors` tables and the
 `recalls.topic_id` column, so serving is plain indexed reads — neither sklearn nor the embedding
 model is ever imported by the app.
@@ -296,8 +296,9 @@ _MIN_DF_LARGE = 5
 _LARGE_CORPUS = 500
 
 # Topics need a real corpus to be trustworthy: below this the max_df filter is off (one-off brand
-# tokens then dominate the themes), so for a low-volume country like South Africa we skip NMF and
-# surface no themes; neighbours still build (they degrade gracefully). rebuild_analytics applies
+# tokens then dominate the themes), so for a low-volume country like South Africa we skip
+# clustering and surface no themes; neighbours still build (they degrade gracefully).
+# rebuild_analytics applies
 # this per country, while build_analytics defaults lower so small test corpora keep their topics.
 _MIN_TOPIC_CORPUS = 200
 

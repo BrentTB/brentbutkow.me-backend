@@ -160,6 +160,8 @@ def main() -> None:
         "--neighbors", type=int, default=_DEFAULT_NEIGHBORS, help="neighbours kept per recall"
     )
     args = parser.parse_args()
+    if args.neighbors < 1:
+        raise SystemExit("--neighbors must be >= 1")
     ks = tuple(k for k in _HIT_KS if k <= args.neighbors)
 
     texts, event_ids = _load_corpus()

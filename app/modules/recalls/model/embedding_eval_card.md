@@ -11,8 +11,8 @@ text, 2413 events with ≥2 recalls, 21697 queries.
 
 ```
 method                          hit@1    hit@3    hit@8      MRR
-tf-idf (shipped)                0.942    0.968    0.982    0.956
-minishlab/potion-base-8M        0.966    0.984    0.990    0.975
+tf-idf (previous)               0.942    0.968    0.982    0.956
+minishlab/potion-base-8M (shipped)    0.966    0.984    0.990    0.975
 ```
 
 **Honest limits:** same-event recalls often share near-verbatim reason text, so absolute scores
