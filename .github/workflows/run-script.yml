@@ -26,13 +26,18 @@ on:
           - ingest_uk
           - ingest_ncc
           - ingest_seed
-          # Backfill — one-time seeding of already-stored rows. Cadence: ONCE on first setup, and
-          # again right after a migration adds a derived column. New rows self-populate at ingest, so
-          # these don't repeat. backfill_all runs only the ones still needed (status-gated).
+          - ingest_cfia
+          - ingest_rasff
+          # Backfill / history seed — one-time seeding of already-stored rows or of a source's back
+          # catalogue. Cadence: ONCE on first setup, and again right after a migration adds a derived
+          # column. New rows self-populate at ingest, so these don't repeat. backfill_all runs only
+          # the ones still needed (status-gated).
           - backfill_all
           - backfill_fda # full openFDA history (~26k rows) — the initial corpus seed
           - backfill_entities # gazetteer entities over existing rows (after the entities migration)
           - backfill_severity # severity score/label over existing rows (after the severity migration)
+          - seed_rasff # full EU RASFF history (2020+) from the official API — run once, no enrichment
+          - backfill_rasff_enrichment # attach national-authority links to seeded RASFF rows (after seed_rasff)
           # Rebuild derived data over the whole stored corpus. Cadence: AS NEEDED, not scheduled.
           # reclassify: after training a new model or changing the gazetteer / severity rules.
           # build_analytics: refresh themes + similar-recall neighbours — ingest_all already does this
@@ -44,7 +49,7 @@ on:
           - reclassify
           - build_analytics
           - build_events
-          # build_predictions: refresh UK/ZA predicted classes — also daily via ingest_all; run
+          # build_predictions: refresh UK/ZA/EU predicted classes — also daily via ingest_all; run
           # standalone after a one-off ingest or after retraining class_predictor.joblib.
           - build_predictions
           - build_stats
