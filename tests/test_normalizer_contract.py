@@ -27,14 +27,17 @@ from test_fsa_uk import ALERT as FSA_ALERT
 from test_fsis import PHA as FSIS_PHA
 from test_fsis import RECALL as FSIS_RECALL
 from test_ncc_za import APTAMIL, BUTTANUTT, HUMMUS_MS, MCCAIN_STUB
+from test_rasff_eu import ALERT as RASFF_ALERT
+from test_rasff_eu import BORDER as RASFF_BORDER
 
-from app.modules.recalls import cfia_ca, fsa_uk, fsis, ncc_za, openfda, seed_za
+from app.modules.recalls import cfia_ca, fsa_uk, fsis, ncc_za, openfda, rasff_eu, seed_za
 from app.modules.recalls.cfia_ca import CfiaRecord, normalize_cfia
 from app.modules.recalls.fsa_uk import FsaRecord, normalize_fsa
 from app.modules.recalls.fsis import FsisRecord, normalize_fsis
 from app.modules.recalls.ncc_za import NccRecord, normalize_ncc
 from app.modules.recalls.normalize import US_STATE_CODES, NormalizedRecall
 from app.modules.recalls.openfda import OpenFdaRecord, normalize_recall
+from app.modules.recalls.rasff_eu import RasffRecord, normalize_rasff
 from app.modules.recalls.schemas import RecallCategory
 from app.modules.recalls.seed_za import fetch_seed, normalize_seed
 
@@ -90,6 +93,9 @@ _FEEDS = {
         mp, ncc_za, normalize_ncc, NccRecord, [BUTTANUTT, APTAMIL, MCCAIN_STUB, HUMMUS_MS]
     ),
     "cfia_ca": lambda mp: _run(mp, cfia_ca, normalize_cfia, CfiaRecord, [CFIA_RECALL]),
+    "rasff_eu": lambda mp: _run(
+        mp, rasff_eu, normalize_rasff, RasffRecord, [RASFF_ALERT, RASFF_BORDER]
+    ),
     "seed_za": _seed_za,
 }
 

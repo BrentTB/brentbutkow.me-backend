@@ -5,8 +5,10 @@
 General-purpose backend for [brentbutkow.me](https://brentbutkow.me). Modular — each feature is a
 self-contained package under `app/modules/`. First module: **Recall Radar**, a multi-country
 food-recall API that ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS
-(US), UK [FSA](https://data.food.gov.uk/food-alerts/), South Africa (NCC + curated seed), and Canada
-([CFIA](https://recalls-rappels.canada.ca/en) food recalls), categorises it, and serves it to the site.
+(US), UK [FSA](https://data.food.gov.uk/food-alerts/), South Africa (NCC + curated seed), Canada
+([CFIA](https://recalls-rappels.canada.ca/en) food recalls), and the EU
+([RASFF](https://webgate.ec.europa.eu/rasff-window/screen/list), via the official DG SANTE data-lake
+API), categorises it, and serves it to the site.
 
 **Stack:** FastAPI · SQLAlchemy 2.0 + Postgres · Pydantic v2 · pytest + ruff. Python is snake_case
 throughout; the API emits **camelCase JSON** via Pydantic aliases.
@@ -44,6 +46,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | POST | `/recalls/ingest/ncc` | **bearer-only** — crawls the South Africa NCC notices, keeps food recalls, upserts |
 | POST | `/recalls/ingest/seed` | **bearer-only** — upserts the curated SA seed recalls (Woolworths/Shoprite/NRCS) |
 | POST | `/recalls/ingest/cfia` | **bearer-only** — fetches Health Canada's open data, keeps CFIA food recalls, upserts |
+| POST | `/recalls/ingest/rasff` | **bearer-only** — fetches recent EU RASFF alerts (official DG SANTE API), enriches with national links, upserts |
 | POST | `/contact` | **public**, 5/min per IP — stores a visitor message; honeypot + time-trap flag bots as `isBot` |
 | GET | `/contact` | **bearer-only** — stored messages, newest first |
 | POST | `/nullspace/score` | **public**, 10/min per IP — submit a game score; implausible runs are accepted but hidden from the board |
@@ -52,7 +55,7 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · contaminant · other`.
 `classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US, and CA's Class 1–3
 fold onto Class I–III) · `Product Recall · Allergy Alert · Food Alert for Action` (UK).
-`country` ∈ `us · uk · za · ca`; `source` ∈ `fda · usda · uk · ncc · woolworths · shoprite · nrcs · cfia`.
+`country` ∈ `us · uk · za · ca · eu`; `source` ∈ `fda · usda · uk · ncc · woolworths · shoprite · nrcs · cfia · rasff`.
 `state` matches any affected state; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
@@ -127,8 +130,11 @@ python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl
 python -m scripts.ingest_ncc                 # pull South Africa NCC recall notices (via curl_cffi)
 python -m scripts.ingest_seed                # upsert the curated SA seed recalls (Woolworths/Shoprite/NRCS)
 python -m scripts.ingest_cfia                # pull Canada CFIA food recalls (Health Canada open data)
+python -m scripts.ingest_rasff               # pull recent EU RASFF alerts (official DG SANTE data-lake API)
 python -m scripts.ingest_all                 # run all source ingests, then rebuild analytics + events + stats
 python -m scripts.backfill_fda               # one-time: seed full openFDA history (~26k records)
+python -m scripts.seed_rasff                 # one-time: seed full EU RASFF history (2020+), no enrichment
+python -m scripts.backfill_rasff_enrichment  # one-time: attach national-authority links to seeded RASFF recalls
 python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 python -m scripts.backfill_entities          # one-time: seed entities over existing recalls (after migrating)
 python -m scripts.backfill_all               # run the still-needed backfills above (--all forces · --check previews)

@@ -45,7 +45,7 @@ CLASS_LABELS = [POSITIVE_CLASS, NEGATIVE_CLASS]
 
 # Countries with no native class system, so a prediction is meaningful there. US/CA carry a real
 # `classification`, so they are never overwritten with a guess.
-PREDICT_COUNTRIES = ("uk", "za")
+PREDICT_COUNTRIES = ("uk", "za", "eu")
 
 _DB_CHUNK = 1000
 

@@ -37,6 +37,7 @@ class RecallSource(StrEnum):
     shoprite = "shoprite"  # South Africa — Shoprite / Checkers (curated seed)
     nrcs = "nrcs"  # South Africa — National Regulator for Compulsory Specifications (curated seed)
     cfia = "cfia"  # Canada — Canadian Food Inspection Agency
+    rasff = "rasff"  # European Union — Rapid Alert System for Food and Feed (iRASFF)
 
 
 class RecallCountry(StrEnum):
@@ -44,6 +45,7 @@ class RecallCountry(StrEnum):
     uk = "uk"
     za = "za"
     ca = "ca"
+    eu = "eu"  # European Union (RASFF is EU-wide; per-country geography rides in the *_countries)
 
 
 class EntityType(StrEnum):
@@ -74,12 +76,12 @@ class RecallEntity(CamelModel):
 
 
 class RecallOut(CamelModel):
-    country: RecallCountry = Field(description="Country the recall is from: us, uk, za, or ca.")
+    country: RecallCountry = Field(description="Country the recall is from: us, uk, za, ca, or eu.")
     source: RecallSource = Field(
         description=(
             "Data source: fda (openFDA), usda (FSIS), uk (FSA), ncc (South Africa NCC), cfia "
-            "(Canadian Food Inspection Agency), and the curated SA seed sources "
-            "woolworths / shoprite / nrcs."
+            "(Canadian Food Inspection Agency), rasff (EU Rapid Alert System for Food and Feed), "
+            "and the curated SA seed sources woolworths / shoprite / nrcs."
         )
     )
     recall_number: str = Field(
@@ -97,6 +99,28 @@ class RecallOut(CamelModel):
     company_name: str | None = Field(description="Recalling firm / establishment.")
     state: str | None = Field(description="Single recalling-firm / primary state.")
     states: list[str] | None = Field(description="All affected-state codes (used by the map).")
+    notifying_country: str | None = Field(
+        default=None,
+        description=(
+            "ISO 3166-1 alpha-2 code of the country that raised the alert (EU/RASFF only — the "
+            "member state that notified; e.g. IE). Null for every other source."
+        ),
+    )
+    origin_countries: list[str] | None = Field(
+        default=None,
+        description=(
+            "ISO codes of the product's origin countries (EU/RASFF only). Worldwide — not "
+            "restricted to Europe. Null for other sources or when the feed omits them."
+        ),
+    )
+    distribution_countries: list[str] | None = Field(
+        default=None,
+        description=(
+            "ISO codes of the countries the product was distributed to (EU/RASFF only; the EU "
+            "analog of `states` for the map). Null for other sources; empty distribution usually "
+            "means the product was stopped before reaching the market."
+        ),
+    )
     distribution_pattern: str | None = Field(description="Where the product was distributed.")
     recall_initiation_date: date | None = Field(description="When the recall began.")
     report_date: date | None = Field(description="When it was reported.")
@@ -124,8 +148,9 @@ class RecallOut(CamelModel):
         default=None,
         description=(
             'Model prediction "Class I" (serious) or "not Class I" for recalls from countries with '
-            "no native class ladder (UK, ZA); null for US/CA, which carry a real classification, "
-            "and until the predictions build runs. A prediction, not a regulator's call — a "
+            "no native class ladder (UK, ZA, EU); null for US/CA, which carry a real "
+            "classification, and until the predictions build runs. A prediction, not a "
+            "regulator's call — a "
             "Class I prediction also lifts the recall's severityScore."
         ),
     )

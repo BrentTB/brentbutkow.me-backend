@@ -95,6 +95,9 @@ def normalize_fsa(record: FsaRecord) -> NormalizedRecall:
         # UK alerts carry no US state — they don't appear on the US map.
         "state": None,
         "states": None,
+        "notifying_country": None,
+        "origin_countries": None,
+        "distribution_countries": None,
         "distribution_pattern": None,
         "recall_initiation_date": created,
         "report_date": created,

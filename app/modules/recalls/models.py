@@ -40,6 +40,13 @@ class Recall(Base):
     # none_as_null so a Python None is stored as SQL NULL, not a JSON 'null' scalar (which would
     # break jsonb_array_elements_text in the by-state aggregation).
     states: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
+    # EU/RASFF geography (NULL for every other source). RASFF is ingested as one EU-wide country,
+    # so the member-state detail rides in these: the notifying member state (ISO alpha-2), and the
+    # origin / distribution country code lists — distribution_countries is the EU analog of
+    # `states` for the map. Same none_as_null contract as `states` (see above).
+    notifying_country: Mapped[str | None] = mapped_column(Text)
+    origin_countries: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
+    distribution_countries: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     distribution_pattern: Mapped[str | None] = mapped_column(Text)
     recall_initiation_date: Mapped[date | None] = mapped_column(Date)
     # Indexed: report_date backs the default ordering + `since` filter + monthly stats; category

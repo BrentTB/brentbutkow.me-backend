@@ -38,6 +38,7 @@ from app.modules.recalls.service import (
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
+    run_rasff_ingest,
     run_seed_ingest,
     run_uk_ingest,
     search_companies,
@@ -58,14 +59,14 @@ def _validate_date_range(since: date | None, until: date | None) -> None:
 
 def recall_filters(
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, za, or ca."
+        default=None, description="Filter by country: us, uk, za, ca, or eu."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None, max_length=50, description="Affected state — 2-letter code, e.g. CA."
@@ -124,14 +125,14 @@ def get_recalls(
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, za, or ca."
+        default=None, description="Filter by country: us, uk, za, ca, or eu."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None,
@@ -275,7 +276,7 @@ def recall_trend(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None,
@@ -546,3 +547,19 @@ def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_cfia(session: Session = Depends(get_session)) -> IngestResult:
     return run_cfia_ingest(session)
+
+
+@router.post(
+    "/ingest/rasff",
+    response_model=IngestResult,
+    summary="Trigger an EU RASFF ingest",
+    description=(
+        "Fetches recent EU RASFF food/feed alerts from the official DG SANTE data-lake API, keeps "
+        "recall-classified notifications (dropping border rejections), enriches each with the "
+        "national food-authority link where available, and upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_rasff(session: Session = Depends(get_session)) -> IngestResult:
+    return run_rasff_ingest(session)

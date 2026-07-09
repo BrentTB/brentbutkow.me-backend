@@ -75,6 +75,7 @@ def _recall_counts(session: Session) -> RecallCounts:
         uk=by_country.get("uk", 0),
         za=by_country.get("za", 0),
         ca=by_country.get("ca", 0),
+        eu=by_country.get("eu", 0),
     )
 
 

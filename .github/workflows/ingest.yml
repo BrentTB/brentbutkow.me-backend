@@ -68,6 +68,16 @@ jobs:
             -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
             -H "Content-Type: application/json"
 
+      - name: Trigger RASFF (EU) ingest endpoint
+        # Longer timeout: this fetches a rolling window from the official DG SANTE API *and* makes a
+        # best-effort SPA enrichment call per new recall, so it runs longer than the single-fetch
+        # sources. Must stay before the dispatch step below.
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 600 \
+            -X POST "${API_BASE_URL}/recalls/ingest/rasff" \
+            -H "Authorization: Bearer ${INGEST_BEARER_TOKEN}" \
+            -H "Content-Type: application/json"
+
       - name: Dispatch recall alert emails
         # Runs only after every ingest above succeeds — a failed step short-circuits the job, so a
         # digest never claims completeness off a partial ingest (those recalls land next run).
@@ -121,7 +131,7 @@ jobs:
         run: python -m scripts.build_events
 
       - name: Rebuild class predictions over the live DB
-        # Predicts a Class I/II/III for the no-native-class countries (UK, ZA) with the committed
+        # Predicts a Class I/II/III for the no-native-class countries (UK, ZA, EU) with the committed
         # class_predictor.joblib. Independent of analytics/events (reads only recall text + the
         # model), so it runs regardless of their outcome.
         if: ${{ always() }}

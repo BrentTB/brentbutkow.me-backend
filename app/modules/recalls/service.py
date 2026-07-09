@@ -23,6 +23,7 @@ from app.modules.recalls.models import (
 from app.modules.recalls.ncc_za import fetch_ncc, normalize_ncc
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
+from app.modules.recalls.rasff_eu import fetch_rasff, normalize_rasff
 from app.modules.recalls.schemas import (
     Anomaly,
     AnomalyMonth,
@@ -64,6 +65,7 @@ _COUNTRY_SOURCES = {
     "uk": ("uk_fsa",),
     "za": ("ncc_za", "seed_za"),
     "ca": ("cfia_food",),
+    "eu": ("rasff_eu",),
 }
 
 # Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
@@ -648,7 +650,7 @@ def rebuild_stats(session: Session) -> dict[str, int]:
     snake-case round-trips).
     """
     now = datetime.now(UTC)
-    countries = list(_COUNTRY_SOURCES)  # per-country scopes the dashboard requests: us, uk, za, ca
+    countries = list(_COUNTRY_SOURCES)  # dashboard's per-country scopes: us, uk, za, ca, eu
     payloads = {
         country: compute_stats(session, country).model_dump(mode="json") for country in countries
     }
@@ -936,3 +938,19 @@ def run_seed_ingest(session: Session) -> IngestResult:
 def run_cfia_ingest(session: Session) -> IngestResult:
     # Canada — CFIA food recalls from Health Canada's open-data export (see cfia_ca.py).
     return _run_ingest_job(session, source="cfia_food", fetch=fetch_cfia, normalize=normalize_cfia)
+
+
+def run_rasff_ingest(session: Session, days: int | None = 14, enrich: bool = True) -> IngestResult:
+    # EU — RASFF food/feed alerts from the official DG SANTE data-lake API, over a rolling `days`
+    # window (None = the full 2020+ history, for the one-off seed), with a best-effort
+    # national-URL/action enrichment pass (see rasff_eu.py). The daily window is small, so we
+    # enrich every row each run rather than track per-row enrichment state — it keeps a
+    # previously-found national URL fresh and self-heals after a transient SPA outage. The history
+    # seed passes enrich=False (scripts/backfill_rasff_enrichment.py does that pass separately, so a
+    # ~31k-row backfill isn't blocked on ~31k SPA calls in one shot).
+    return _run_ingest_job(
+        session,
+        source="rasff_eu",
+        fetch=lambda: fetch_rasff(days=days, enrich=enrich),
+        normalize=normalize_rasff,
+    )
