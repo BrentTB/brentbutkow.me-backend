@@ -11,15 +11,9 @@ those are skipped; re-running only retries rows that still lack a national link.
 that carry a NOTIF_ID (stored in event_id), which the detail endpoint is keyed on.
 """
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import defer
-
 from app.db import SessionLocal
-from app.modules.recalls.models import Recall
 from app.modules.recalls.rasff_eu import RasffRecord, _status, enrich_records
-
-# Rows still on the RASFF Window fallback (or with no URL) haven't had a national link attached yet.
-_FALLBACK_HOST = "webgate.ec.europa.eu"
+from app.modules.recalls.service import rasff_recalls_needing_enrichment
 
 # Enrich in batches so a long pass commits incrementally, and pause between SPA calls to stay polite
 # to the undocumented endpoint over the full history.
@@ -30,21 +24,10 @@ _DELAY_SECONDS = 0.3
 def main() -> None:
     session = SessionLocal()
     try:
-        rows = list(
-            session.scalars(
-                select(Recall)
-                .options(defer(Recall.raw))
-                .where(
-                    Recall.source == "rasff_eu",
-                    Recall.event_id.is_not(None),
-                    or_(
-                        Recall.source_url.is_(None),
-                        Recall.source_url.contains(_FALLBACK_HOST),
-                    ),
-                )
-                .order_by(Recall.recall_number)
-            )
-        )
+        # The work-list query lives in service.py (the DB layer) so it's covered by a DB-free test
+        # asserting it filters on the same source value normalize_rasff writes — the mismatch that
+        # made an earlier version match zero rows.
+        rows = rasff_recalls_needing_enrichment(session)
         print(f"Enriching {len(rows)} RASFF recalls lacking a national-authority link…")
 
         upgraded = 0

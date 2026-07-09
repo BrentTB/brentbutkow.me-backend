@@ -4,8 +4,8 @@ from typing import Any
 
 from sqlalchemy import delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
-from sqlalchemy.sql.selectable import TableValuedAlias
+from sqlalchemy.orm import Session, defer
+from sqlalchemy.sql.selectable import Select, TableValuedAlias
 
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.cfia_ca import fetch_cfia, normalize_cfia
@@ -23,7 +23,7 @@ from app.modules.recalls.models import (
 from app.modules.recalls.ncc_za import fetch_ncc, normalize_ncc
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
-from app.modules.recalls.rasff_eu import fetch_rasff, normalize_rasff
+from app.modules.recalls.rasff_eu import RASFF_WINDOW_HOST, fetch_rasff, normalize_rasff
 from app.modules.recalls.schemas import (
     Anomaly,
     AnomalyMonth,
@@ -39,6 +39,7 @@ from app.modules.recalls.schemas import (
     RecallListResult,
     RecallOut,
     RecallSort,
+    RecallSource,
     RecallStats,
     SeverityLabel,
     SimilarRecall,
@@ -954,3 +955,29 @@ def run_rasff_ingest(session: Session, days: int | None = 14, enrich: bool = Tru
         fetch=lambda: fetch_rasff(days=days, enrich=enrich),
         normalize=normalize_rasff,
     )
+
+
+def _rasff_enrichment_stmt() -> Select[tuple[Recall]]:
+    # The scripts/backfill_rasff_enrichment.py work-list: RASFF recalls still on the RASFF Window
+    # fallback URL (or with none), i.e. not yet upgraded to a national-authority link. Filters on
+    # Recall.source == the RecallSource enum value the normalizer writes ("rasff") — NOT the
+    # ingest-job id "rasff_eu" (that lives only in IngestRun.source / _COUNTRY_SOURCES). A backfill
+    # that mixed the two matched zero rows. `raw` is deferred so the full-history load stays light.
+    return (
+        select(Recall)
+        .options(defer(Recall.raw))
+        .where(
+            Recall.source == RecallSource.rasff.value,
+            Recall.event_id.is_not(None),
+            or_(
+                Recall.source_url.is_(None),
+                Recall.source_url.contains(RASFF_WINDOW_HOST),
+            ),
+        )
+        .order_by(Recall.recall_number)
+    )
+
+
+def rasff_recalls_needing_enrichment(session: Session) -> list[Recall]:
+    """RASFF recalls still lacking a national-authority link (the enrichment backfill work-list)."""
+    return list(session.scalars(_rasff_enrichment_stmt()))

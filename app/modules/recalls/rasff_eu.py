@@ -38,9 +38,13 @@ API_ENDPOINT = "https://api.datalake.sante.service.ec.europa.eu/rasff/irasff-gen
 API_VERSION = "v1.1"
 
 # The RASFF Window SPA backend — enrichment source AND the deterministic public page for any
-# notification (our source_url fallback when a record has no national-authority link).
-_SPA_DETAIL = "https://webgate.ec.europa.eu/rasff-window/backend/public/notification/view/id/{id}/"
-_SPA_PAGE = "https://webgate.ec.europa.eu/rasff-window/screen/notification/{id}"
+# notification (our source_url fallback when a record has no national-authority link). The host is
+# also how the enrichment backfill spots a not-yet-upgraded row (source_url still points here).
+RASFF_WINDOW_HOST = "webgate.ec.europa.eu"
+_SPA_DETAIL = (
+    f"https://{RASFF_WINDOW_HOST}/rasff-window/backend/public/notification/view/id/{{id}}/"
+)
+_SPA_PAGE = f"https://{RASFF_WINDOW_HOST}/rasff-window/screen/notification/{{id}}"
 
 # The feed packs multi-valued fields into one string on this separator (per the API data dict).
 _LIST_SEP = "***"

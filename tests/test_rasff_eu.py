@@ -1,8 +1,9 @@
 import httpx
 import pytest
 
-from app.modules.recalls import rasff_eu
+from app.modules.recalls import rasff_eu, service
 from app.modules.recalls.rasff_eu import (
+    RASFF_WINDOW_HOST,
     RasffRecord,
     enrich_records,
     fetch_rasff,
@@ -194,3 +195,15 @@ def test_fetch_paginates_filters_and_enriches(monkeypatch):
     records = fetch_rasff(days=7, enrich=False)
     refs = [r.reference for r in records]
     assert refs == ["2026.5974", "2026.5975"]  # both alerts kept, border dropped, both pages read
+
+
+def test_enrichment_backfill_filters_the_source_the_normalizer_writes():
+    # Guard the bug that made the enrichment backfill match zero rows: it filtered Recall.source on
+    # the ingest-job id ("rasff_eu") instead of the RecallSource enum value the normalizer actually
+    # writes ("rasff"). Compile the work-list query and assert it targets the written value and the
+    # fallback host — DB-free, so it runs in the default suite.
+    written_source = normalize_rasff(RasffRecord.model_validate(ALERT))["source"]
+    sql = str(service._rasff_enrichment_stmt().compile(compile_kwargs={"literal_binds": True}))
+    assert f"'{written_source}'" in sql  # 'rasff' — the value stored on the row
+    assert "'rasff_eu'" not in sql  # never the ingest-job id
+    assert RASFF_WINDOW_HOST in sql  # targets rows still on the RASFF Window fallback URL
