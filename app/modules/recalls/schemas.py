@@ -252,6 +252,9 @@ class RecallFacets(CamelModel):
     severity: list[LabelCount]
     source: list[LabelCount]
     state: list[LabelCount]
+    # EU analog of `state`: ISO codes of countries a recall affects (notifying ∪ distribution),
+    # counted once per recall. Empty outside the EU scope — only RASFF rows carry the columns.
+    affected_country: list[LabelCount]
     # Top firms by count (capped); the leaderboard breakdown reads this, the type-ahead uses
     # /companies. Entities (allergens/pathogens/hazards) carry their type so the UI can split them.
     company: list[LabelCount]
@@ -327,6 +330,9 @@ class RecallStats(CamelModel):
     by_classification: list[LabelCount]
     by_severity: list[LabelCount]
     by_state: list[LabelCount]
+    # EU analog of by_state (notifying ∪ distribution, once per recall). Defaulted so stats
+    # payloads cached before this field existed still validate until the next rebuild fills it.
+    by_affected_country: list[LabelCount] = Field(default_factory=list)
     by_company: list[LabelCount]
     by_source: list[LabelCount]
     by_entity: list[EntityCount]

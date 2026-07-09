@@ -179,6 +179,7 @@ def test_facets(monkeypatch):
             "severity": [],
             "source": [],
             "state": [],
+            "affectedCountry": [],
             "company": [],
             "entity": [],
             "topicCounts": {},

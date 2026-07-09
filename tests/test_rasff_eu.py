@@ -10,7 +10,7 @@ from app.modules.recalls.rasff_eu import (
     is_recall,
     normalize_rasff,
 )
-from app.modules.recalls.schemas import RecallCategory
+from app.modules.recalls.schemas import RecallCategory, RecallStats
 
 # Trimmed verbatim from the official DG SANTE data-lake API (irasff-general-info-view, v1.1). An
 # alert whose distribution list mixes EU members with non-European territories (Cayman Islands,
@@ -195,6 +195,27 @@ def test_fetch_paginates_filters_and_enriches(monkeypatch):
     records = fetch_rasff(days=7, enrich=False)
     refs = [r.reference for r in records]
     assert refs == ["2026.5974", "2026.5975"]  # both alerts kept, border dropped, both pages read
+
+
+def test_stats_payload_cached_before_by_affected_country_still_validates():
+    # RecallStats gained by_affected_country for the EU map. rebuild_stats stores payloads as
+    # snake_case model_dump(mode="json"); rows materialized before the field existed must keep
+    # validating, since get_stats serves the cached payload until the next rebuild replaces it.
+    legacy_payload = {
+        "total": 0,
+        "by_category": [],
+        "by_month": [],
+        "by_classification": [],
+        "by_severity": [],
+        "by_state": [],
+        "by_company": [],
+        "by_source": [],
+        "by_entity": [],
+        "anomalies": [],
+        "forecast": [],
+        "last_ingest_at": None,
+    }
+    assert RecallStats.model_validate(legacy_payload).by_affected_country == []
 
 
 def test_enrichment_backfill_filters_the_source_the_normalizer_writes():

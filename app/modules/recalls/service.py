@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
@@ -162,6 +163,7 @@ def _recall_conditions(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
@@ -186,6 +188,15 @@ def _recall_conditions(
     if state:
         # `states` is the array of affected states; match if it contains the requested code.
         conditions.append(Recall.states.contains([state]))
+    if affected_country:
+        # The EU analog of `state`: a recall "affects" a country when that country raised the alert
+        # or received the product (EU/RASFF rows; both columns are NULL for other sources).
+        conditions.append(
+            or_(
+                Recall.notifying_country == affected_country,
+                Recall.distribution_countries.contains([affected_country]),
+            )
+        )
     if company:
         # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
         # slowly, so it stays cheap for a long time; revisit with a pg_trgm GIN index if it grows.
@@ -243,6 +254,7 @@ def list_recalls(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
@@ -263,6 +275,7 @@ def list_recalls(
         category=category,
         classification=classification,
         state=state,
+        affected_country=affected_country,
         company=company,
         entity=entity,
         min_severity=min_severity,
@@ -310,6 +323,32 @@ def list_recalls(
     return RecallListResult(items=[RecallOut.model_validate(row) for row in rows], total=total)
 
 
+def _affected_country_counts(session: Session, conditions: list[Any]) -> list[LabelCount]:
+    # "Affected country" = the notifying member state plus every distribution country, per recall
+    # (EU/RASFF rows — both columns are NULL for other sources, so this is empty elsewhere). Each
+    # recall counts once per code even when the same code notified AND received distribution, which
+    # a plain union-of-unnests can't express without a distinct-per-recall subquery — so the small,
+    # EU-only (notifying, distribution) pairs merge in Python.
+    stmt = select(Recall.notifying_country, Recall.distribution_countries).where(
+        or_(
+            Recall.notifying_country.is_not(None),
+            func.jsonb_typeof(Recall.distribution_countries) == "array",
+        )
+    )
+    for condition in conditions:
+        stmt = stmt.where(condition)
+    counter: Counter[str] = Counter()
+    for notifying, distribution in session.execute(stmt):
+        codes = set(distribution or ())
+        if notifying:
+            codes.add(notifying)
+        counter.update(codes)
+    return [
+        LabelCount(label=code, count=count)
+        for code, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
 def get_facets(
     session: Session,
     *,
@@ -318,6 +357,7 @@ def get_facets(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     severity: str | None = None,
@@ -341,6 +381,7 @@ def get_facets(
         "category": category,
         "classification": classification,
         "state": state,
+        "affected_country": affected_country,
         "company": company,
         "entity": entity,
         "severity": severity,
@@ -419,6 +460,9 @@ def get_facets(
         severity=counts(Recall.severity_label, "severity"),
         source=counts(Recall.source, "source"),
         state=[LabelCount(label=value, count=count) for value, count in state_rows],
+        affected_country=_affected_country_counts(
+            session, _recall_conditions(**{**base, "affected_country": None})
+        ),
         company=[LabelCount(label=name, count=count) for name, count in company_rows],
         entity=[
             EntityCount(type=etype, label=value, count=count) for etype, value, count in entity_rows
@@ -505,6 +549,11 @@ def compute_stats(session: Session, country: str | None = None) -> RecallStats:
             .limit(_TOP_N)
         )
     ).all()
+    # The EU analog of by_state — countries a recall affects (notifying ∪ distribution). Empty for
+    # every non-EU scope, since only RASFF rows carry the columns.
+    by_affected_country = _affected_country_counts(
+        session, [Recall.country == country] if country else []
+    )
     by_source = session.execute(
         scoped(
             select(Recall.source, func.count())
@@ -614,6 +663,7 @@ def compute_stats(session: Session, country: str | None = None) -> RecallStats:
         ],
         by_severity=[LabelCount(label=label, count=count) for label, count in by_severity],
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
+        by_affected_country=by_affected_country,
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         by_source=[LabelCount(label=label, count=count) for label, count in by_source],
         by_entity=[
@@ -670,6 +720,7 @@ def get_trend(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     source: str | None = None,
     entity: str | None = None,
@@ -690,6 +741,7 @@ def get_trend(
             category=category,
             classification=classification,
             state=state,
+            affected_country=affected_country,
             company=company,
             source=source,
             entity=entity,
@@ -821,6 +873,7 @@ def search_companies(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     entity: str | None = None,
     severity: str | None = None,
     topic: str | None = None,
@@ -840,6 +893,7 @@ def search_companies(
         category=category,
         classification=classification,
         state=state,
+        affected_country=affected_country,
         company=None,
         entity=entity,
         severity=severity,

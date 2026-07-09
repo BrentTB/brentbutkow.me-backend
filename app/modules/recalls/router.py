@@ -71,6 +71,15 @@ def recall_filters(
     state: str | None = Query(
         default=None, max_length=50, description="Affected state — 2-letter code, e.g. CA."
     ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
+    ),
     company: str | None = Query(
         default=None, max_length=100, description="Company name (case-insensitive partial match)."
     ),
@@ -101,6 +110,7 @@ def recall_filters(
         "category": category.value if category else None,
         "classification": classification.value if classification else None,
         "state": state,
+        "affected_country": affected_country,
         "company": company,
         "entity": entity,
         "severity": severity.value if severity else None,
@@ -138,6 +148,15 @@ def get_recalls(
         default=None,
         max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
+    ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
     ),
     company: str | None = Query(
         default=None,
@@ -200,6 +219,7 @@ def get_recalls(
         category=category.value if category else None,
         classification=classification.value if classification else None,
         state=state,
+        affected_country=affected_country,
         company=company,
         entity=entity,
         min_severity=min_severity,
@@ -283,6 +303,15 @@ def recall_trend(
         max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
     ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
+    ),
     company: str | None = Query(
         default=None,
         max_length=100,
@@ -334,6 +363,7 @@ def recall_trend(
         category=category.value if category else None,
         classification=classification.value if classification else None,
         state=state,
+        affected_country=affected_country,
         company=company,
         source=source.value if source else None,
         entity=entity,

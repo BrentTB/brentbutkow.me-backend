@@ -33,9 +33,9 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | liveness (no DB hit) |
-| GET | `/recalls?limit&offset&country&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` · `novelty` (most unusual first) |
-| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byCompany, bySource, byEntity, anomalies, forecast, lastIngestAt }` |
-| GET | `/recalls/trend?country&group&category&classification&source&state&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
+| GET | `/recalls?limit&offset&country&category&classification&source&state&affectedCountry&company&entity&severity&minSeverity&topic&event&since&until&search&sort` | paginated list → `{ items, total }`; `sort` ∈ `recency` (default) · `severity` · `novelty` (most unusual first) |
+| GET | `/recalls/stats?country` | `{ total, byCategory, byMonth, byClassification, bySeverity, byState, byAffectedCountry, byCompany, bySource, byEntity, anomalies, forecast, lastIngestAt }` |
+| GET | `/recalls/trend?country&group&category&classification&source&state&affectedCountry&company&entity&severity&minSeverity&topic&event&since&until&search` | monthly counts, optionally grouped by `category` · `source` · `severity` · `classification` → `{ group, buckets }` |
 | GET | `/recalls/companies?country&q` | distinct company names matching `q`, ranked by recall count → `string[]` (feeds the filter type-ahead) |
 | GET | `/recalls/topics?country` | per-country themes (k-means clusters over neural text embeddings), largest first → `TopicOut[]` |
 | GET | `/recalls/{source}/{recallNumber}/similar?limit` | recalls most similar by reason/product text (precomputed cosine neighbours) → `SimilarRecall[]` |
@@ -56,7 +56,8 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 `classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US, and CA's Class 1–3
 fold onto Class I–III) · `Product Recall · Allergy Alert · Food Alert for Action` (UK).
 `country` ∈ `us · uk · za · ca · eu`; `source` ∈ `fda · usda · uk · ncc · woolworths · shoprite · nrcs · cfia · rasff`.
-`state` matches any affected state; `search` is Postgres full-text over product/reason/company;
+`state` matches any affected state; `affectedCountry` (ISO alpha-2, EU/RASFF rows) matches recalls
+the country notified or received distribution of; `search` is Postgres full-text over product/reason/company;
 `entity` filters to recalls naming a specific allergen/pathogen/hazard/contaminant by its exact
 canonical value (e.g. `Listeria`, `peanuts` — the values returned in `byEntity`). Each recall also
 carries a `severityScore` (0–100) and `severityLabel` ∈ `low · moderate · high · severe · critical` — a
