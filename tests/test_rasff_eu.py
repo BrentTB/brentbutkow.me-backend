@@ -157,12 +157,14 @@ def test_enrichment_attaches_national_url_and_actions(monkeypatch):
     _mock_httpx(monkeypatch, handler)
     record = RasffRecord.model_validate(ALERT)
     assert enrich_records([record]) == 1
-    # Prefers the recall measure's URL over the withdrawal measure's (which had none here).
-    assert record.enriched_url == "rappel.conso.gouv.fr/fiche-rappel/22514/Interne"
+    # Prefers the recall measure's URL over the withdrawal measure's (which had none here). The
+    # feed stores this one scheme-less; it must gain https:// or a frontend href treats it as a
+    # site-relative path.
+    assert record.enriched_url == "https://rappel.conso.gouv.fr/fiche-rappel/22514/Interne"
     assert record.enrichment_attempted is True
 
     row = normalize_rasff(record)
-    assert row["source_url"] == "rappel.conso.gouv.fr/fiche-rappel/22514/Interne"
+    assert row["source_url"] == "https://rappel.conso.gouv.fr/fiche-rappel/22514/Interne"
     # Both measures are recall-type actions (withdrawal + recall), surfaced as status in feed order.
     assert row["status"] == "withdrawal from the market; recall from consumer"
 
@@ -218,6 +220,44 @@ def test_enrichment_finds_url_under_related_products(monkeypatch):
     assert record.enriched_url == "https://www.lebensmittelwarnung.de/Meldungen/2026/06_Juni"
     # Actions merge across the primary and related products.
     assert record.enriched_actions == ["withdrawal from the market", "recall from consumer"]
+
+
+def test_enrichment_malformed_200_body_fails_that_row_only(monkeypatch):
+    # The SPA payload is undocumented and drift-prone: a 200 whose JSON is not the expected object
+    # shape raises AttributeError/TypeError from the .get chains, which must fail that row only —
+    # not abort the batch (and with it the whole daily ingest, after the official fetch succeeded).
+    detail_with_string_measure = {"product": {"measures": [{"actionTaken": "recall"}]}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/id/1/" in str(request.url):
+            return httpx.Response(200, json=["not", "an", "object"])
+        if "/id/3/" in str(request.url):
+            return httpx.Response(200, json=detail_with_string_measure)
+        return httpx.Response(200, json=DETAIL)
+
+    _mock_httpx(monkeypatch, handler)
+    records = [
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 1, "NOTIFICATION_REFERENCE": "r.1"}),
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 2, "NOTIFICATION_REFERENCE": "r.2"}),
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 3, "NOTIFICATION_REFERENCE": "r.3"}),
+    ]
+    assert enrich_records(records, workers=3) == 1
+    assert records[0].enriched_url is None
+    assert records[1].enriched_url is not None
+    assert records[2].enriched_url is None
+
+
+def test_hazard_html_entities_are_unescaped_like_sibling_fields():
+    # The hazard list goes through strip_html like subject/product/distribution_status (the #28
+    # sibling-field sweep): entities must be unescaped before the hazard reaches reason_text and
+    # the entity extractor.
+    raw = {
+        **BORDER,
+        "NOTIF_SUBJECT": None,
+        "HAZARD_CATEGORY_NAME": "Salmonella &amp; Listeria  - {pathogenic micro-organisms}",
+    }
+    row = _normalize(raw)
+    assert row["reason_text"] == "Salmonella & Listeria in Aves"
 
 
 def test_enrichment_failure_is_swallowed(monkeypatch):

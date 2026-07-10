@@ -188,13 +188,16 @@ def _recall_conditions(
     if state:
         # `states` is the array of affected states; match if it contains the requested code.
         conditions.append(Recall.states.contains([state]))
-    if affected_country:
+    if affected_country and affected_country.strip():
         # The EU analog of `state`: a recall "affects" a country when that country raised the alert
         # or received the product (EU/RASFF rows; both columns are NULL for other sources).
+        # Stored codes are uppercase ISO; accept any case from the client — a lowercase "de" must
+        # match DE rows, not silently return nothing.
+        code = affected_country.strip().upper()
         conditions.append(
             or_(
-                Recall.notifying_country == affected_country,
-                Recall.distribution_countries.contains([affected_country]),
+                Recall.notifying_country == code,
+                Recall.distribution_countries.contains([code]),
             )
         )
     if company:

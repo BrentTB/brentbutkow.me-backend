@@ -227,8 +227,10 @@ def _hazard_text(raw: str | None) -> str:
         return ""
     names: list[str] = []
     for part in raw.split(_LIST_SEP):
-        name = part.split(" - {", 1)[0].strip()
-        name = " ".join(name.split())  # collapse the feed's doubled internal spaces
+        # strip_html like every other RASFF text field — hazard names feed reason_text and the
+        # entity gazetteer, so an HTML entity here would flow through unescaped. Also collapses
+        # the feed's doubled internal spaces.
+        name = strip_html(part.split(" - {", 1)[0])
         if name and name not in names:
             names.append(name)
     return ", ".join(names)
@@ -317,6 +319,14 @@ def normalize_rasff(record: RasffRecord) -> NormalizedRecall:
     }
 
 
+def _ensure_scheme(url: str | None) -> str | None:
+    """Some SPA measure URLs are scheme-less bare hosts; a frontend href would treat those as
+    site-relative paths, so default them to https."""
+    if url and "://" not in url:
+        return f"https://{url}"
+    return url
+
+
 def _enrich_one(record: RasffRecord, client: httpx.Client) -> None:
     """Best-effort: attach the national-authority URL + action list from the SPA detail payload.
 
@@ -345,7 +355,7 @@ def _enrich_one(record: RasffRecord, client: httpx.Client) -> None:
             first_url = first_url or url
             if any(keyword in action.lower() for keyword in _RECALL_ACTIONS):
                 recall_url = recall_url or url
-    record.enriched_url = recall_url or first_url
+    record.enriched_url = _ensure_scheme(recall_url or first_url)
     record.enriched_actions = actions
     record.enrichment_attempted = True
 
@@ -354,7 +364,10 @@ def _try_enrich(record: RasffRecord, client: httpx.Client) -> bool:
     try:
         _enrich_one(record, client)
         return True
-    except (httpx.HTTPError, ValueError, KeyError):
+    except (httpx.HTTPError, ValueError, KeyError, AttributeError, TypeError):
+        # The SPA payload is undocumented: shape drift (a list where a dict was expected, a
+        # non-dict measure) surfaces as AttributeError/TypeError from the .get chains, and
+        # best-effort means no single row may abort the batch or the ingest run.
         return False
 
 
