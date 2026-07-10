@@ -132,6 +132,9 @@ def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
         # No Canadian geography in the feed — like UK, these don't appear on the US state map.
         "state": None,
         "states": None,
+        "notifying_country": None,
+        "origin_countries": None,
+        "distribution_countries": None,
         "distribution_pattern": None,
         "recall_initiation_date": updated,
         "report_date": updated,

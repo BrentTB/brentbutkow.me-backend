@@ -81,7 +81,7 @@ _FIRST_RUN_LOOKBACK = timedelta(days=1)
 # flooded countries' recalls this run — subscribers to the other countries still get theirs — alert
 # the operator, and still advance the cursor so the next run returns to normal. The operator decides
 # whether to release a held batch. The guard is per-country so seeding one new country (e.g. CA's
-# ~5k-row history) never blocks the genuine US/UK/ZA recalls that landed the same run.
+# ~5k-row history) never blocks the genuine US/UK/ZA/EU recalls that landed the same run.
 _BACKFILL_GUARD_THRESHOLD = 50
 
 

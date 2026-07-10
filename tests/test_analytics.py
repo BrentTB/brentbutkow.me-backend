@@ -8,13 +8,34 @@ model-dependent."""
 import numpy as np
 import pytest
 
-from app.modules.recalls.analytics import _compute_neighbors, _novelty, build_analytics
+from app.modules.recalls.analytics import (
+    _compute_neighbors,
+    _make_vectorizer,
+    _novelty,
+    build_analytics,
+)
 
 
 def _rows(*vectors: tuple[float, ...]) -> np.ndarray:
     rows = np.array(vectors, dtype=np.float32)
     norms = np.linalg.norm(rows, axis=1, keepdims=True)
     return rows / np.maximum(norms, 1e-12)
+
+
+def test_vectorizer_drops_non_english_function_words():
+    # "di · en · alkaloids" shipped as an EU theme label: RASFF product names carry native-language
+    # fragments, and the stopword list was English-only. The foreign function words must never
+    # become label terms; the hazard/product tokens they surround must survive.
+    vectorizer = _make_vectorizer(doc_count=2, min_df=1)
+    vectorizer.fit(
+        [
+            "tropane alkaloids in foglie di curry",
+            "chloorprofam en producten van aardappelen",
+        ]
+    )
+    terms = set(vectorizer.get_feature_names_out())
+    assert {"di", "en", "van"}.isdisjoint(terms)
+    assert {"alkaloids", "curry", "producten"} <= terms
 
 
 def test_compute_neighbors_accepts_dense_embedding_rows():

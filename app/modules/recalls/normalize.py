@@ -92,6 +92,9 @@ class NormalizedRecall(TypedDict):
     company_name: str | None
     state: str | None
     states: list[str] | None
+    notifying_country: str | None
+    origin_countries: list[str] | None
+    distribution_countries: list[str] | None
     distribution_pattern: str | None
     recall_initiation_date: date | None
     report_date: date | None

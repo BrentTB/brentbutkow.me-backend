@@ -26,6 +26,7 @@ from app.modules.recalls.models import (
     RecallTopic,
 )
 from app.modules.recalls.openfda import OpenFdaRecord
+from app.modules.recalls.rasff_eu import RasffRecord
 from app.modules.recalls.schemas import (
     RecallCategory,
     RecallClass,
@@ -451,12 +452,12 @@ def test_rebuild_stats_materializes_a_row_per_country(session, monkeypatch):
 
     summary = service.rebuild_stats(session)
 
-    # rebuild_stats materializes a row for every dashboard country (us, uk, za, ca — see
+    # rebuild_stats materializes a row for every dashboard country (us, uk, za, ca, eu — see
     # _COUNTRY_SOURCES), not just the ones ingested here, so the endpoint always has a cached
-    # payload. za/ca simply come back empty.
-    assert summary == {"countries": 4}
+    # payload. za/ca/eu simply come back empty.
+    assert summary == {"countries": 5}
     cached = {row.country for row in session.scalars(select(RecallStatsCache)).all()}
-    assert cached == {"us", "uk", "za", "ca"}
+    assert cached == {"us", "uk", "za", "ca", "eu"}
     # The stored JSONB payload reconstructs into the same RecallStats shape get_stats returns.
     assert service.get_stats(session, "us").total == 1
     assert service.get_stats(session, "uk").total == 1
@@ -805,6 +806,87 @@ def test_get_facets_excludes_a_facets_own_filter_but_applies_the_rest(session, m
     assert {s.label: s.count for s in facets.source} == {"fda": 1, "usda": 1, "uk": 1}
     # Every *other* facet honors source=fda: only D-1 (FDA, CA) survives.
     assert {s.label: s.count for s in facets.state} == {"CA": 1}
+
+
+def _rasff_record(reference: str, **fields) -> RasffRecord:
+    # Shaped like the official general-info-view rows (see test_rasff_eu.py for verbatim fixtures);
+    # only the fields these tests exercise vary.
+    return RasffRecord.model_validate(
+        {
+            "NOTIF_ID": fields.pop("notif_id", 900000),
+            "NOTIFICATION_REFERENCE": reference,
+            "NOTIF_DATE": fields.pop("notif_date", "2026-07-01T00:00:00"),
+            "NOTIF_SUBJECT": fields.pop("subject", "Salmonella in product"),
+            "PRODUCT_NAME": fields.pop("product", "product"),
+            "NOTIFICATION_CLASSIFICAT_DESC": "alert notification",
+            "NETWORK_DESC": "RASFF",
+            **fields,
+        }
+    )
+
+
+def _patch_rasff(monkeypatch, batch: list[RasffRecord]) -> None:
+    monkeypatch.setattr(service, "fetch_rasff", lambda days=14, enrich=True: batch)
+
+
+def _seed_rasff(session, monkeypatch) -> None:
+    # E-1 lists France both as notifier and in distribution — the union must count it once. E-2 has
+    # a notifier but no distribution (the border-stopped shape).
+    _patch_rasff(
+        monkeypatch,
+        [
+            _rasff_record(
+                "2026.1",
+                notif_id=900001,
+                **{
+                    "NOTIFYNG_COUNTRY_DESC": "France",
+                    "DISTRIBUTION_COUNTRY_DESC": "Belgium *** France",
+                },
+            ),
+            _rasff_record("2026.2", notif_id=900002, **{"NOTIFYNG_COUNTRY_DESC": "Germany"}),
+        ],
+    )
+    service.run_rasff_ingest(session)
+
+
+def test_list_recalls_filters_by_affected_country(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+    _seed_rasff(session, monkeypatch)
+
+    # Matches via notifying country OR distribution membership.
+    in_fr = service.list_recalls(session, limit=50, offset=0, affected_country="FR")
+    assert {i.recall_number for i in in_fr.items} == {"2026.1"}
+    in_be = service.list_recalls(session, limit=50, offset=0, affected_country="BE")
+    assert {i.recall_number for i in in_be.items} == {"2026.1"}
+    in_de = service.list_recalls(session, limit=50, offset=0, affected_country="DE")
+    assert {i.recall_number for i in in_de.items} == {"2026.2"}
+
+    # Codes are stored uppercase ISO; the filter must accept any case — a lowercase "fr" used to
+    # match nothing and silently return an empty list.
+    in_fr_lower = service.list_recalls(session, limit=50, offset=0, affected_country="fr")
+    assert {i.recall_number for i in in_fr_lower.items} == {"2026.1"}
+
+    # The US state filter and the EU affected-country filter never cross: state matches only rows
+    # with a `states` array, affected-country only rows with the RASFF geography columns.
+    in_ca_state = service.list_recalls(session, limit=50, offset=0, state="CA")
+    assert {i.recall_number for i in in_ca_state.items} == {"D-1", "D-2"}
+
+
+def test_affected_country_aggregations_count_once_per_recall(session, monkeypatch):
+    _seed_multi_source(session, monkeypatch)
+    _seed_rasff(session, monkeypatch)
+
+    stats = service.get_stats(session, country="eu")
+    # France notified E-1 AND received its distribution — counted once, not twice.
+    assert {c.label: c.count for c in stats.by_affected_country} == {"BE": 1, "DE": 1, "FR": 1}
+    # Non-EU scopes have no RASFF geography columns, so the aggregation is empty.
+    assert service.get_stats(session, country="us").by_affected_country == []
+
+    facets = service.get_facets(session, country="eu", affected_country="BE")
+    # affected_country is this facet's own dimension — its list ignores the selection...
+    assert {c.label: c.count for c in facets.affected_country} == {"BE": 1, "DE": 1, "FR": 1}
+    # ...while every other facet honors it: only E-1 (the BE-affected recall) survives.
+    assert {c.label: c.count for c in facets.source} == {"rasff": 1}
 
 
 def test_get_facets_includes_company_and_entity_breakdowns(session, monkeypatch):

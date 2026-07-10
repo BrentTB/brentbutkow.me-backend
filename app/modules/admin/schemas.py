@@ -48,6 +48,7 @@ class RecallCounts(CamelModel):
     uk: int
     za: int
     ca: int
+    eu: int
 
 
 class NullspaceCounts(CamelModel):

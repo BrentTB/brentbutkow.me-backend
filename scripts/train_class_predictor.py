@@ -3,13 +3,13 @@
 Features are Model2Vec text embeddings; the model is a binary logistic regression (Class I vs. the
 rest). Trains on the recalls that carry a real class — US (FDA Class I–III) + CA (CFIA Class 1–3,
 folded onto I–III at ingest, then Class II/III collapsed) — so it can be applied to the countries
-that don't (UK, ZA).
+that don't (UK, ZA, EU).
 
 Two honest evals are reported and written to the model card:
   * IN-DOMAIN — a stratified held-out split of the combined US+CA corpus (how well it reproduces the
     label where it has seen that country's prose).
   * CROSS-COUNTRY — train on US only, test on CA only: a real out-of-distribution check, the closest
-    proxy available for the UK/ZA transfer we actually care about (no UK/ZA ground truth exists).
+    proxy available for the UK/ZA/EU transfer we care about (no UK/ZA/EU ground truth exists).
 
 Run locally with DATABASE_URL set (the embedding model downloads from Hugging Face on first use):
 
@@ -107,9 +107,9 @@ balanced class weights). Features are the same static neural embeddings the anal
 a learned representation, not a gazetteer.
 
 **Task:** predict whether a recall is **Class I** (serious) or **not** ({CLASS_LABELS}) from its
-reason + product text, for recalls from countries with no native class ladder (UK, ZA). The task is
-binary on purpose: the three-way I/II/III split was barely learnable from text alone (II vs III
-turns on facts the notice doesn't state), while Class-I-vs-rest carries real signal and is the
+reason + product text, for recalls from countries with no native class ladder (UK, ZA, EU). The
+task is binary on purpose: the three-way I/II/III split was barely learnable from text alone (II vs
+III turns on facts the notice doesn't state), while Class-I-vs-rest carries real signal and is the
 distinction that matters for severity.
 
 **Training data:** {total} recalls that carry a real class — US (FDA Class I–III) and CA (CFIA
@@ -120,16 +120,16 @@ country: {counts}.
 corpus. How well it reproduces the Class-I-vs-rest label where it has seen that country's prose.
 
 **Cross-country accuracy:** {cross:.3f} raw / **{cross_balanced:.3f} balanced** — trained on US
-only, tested on CA only. A genuine out-of-distribution check and the closest proxy for the UK/ZA
-transfer we care about (no UK/ZA class labels exist). Read the *balanced* number: CA is
+only, tested on CA only. A genuine out-of-distribution check and the closest proxy for the UK/ZA/EU
+transfer we care about (no UK/ZA/EU class labels exist). Read the *balanced* number: CA is
 {ca_majority:.0%} "not Class I", so a do-nothing majority guesser scores {ca_majority:.3f} raw
 while catching zero Class I recalls — the model earns its keep by actually identifying Class I
 cases (balanced accuracy over both classes), which is what the severity lift needs, at the cost of
-some false positives. Expect the applied-to-UK/ZA quality to be no better than this.
+some false positives. Expect the applied-to-UK/ZA/EU quality to be no better than this.
 
-**How it's used:** surfaced as `predictedClass` (+ confidence) on UK/ZA recalls, and — when the
+**How it's used:** surfaced as `predictedClass` (+ confidence) on UK/ZA/EU recalls, and — when the
 prediction is Class I — it lifts that recall's severity score (scaled by confidence, bounded so it
-modulates rather than anchors). Always labelled a prediction, never a regulator's ruling; UK/ZA
+modulates rather than anchors). Always labelled a prediction, never a regulator's ruling; UK/ZA/EU
 prose is templated differently from the US/CA text the model learnt on, so treat it as a calibrated
 guess.
 """
@@ -155,7 +155,7 @@ def main() -> None:
     print(CLASS_LABELS)
     print(confusion_matrix(y_test, predictions, labels=CLASS_LABELS))
 
-    # Cross-country: train US, test CA — the out-of-distribution proxy for UK/ZA transfer.
+    # Cross-country: train US, test CA — the out-of-distribution proxy for UK/ZA/EU transfer.
     us = countries_arr == "us"
     ca = countries_arr == "ca"
     cross = cross_balanced = ca_majority = float("nan")

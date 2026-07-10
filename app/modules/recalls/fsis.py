@@ -125,6 +125,9 @@ def normalize_fsis(record: FsisRecord) -> NormalizedRecall:
         # Single `state` only when unambiguous; the full set lives in `states` (map) + distribution.
         "state": states[0] if states and len(states) == 1 else None,
         "states": states,
+        "notifying_country": None,
+        "origin_countries": None,
+        "distribution_countries": None,
         "distribution_pattern": distribution_pattern,
         "recall_initiation_date": recall_date,
         "report_date": recall_date,

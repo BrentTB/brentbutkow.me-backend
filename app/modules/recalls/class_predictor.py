@@ -1,12 +1,12 @@
 """Cross-country recall-class prediction — a Class I/II/III guess for countries with no native
-class system (UK, ZA), from a model trained on the countries that do (US, CA). No LLM.
+class system (UK, ZA, EU), from a model trained on the countries that do (US, CA). No LLM.
 
 The FDA (Class I–III) and CFIA (Class 1–3, folded onto I–III at ingest) both grade recalls on one
 health-risk ladder; the UK FSA and South Africa's NCC do not. This trains a classifier on the
-US + CA recalls that carry a real class and applies it to UK/ZA recalls, so severity can be reasoned
-about on one axis across all four countries. Features are the same Model2Vec text embeddings the
-analytics build uses (app/modules/recalls/embeddings.py) — a static neural representation, not a
-gazetteer — so this is genuinely learned, not keyword rules.
+US + CA recalls that carry a real class and applies it to UK/ZA/EU recalls, so severity can be
+reasoned about on one axis across all five countries. Features are the same Model2Vec text
+embeddings the analytics build uses (app/modules/recalls/embeddings.py) — a static neural
+representation, not a gazetteer — so this is genuinely learned, not keyword rules.
 
 Offline only, like the analytics build: `predict_classes` loads the committed model
 (model/class_predictor.joblib, trained by scripts/train_class_predictor.py) and
@@ -15,8 +15,8 @@ Offline only, like the analytics build: `predict_classes` loads the committed mo
 model is never loaded on the request path. A missing model degrades to no prediction.
 
 Honest limits (see the model card): the class often turns on facts absent from the recall text, and
-UK/ZA prose differs from the US/CA text the model learnt on (domain shift), so treat the output as a
-calibrated guess with its confidence, never a regulator's ruling.
+UK/ZA/EU prose differs from the US/CA text the model learnt on (domain shift), so treat the output
+as a calibrated guess with its confidence, never a regulator's ruling.
 """
 
 from pathlib import Path
@@ -45,7 +45,7 @@ CLASS_LABELS = [POSITIVE_CLASS, NEGATIVE_CLASS]
 
 # Countries with no native class system, so a prediction is meaningful there. US/CA carry a real
 # `classification`, so they are never overwritten with a guess.
-PREDICT_COUNTRIES = ("uk", "za")
+PREDICT_COUNTRIES = ("uk", "za", "eu")
 
 _DB_CHUNK = 1000
 
@@ -81,8 +81,9 @@ def predict_classes(texts: list[str]) -> tuple[list[str | None], list[float]]:
 
 
 def rebuild_predictions(session: Session) -> dict[str, int]:
-    """Predict the class for the countries with no native class system (UK, ZA) and materialise it
-    into `predicted_class` / `predicted_class_confidence`, then **re-score their severity** so a
+    """Predict the class for the countries with no native class system (UK, ZA, EU) and
+    materialise it into `predicted_class` / `predicted_class_confidence`, then **re-score their
+    severity** so a
     likely-Class-I recall reads as serious on the shared 0–100 scale. Called by
     scripts/build_predictions.py. One transaction.
 

@@ -116,7 +116,7 @@ _SEED: list[SeedRecall] = [
     {
         "source": RecallSource.nrcs.value,
         "slug": "nrcs-canned-pilchards-tomato-chilli-sauce-400g",
-        "report_date": "2023-07-01",
+        "report_date": "2020-02-24",
         "product": "Canned pilchards in tomato & chilli sauce, 400g (batches ZST29/ZSC29)",
         "reason": (
             "The NRCS ordered the removal of these canned pilchards after an investigation found a "
@@ -188,6 +188,9 @@ def normalize_seed(entry: SeedRecall) -> NormalizedRecall:
         "company_name": entry["company"],
         "state": None,
         "states": None,
+        "notifying_country": None,
+        "origin_countries": None,
+        "distribution_countries": None,
         "distribution_pattern": None,
         "recall_initiation_date": report_date,
         "report_date": report_date,

@@ -34,12 +34,13 @@ logger = logging.getLogger(__name__)
 # Each recall country maps to the official agency (or agencies) subscribers should treat as the
 # source of truth for that country. Digest footers list only the agencies covering a subscriber's
 # chosen countries, rather than every agency we ingest — a South-Africa-only subscriber sees "NCC",
-# not the full FDA/FSIS/FSA/NCC/CFIA list.
+# not the full FDA/FSIS/FSA/NCC/CFIA/RASFF list.
 _COUNTRY_SOURCES: dict[str, tuple[str, ...]] = {
     RecallCountry.us.value: ("FDA", "FSIS"),
     RecallCountry.uk.value: ("FSA",),
     RecallCountry.za.value: ("NCC",),
     RecallCountry.ca.value: ("CFIA",),
+    RecallCountry.eu.value: ("RASFF",),
 }
 
 # Every agency name, in a stable order — the single source of truth for the "source of truth"

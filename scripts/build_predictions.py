@@ -10,8 +10,8 @@ NAME = "predictions"
 
 
 def status(session: Session) -> tuple[bool, str]:
-    # The predicted class doesn't self-populate at ingest, so a UK/ZA recall with usable text and no
-    # prediction means the build hasn't run for it (or ran before the recall was ingested).
+    # The predicted class doesn't self-populate at ingest, so a UK/ZA/EU recall with usable text
+    # and no prediction means the build hasn't run for it (or ran before the recall was ingested).
     # "Usable" must match rebuild_predictions exactly: it predicts only rows whose composed text
     # (reason + product, firm name stripped) is non-empty. Checking reason_text alone would flag a
     # company-name-only recall as perpetually "missing" — rebuild_predictions permanently skips it,
@@ -26,12 +26,12 @@ def status(session: Session) -> tuple[bool, str]:
         1 for r in candidates if _compose_text(r.reason_text, r.product_description, r.company_name)
     )
     if missing:
-        return True, f"{missing} UK/ZA recalls without a predicted class"
+        return True, f"{missing} UK/ZA/EU recalls without a predicted class"
     return False, "predicted classes built"
 
 
 # Predicts + materialises recalls.predicted_class / predicted_class_confidence for the countries
-# with no native class system (UK, ZA), using the committed class_predictor.joblib. Run after
+# with no native class system (UK, ZA, EU), using the committed class_predictor.joblib. Run after
 # ingest, or after retraining the model: `python -m scripts.build_predictions`.
 def main() -> None:
     session = SessionLocal()
@@ -39,7 +39,7 @@ def main() -> None:
         summary = rebuild_predictions(session)
         print(
             f"Rebuilt predictions: {summary['predicted']} of {summary['recalls']} "
-            "UK/ZA recalls given a predicted class."
+            "UK/ZA/EU recalls given a predicted class."
         )
     finally:
         session.close()

@@ -1,6 +1,17 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Computed, Date, DateTime, Float, Integer, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    Computed,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,6 +51,13 @@ class Recall(Base):
     # none_as_null so a Python None is stored as SQL NULL, not a JSON 'null' scalar (which would
     # break jsonb_array_elements_text in the by-state aggregation).
     states: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
+    # EU/RASFF geography (NULL for every other source). RASFF is ingested as one EU-wide country,
+    # so the member-state detail rides in these: the notifying member state (ISO alpha-2), and the
+    # origin / distribution country code lists — distribution_countries is the EU analog of
+    # `states` for the map. Same none_as_null contract as `states` (see above).
+    notifying_country: Mapped[str | None] = mapped_column(Text)
+    origin_countries: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
+    distribution_countries: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     distribution_pattern: Mapped[str | None] = mapped_column(Text)
     recall_initiation_date: Mapped[date | None] = mapped_column(Date)
     # Indexed: report_date backs the default ordering + `since` filter + monthly stats; category
@@ -62,8 +80,9 @@ class Recall(Base):
     event_cluster_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # Cross-country class prediction from scripts/build_predictions.py — a binary Class-I-vs-not
     # guess ("Class I" / "not Class I") for recalls from countries with no native class system
-    # (UK, ZA), with its confidence. NULL for US/CA (they carry a real `classification`) and until
-    # the predictions build runs. Derived, so its write must not bump updated_at (like topic_id).
+    # (UK, ZA, EU), with its confidence. NULL for US/CA (they carry a real `classification`) and
+    # until the predictions build runs. Derived, so its write must not bump updated_at (like
+    # topic_id).
     predicted_class: Mapped[str | None] = mapped_column(Text)
     predicted_class_confidence: Mapped[float | None] = mapped_column(Float)
     # Novelty from scripts/build_analytics.py — how unlike its nearest neighbours a recall is
@@ -170,6 +189,30 @@ class RecallAnalyticsBuild(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     built_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# Operator-watch state, not recall data: every NRCS statement scripts/check_nrcs.py has already
+# seen (and, past a source's first run, emailed the operator about). The NRCS publishes SA recall
+# statements only on its non-indexable SharePoint site, so the watcher polls its API and notifies;
+# a human decides what joins the curated seed list (seed_za.py). Insert-only — the unique
+# constraint is the dedupe, in at table creation per CLAUDE.md.
+class NrcsWatchItem(Base):
+    __tablename__ = "nrcs_watch_items"
+    __table_args__ = (
+        UniqueConstraint("source", "item_key", name="uq_nrcs_watch_items_source_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Which NRCS container the item came from ("news" list / "media_release" library) — item ids
+    # are only unique within a container, hence the composite uniqueness with item_key.
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    item_key: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    release_date: Mapped[date | None] = mapped_column(Date)
+    url: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

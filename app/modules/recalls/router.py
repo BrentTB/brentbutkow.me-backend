@@ -38,6 +38,7 @@ from app.modules.recalls.service import (
     run_fda_ingest,
     run_fsis_ingest,
     run_ncc_ingest,
+    run_rasff_ingest,
     run_seed_ingest,
     run_uk_ingest,
     search_companies,
@@ -58,17 +59,26 @@ def _validate_date_range(since: date | None, until: date | None) -> None:
 
 def recall_filters(
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, za, or ca."
+        default=None, description="Filter by country: us, uk, za, ca, or eu."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None, max_length=50, description="Affected state — 2-letter code, e.g. CA."
+    ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
     ),
     company: str | None = Query(
         default=None, max_length=100, description="Company name (case-insensitive partial match)."
@@ -100,6 +110,7 @@ def recall_filters(
         "category": category.value if category else None,
         "classification": classification.value if classification else None,
         "state": state,
+        "affected_country": affected_country,
         "company": company,
         "entity": entity,
         "severity": severity.value if severity else None,
@@ -124,19 +135,28 @@ def get_recalls(
     limit: int = Query(default=50, ge=1, le=200, description="Max results to return (1–200)."),
     offset: int = Query(default=0, ge=0, description="Number of results to skip (pagination)."),
     country: RecallCountry | None = Query(
-        default=None, description="Filter by country: us, uk, za, or ca."
+        default=None, description="Filter by country: us, uk, za, ca, or eu."
     ),
     category: RecallCategory | None = Query(default=None, description="Filter by cause category."),
     classification: RecallClass | None = Query(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None,
         max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
+    ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
     ),
     company: str | None = Query(
         default=None,
@@ -199,6 +219,7 @@ def get_recalls(
         category=category.value if category else None,
         classification=classification.value if classification else None,
         state=state,
+        affected_country=affected_country,
         company=company,
         entity=entity,
         min_severity=min_severity,
@@ -238,9 +259,10 @@ def recall_stats(
     summary="Filter facet counts",
     description=(
         "Option counts for each filterable dimension (cause, classification, severity, source, "
-        "state) under the current filters. Every count ignores its own facet's selection but "
-        "honors the rest — so the dropdowns can show how many recalls each choice would return "
-        "and grey out the dead ends. Company counts come from /recalls/companies (a type-ahead)."
+        "state, affected country) under the current filters. Every count ignores its own facet's "
+        "selection but honors the rest — so the dropdowns can show how many recalls each choice "
+        "would return and grey out the dead ends. Company counts come from /recalls/companies "
+        "(a type-ahead)."
     ),
     responses=_RATE_LIMITED,
 )
@@ -275,12 +297,21 @@ def recall_trend(
         default=None, description="Filter by recall classification / alert type."
     ),
     source: RecallSource | None = Query(
-        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc."
+        default=None, description="Filter by data source, e.g. fda, usda, uk, ncc, cfia, rasff."
     ),
     state: str | None = Query(
         default=None,
         max_length=50,
         description="Affected state — matches any recall touching this 2-letter code (e.g. CA).",
+    ),
+    affected_country: str | None = Query(
+        default=None,
+        alias="affectedCountry",
+        max_length=2,
+        description=(
+            "Affected country (EU/RASFF) — ISO alpha-2 code, e.g. DE. Matches recalls the country "
+            "notified or received distribution of."
+        ),
     ),
     company: str | None = Query(
         default=None,
@@ -333,6 +364,7 @@ def recall_trend(
         category=category.value if category else None,
         classification=classification.value if classification else None,
         state=state,
+        affected_country=affected_country,
         company=company,
         source=source.value if source else None,
         entity=entity,
@@ -546,3 +578,19 @@ def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
 )
 def ingest_cfia(session: Session = Depends(get_session)) -> IngestResult:
     return run_cfia_ingest(session)
+
+
+@router.post(
+    "/ingest/rasff",
+    response_model=IngestResult,
+    summary="Trigger an EU RASFF ingest",
+    description=(
+        "Fetches recent EU RASFF food/feed alerts from the official DG SANTE data-lake API, keeps "
+        "recall-classified notifications (dropping border rejections), enriches each with the "
+        "national food-authority link where available, and upserts them. Bearer-protected."
+    ),
+    dependencies=[Depends(require_bearer)],
+    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+)
+def ingest_rasff(session: Session = Depends(get_session)) -> IngestResult:
+    return run_rasff_ingest(session)

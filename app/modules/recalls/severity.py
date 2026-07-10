@@ -128,12 +128,13 @@ _MULTI_BONUS = 3.0  # 2–5 affected states
 _WIDE_STATE_COUNT = 6
 
 # Predicted Class I — the cross-country class model (app/modules/recalls/class_predictor.py) fills
-# `predicted_class` for the countries with no native class ladder (UK, ZA). When it flags a recall
-# as likely Class I (serious), lift the score, scaled by the model's confidence so a hesitant guess
-# barely moves it and a confident one carries a UK/ZA recall toward severe. Bounded like the other
-# content modifiers — it modulates, never anchors (the prediction is imperfect, so it can't be the
-# sole basis for a band). US/CA never carry a prediction (they have a real classification), so their
-# scores are unchanged and this is applied only when re-scored by build_predictions.
+# `predicted_class` for the countries with no native class ladder (UK, ZA, EU). When it flags a
+# recall as likely Class I (serious), lift the score, scaled by the model's confidence so a
+# hesitant guess barely moves it and a confident one carries a UK/ZA/EU recall toward severe.
+# Bounded like the other content modifiers — it modulates, never anchors (the prediction is
+# imperfect, so it can't be the sole basis for a band). US/CA never carry a prediction (they have a
+# real classification), so their scores are unchanged and this is applied only when re-scored by
+# build_predictions.
 _PREDICTED_CLASS_I_BONUS = 22.0
 
 # Score → band thresholds (inclusive lower bound). Class I always clears 75 via the base alone.
@@ -225,7 +226,7 @@ def score_severity(
     free text entities + category were derived from; it feeds the reported-harm signal.
 
     ``predicted_class`` / ``predicted_class_confidence`` are the cross-country class model's output,
-    passed only when re-scoring a UK/ZA recall after the prediction build (never at ingest, where
+    passed only when re-scoring a UK/ZA/EU recall after the prediction build (never at ingest, where
     the prediction doesn't exist yet, and never for US/CA, which carry a real ``classification``). A
     predicted ``Class I`` lifts the score, scaled by confidence.
     """
@@ -237,7 +238,7 @@ def score_severity(
     )
 
     # Sum the content modifiers: cause nudge, named hazard, allergen tier, reported harm, breadth,
-    # and — for UK/ZA — a predicted-Class-I lift scaled by the model's confidence.
+    # and — for UK/ZA/EU — a predicted-Class-I lift scaled by the model's confidence.
     predicted_class_i = (
         _PREDICTED_CLASS_I_BONUS * predicted_class_confidence
         if predicted_class == RecallClass.class_i.value and predicted_class_confidence

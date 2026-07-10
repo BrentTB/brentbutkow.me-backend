@@ -4,8 +4,8 @@ from typing import Any
 
 from sqlalchemy import delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
-from sqlalchemy.sql.selectable import TableValuedAlias
+from sqlalchemy.orm import Session, defer
+from sqlalchemy.sql.selectable import Select, TableValuedAlias
 
 from app.modules.recalls.anomalies import detect_anomalies
 from app.modules.recalls.cfia_ca import fetch_cfia, normalize_cfia
@@ -23,6 +23,7 @@ from app.modules.recalls.models import (
 from app.modules.recalls.ncc_za import fetch_ncc, normalize_ncc
 from app.modules.recalls.normalize import NormalizedRecall
 from app.modules.recalls.openfda import fetch_enforcement, normalize_recall
+from app.modules.recalls.rasff_eu import RASFF_WINDOW_HOST, fetch_rasff, normalize_rasff
 from app.modules.recalls.schemas import (
     Anomaly,
     AnomalyMonth,
@@ -38,6 +39,7 @@ from app.modules.recalls.schemas import (
     RecallListResult,
     RecallOut,
     RecallSort,
+    RecallSource,
     RecallStats,
     SeverityLabel,
     SimilarRecall,
@@ -64,6 +66,7 @@ _COUNTRY_SOURCES = {
     "uk": ("uk_fsa",),
     "za": ("ncc_za", "seed_za"),
     "ca": ("cfia_food",),
+    "eu": ("rasff_eu",),
 }
 
 # Anomaly scan: how many top entities to monitor, how many flags to surface, and the recency window
@@ -159,6 +162,7 @@ def _recall_conditions(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
@@ -183,6 +187,18 @@ def _recall_conditions(
     if state:
         # `states` is the array of affected states; match if it contains the requested code.
         conditions.append(Recall.states.contains([state]))
+    if affected_country and affected_country.strip():
+        # The EU analog of `state`: a recall "affects" a country when that country raised the alert
+        # or received the product (EU/RASFF rows; both columns are NULL for other sources).
+        # Stored codes are uppercase ISO; accept any case from the client — a lowercase "de" must
+        # match DE rows, not silently return nothing.
+        code = affected_country.strip().upper()
+        conditions.append(
+            or_(
+                Recall.notifying_country == code,
+                Recall.distribution_countries.contains([code]),
+            )
+        )
     if company:
         # Leading-wildcard ILIKE can't use a btree index, so this is a seq scan. The table grows
         # slowly, so it stays cheap for a long time; revisit with a pg_trgm GIN index if it grows.
@@ -240,6 +256,7 @@ def list_recalls(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     min_severity: float | None = None,
@@ -260,6 +277,7 @@ def list_recalls(
         category=category,
         classification=classification,
         state=state,
+        affected_country=affected_country,
         company=company,
         entity=entity,
         min_severity=min_severity,
@@ -307,6 +325,29 @@ def list_recalls(
     return RecallListResult(items=[RecallOut.model_validate(row) for row in rows], total=total)
 
 
+def _affected_country_counts(session: Session, conditions: list[Any]) -> list[LabelCount]:
+    # "Affected country" = the notifying member state plus every distribution country, per recall
+    # (EU/RASFF rows — both columns are NULL for other sources, so this is empty elsewhere). Each
+    # recall counts once per code even when the same code notified AND received distribution:
+    # UNION (not UNION ALL) of the per-recall (pk, code) pairs dedupes that server-side. The whole
+    # aggregation stays in SQL — this sits on the unauthenticated /facets path, so streaming every
+    # matching row into Python would hand out CPU/RAM per request on the free tier.
+    notifying = select(
+        Recall.source.label("src"),
+        Recall.recall_number.label("num"),
+        Recall.notifying_country.label("code"),
+    ).where(Recall.notifying_country.is_not(None), *conditions)
+    distribution = select(
+        Recall.source.label("src"),
+        Recall.recall_number.label("num"),
+        func.jsonb_array_elements_text(Recall.distribution_countries).label("code"),
+    ).where(func.jsonb_typeof(Recall.distribution_countries) == "array", *conditions)
+    pairs = notifying.union(distribution).subquery()
+    count = func.count()
+    stmt = select(pairs.c.code, count).group_by(pairs.c.code).order_by(count.desc(), pairs.c.code)
+    return [LabelCount(label=code, count=n) for code, n in session.execute(stmt)]
+
+
 def get_facets(
     session: Session,
     *,
@@ -315,6 +356,7 @@ def get_facets(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     entity: str | None = None,
     severity: str | None = None,
@@ -338,6 +380,7 @@ def get_facets(
         "category": category,
         "classification": classification,
         "state": state,
+        "affected_country": affected_country,
         "company": company,
         "entity": entity,
         "severity": severity,
@@ -416,6 +459,9 @@ def get_facets(
         severity=counts(Recall.severity_label, "severity"),
         source=counts(Recall.source, "source"),
         state=[LabelCount(label=value, count=count) for value, count in state_rows],
+        affected_country=_affected_country_counts(
+            session, _recall_conditions(**{**base, "affected_country": None})
+        ),
         company=[LabelCount(label=name, count=count) for name, count in company_rows],
         entity=[
             EntityCount(type=etype, label=value, count=count) for etype, value, count in entity_rows
@@ -502,6 +548,11 @@ def compute_stats(session: Session, country: str | None = None) -> RecallStats:
             .limit(_TOP_N)
         )
     ).all()
+    # The EU analog of by_state — countries a recall affects (notifying ∪ distribution). Empty for
+    # every non-EU scope, since only RASFF rows carry the columns.
+    by_affected_country = _affected_country_counts(
+        session, [Recall.country == country] if country else []
+    )
     by_source = session.execute(
         scoped(
             select(Recall.source, func.count())
@@ -611,6 +662,7 @@ def compute_stats(session: Session, country: str | None = None) -> RecallStats:
         ],
         by_severity=[LabelCount(label=label, count=count) for label, count in by_severity],
         by_state=[LabelCount(label=label, count=count) for label, count in by_state],
+        by_affected_country=by_affected_country,
         by_company=[LabelCount(label=label, count=count) for label, count in by_company],
         by_source=[LabelCount(label=label, count=count) for label, count in by_source],
         by_entity=[
@@ -648,7 +700,7 @@ def rebuild_stats(session: Session) -> dict[str, int]:
     snake-case round-trips).
     """
     now = datetime.now(UTC)
-    countries = list(_COUNTRY_SOURCES)  # per-country scopes the dashboard requests: us, uk, za, ca
+    countries = list(_COUNTRY_SOURCES)  # dashboard's per-country scopes: us, uk, za, ca, eu
     payloads = {
         country: compute_stats(session, country).model_dump(mode="json") for country in countries
     }
@@ -667,6 +719,7 @@ def get_trend(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     company: str | None = None,
     source: str | None = None,
     entity: str | None = None,
@@ -687,6 +740,7 @@ def get_trend(
             category=category,
             classification=classification,
             state=state,
+            affected_country=affected_country,
             company=company,
             source=source,
             entity=entity,
@@ -818,6 +872,7 @@ def search_companies(
     category: str | None = None,
     classification: str | None = None,
     state: str | None = None,
+    affected_country: str | None = None,
     entity: str | None = None,
     severity: str | None = None,
     topic: str | None = None,
@@ -837,6 +892,7 @@ def search_companies(
         category=category,
         classification=classification,
         state=state,
+        affected_country=affected_country,
         company=None,
         entity=entity,
         severity=severity,
@@ -936,3 +992,45 @@ def run_seed_ingest(session: Session) -> IngestResult:
 def run_cfia_ingest(session: Session) -> IngestResult:
     # Canada — CFIA food recalls from Health Canada's open-data export (see cfia_ca.py).
     return _run_ingest_job(session, source="cfia_food", fetch=fetch_cfia, normalize=normalize_cfia)
+
+
+def run_rasff_ingest(session: Session, days: int | None = 14, enrich: bool = True) -> IngestResult:
+    # EU — RASFF food/feed alerts from the official DG SANTE data-lake API, over a rolling `days`
+    # window (None = the full 2020+ history, for the one-off seed), with a best-effort
+    # national-URL/action enrichment pass (see rasff_eu.py). The daily window is small, so we
+    # enrich every row each run rather than track per-row enrichment state — it keeps a
+    # previously-found national URL fresh and self-heals after a transient SPA outage. The history
+    # seed passes enrich=False (scripts/backfill_rasff_enrichment.py does that pass separately, so a
+    # ~31k-row backfill isn't blocked on ~31k SPA calls in one shot).
+    return _run_ingest_job(
+        session,
+        source="rasff_eu",
+        fetch=lambda: fetch_rasff(days=days, enrich=enrich),
+        normalize=normalize_rasff,
+    )
+
+
+def _rasff_enrichment_stmt() -> Select[tuple[Recall]]:
+    # The scripts/backfill_rasff_enrichment.py work-list: RASFF recalls still on the RASFF Window
+    # fallback URL (or with none), i.e. not yet upgraded to a national-authority link. Filters on
+    # Recall.source == the RecallSource enum value the normalizer writes ("rasff") — NOT the
+    # ingest-job id "rasff_eu" (that lives only in IngestRun.source / _COUNTRY_SOURCES). A backfill
+    # that mixed the two matched zero rows. `raw` is deferred so the full-history load stays light.
+    return (
+        select(Recall)
+        .options(defer(Recall.raw))
+        .where(
+            Recall.source == RecallSource.rasff.value,
+            Recall.event_id.is_not(None),
+            or_(
+                Recall.source_url.is_(None),
+                Recall.source_url.contains(RASFF_WINDOW_HOST),
+            ),
+        )
+        .order_by(Recall.recall_number)
+    )
+
+
+def rasff_recalls_needing_enrichment(session: Session) -> list[Recall]:
+    """RASFF recalls still lacking a national-authority link (the enrichment backfill work-list)."""
+    return list(session.scalars(_rasff_enrichment_stmt()))

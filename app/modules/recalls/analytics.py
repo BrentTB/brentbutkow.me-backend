@@ -287,7 +287,94 @@ _BOILERPLATE_STOP = {
     "vikki",
     "loard",
 }
-_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP | _BOILERPLATE_STOP)
+# Non-English function words. RASFF subjects are English but product names ride along in their
+# native language ("foglie di curry", "en producten"), and sklearn's stop list is English-only —
+# which let "di · en · alkaloids" ship as an EU theme label. High-frequency FR/IT/ES/PT/NL/DE/PL
+# articles, prepositions and conjunctions only; anything that doubles as a food/hazard term in
+# English (e.g. "dal" the lentil) stays out. Single letters never tokenize (_TOKEN_PATTERN ≥2).
+_FOREIGN_STOP = {
+    # French
+    "le",
+    "la",
+    "les",
+    "des",
+    "du",
+    "au",
+    "aux",
+    "et",
+    "ou",
+    "pour",
+    "sur",
+    "sous",
+    "avec",
+    "sans",
+    "un",
+    "une",
+    # Italian
+    "di",
+    "del",
+    "della",
+    "delle",
+    "dei",
+    "degli",
+    "dello",
+    "il",
+    "lo",
+    "gli",
+    "ed",
+    "con",
+    "senza",
+    "alla",
+    "alle",
+    "dalla",
+    "tra",
+    "fra",
+    # Spanish
+    "el",
+    "los",
+    "las",
+    "uno",
+    "una",
+    "sin",
+    "para",
+    "por",
+    # Portuguese
+    "da",
+    "das",
+    "dos",
+    "ao",
+    "aos",
+    "em",
+    "uma",
+    # Dutch
+    "en",
+    "van",
+    "het",
+    "met",
+    "voor",
+    "der",
+    "ter",
+    "op",
+    # German
+    "und",
+    "die",
+    "den",
+    "dem",
+    "von",
+    "zu",
+    "aus",
+    "bei",
+    "im",
+    "nach",
+    # Polish
+    "na",
+    "od",
+    "po",
+    "przez",
+    "ze",
+    "bez",
+}
+_STOP = list(ENGLISH_STOP_WORDS | _DOMAIN_STOP | _BOILERPLATE_STOP | _FOREIGN_STOP)
 
 # Keep only alphabetic tokens (≥2 letters) — drops pure numbers, dates, and lot/UPC codes.
 _TOKEN_PATTERN = r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
