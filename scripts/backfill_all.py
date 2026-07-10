@@ -3,6 +3,10 @@
 Recompute-dependency map — what each derived field is built from, and how to re-derive it over the
 existing corpus. New rows get all of this at ingest; these scripts re-stage it for older rows.
 
+  EU RASFF history               the full 2020+ corpus from the official DG SANTE API (the daily
+                                 ingest covers only a rolling window) -> scripts.seed_rasff
+  EU national-authority links    source_url upgraded from the RASFF Window fallback via the SPA
+                                 detail payloads -> scripts.backfill_rasff_enrichment
   decoded text (product_desc,    HTML entities decoded + tags stripped over the stored corpus; new
   reason_text, company_name)     rows are decoded at ingest by each source normalizer (strip_html)
                                  -> scripts.backfill_html_decode
@@ -44,11 +48,13 @@ from scripts import (
     backfill_entities,
     backfill_fda,
     backfill_html_decode,
+    backfill_rasff_enrichment,
     backfill_severity,
     build_analytics,
     build_events,
     build_predictions,
     build_stats,
+    seed_rasff,
 )
 
 
@@ -71,6 +77,8 @@ class _Backfill(Protocol):
 # produces), and build_stats last (it materializes the payload from the now fully-derived recalls).
 _BACKFILLS: list[_Backfill] = [
     backfill_fda,
+    seed_rasff,
+    backfill_rasff_enrichment,
     backfill_html_decode,
     backfill_entities,
     backfill_severity,
@@ -110,6 +118,19 @@ _BACKFILLS: list[_Backfill] = [
 # Every edge points to a backfill later in _BACKFILLS, so one forward pass propagates the full set.
 _TRIGGERS: dict[_Backfill, tuple[_Backfill, ...]] = {
     backfill_fda: (build_analytics, build_events, build_stats),
+    # Seeding the EU history adds ~20k rows: they need the national-link enrichment pass (its own
+    # status can't see them coming — at plan time there are zero RASFF rows, so it reports clean),
+    # plus the whole-corpus rebuilds, plus build_predictions (EU is a PREDICT_COUNTRIES member with
+    # no native class ladder). Rows self-populate entities/severity/category at ingest, like FDA.
+    seed_rasff: (
+        backfill_rasff_enrichment,
+        build_analytics,
+        build_events,
+        build_predictions,
+        build_stats,
+    ),
+    # Enrichment writes source_url/status, which no aggregation reads — no explicit edges. (Its
+    # updated_at bumps make build_stats' own staleness probe fire on the NEXT run; harmless.)
     backfill_html_decode: (backfill_entities, build_analytics),
     backfill_entities: (backfill_severity, build_stats),
     backfill_severity: (build_stats,),

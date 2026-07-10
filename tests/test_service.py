@@ -20,6 +20,7 @@ from app.modules.recalls import service
 from app.modules.recalls.fsa_uk import FsaBusiness, FsaProblem, FsaProduct, FsaRecord, FsaStatus
 from app.modules.recalls.fsis import FsisRecord
 from app.modules.recalls.models import (
+    IngestRun,
     Recall,
     RecallAnalyticsBuild,
     RecallStatsCache,
@@ -870,6 +871,26 @@ def test_list_recalls_filters_by_affected_country(session, monkeypatch):
     # with a `states` array, affected-country only rows with the RASFF geography columns.
     in_ca_state = service.list_recalls(session, limit=50, offset=0, state="CA")
     assert {i.recall_number for i in in_ca_state.items} == {"D-1", "D-2"}
+
+
+def test_seed_rasff_status_distinguishes_a_daily_ingest_from_the_history_seed(session, monkeypatch):
+    from scripts import seed_rasff
+
+    # Fresh DB: the full-history seed is due.
+    assert seed_rasff.status(session)[0] is True
+
+    # A daily-window ingest creates a handful of rows (fetched_count in the hundreds at most). This
+    # must NOT read as "seeded" — doing so would suppress the one-off 2020+ pull forever (the bug a
+    # plain row-count check had).
+    _seed_rasff(session, monkeypatch)  # patched to 2 records, run with the default 14-day window
+    assert seed_rasff.status(session)[0] is True
+
+    # Only the no-window seed fetches the whole corpus in one run; that fetch size flips it to done.
+    session.add(
+        IngestRun(source="rasff_eu", status="ok", fetched_count=seed_rasff._SEED_FETCH_FLOOR)
+    )
+    session.commit()
+    assert seed_rasff.status(session)[0] is False
 
 
 def test_affected_country_aggregations_count_once_per_recall(session, monkeypatch):

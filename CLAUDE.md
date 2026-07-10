@@ -52,6 +52,18 @@ predicted_class in build_predictions'. The models (classifier.joblib, class_pred
 ONLY in offline scripts — never import class_predictor from the request path (constraints.txt pins
 the sklearn stack the pickles were built with; re-pin + retrain together).
 
+## Backfill / seed scripts (scripts/backfill_*.py, scripts/seed_*.py)
+
+Every one-off data script MUST register in scripts/backfill_all.py: add it to `_BACKFILLS` in
+dependency order with `NAME` + `status()` + `main()`, add any `_TRIGGERS` edge for downstream
+rebuilds its run invalidates, and list it in the .github/workflows/run-script.yml dropdown.
+Unregistered, it silently never runs on setup/`backfill_all`. `status()` must report "already done"
+only from a signal a routine daily ingest can't fake — gate a history seed on fetch *size* (only a
+full-corpus run clears the floor), never on row count: one 14-day daily ingest creates rows a count
+check misreads as seeded, suppressing the seed forever (RASFF EU seed; mirrors backfill_fda). A
+`status()` that can't distinguish "never ran" from "ran, nothing left" should gate on "never ran"
+so `backfill_all` can't loop an expensive network pass every run (RASFF enrichment).
+
 ## External feeds (openfda / fsis / fsa_uk / ncc_za / cfia_ca)
 
 Every feed bug so far shipped to prod and needed a backfill script to repair the corpus
