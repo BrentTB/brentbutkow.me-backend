@@ -23,7 +23,7 @@ from app.modules.recalls.service import rasff_recalls_needing_enrichment
 # pass with pacing sleeps took. Sixteen in-flight requests is still a light load for the
 # Commission's infrastructure, but don't push further on an undocumented endpoint.
 _BATCH = 400
-_WORKERS = 16
+_WORKERS = 12
 
 
 def main() -> None:
