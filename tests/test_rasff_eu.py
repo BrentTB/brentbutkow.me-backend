@@ -167,6 +167,29 @@ def test_enrichment_attaches_national_url_and_actions(monkeypatch):
     assert row["status"] == "withdrawal from the market; recall from consumer"
 
 
+def test_enrichment_pool_counts_successes_and_skips_failures(monkeypatch):
+    # The worker pool must enrich every record with a notif_id, tolerate per-record failures
+    # without aborting the batch, and report only the successes — same contract as the old
+    # sequential loop, now concurrent (the full history at ~1s/call is hours sequentially).
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/id/2/" in str(request.url):
+            return httpx.Response(500)
+        return httpx.Response(200, json=DETAIL)
+
+    _mock_httpx(monkeypatch, handler)
+    records = [
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 1, "NOTIFICATION_REFERENCE": "r.1"}),
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 2, "NOTIFICATION_REFERENCE": "r.2"}),
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": 3, "NOTIFICATION_REFERENCE": "r.3"}),
+        # No notif_id → nothing to fetch; must be skipped, not crash a worker.
+        RasffRecord.model_validate({**ALERT, "NOTIF_ID": None, "NOTIFICATION_REFERENCE": "r.4"}),
+    ]
+    assert enrich_records(records, workers=3) == 2
+    assert records[0].enriched_url and records[2].enriched_url
+    assert records[1].enriched_url is None  # the 500 — failed, others unaffected
+    assert records[3].enrichment_attempted is False
+
+
 def test_enrichment_failure_is_swallowed(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
@@ -187,14 +210,23 @@ def test_fetch_paginates_filters_and_enriches(monkeypatch):
     }
     page2 = {"value": [{**ALERT, "NOTIFICATION_REFERENCE": "2026.5975"}], "nextLink": None}
     pages = iter([page1, page2])
+    seen_urls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
         return httpx.Response(200, json=next(pages))
 
     _mock_httpx(monkeypatch, handler)
     records = fetch_rasff(days=7, enrich=False)
     refs = [r.reference for r in records]
     assert refs == ["2026.5974", "2026.5975"]  # both alerts kept, border dropped, both pages read
+    # The datalake API 400s on a percent-encoded timestamp, so the colons must go over the wire
+    # raw (NOTIF_DATE_FROM=…T00:00:00Z, never …T00%3A00%3A00Z). Guards the httpx-params regression
+    # that broke the daily ingest.
+    first = seen_urls[0]
+    assert "NOTIF_DATE_FROM=" in first and first.endswith("T00:00:00Z")
+    assert "%3A" not in first
+    assert "NETWORK_DESC=RASFF" in first
 
 
 def test_stats_payload_cached_before_by_affected_country_still_validates():

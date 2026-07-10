@@ -11,14 +11,18 @@ those are skipped; re-running only retries rows that still lack a national link.
 that carry a NOTIF_ID (stored in event_id), which the detail endpoint is keyed on.
 """
 
+import time
+
 from app.db import SessionLocal
 from app.modules.recalls.rasff_eu import RasffRecord, _status, enrich_records
 from app.modules.recalls.service import rasff_recalls_needing_enrichment
 
-# Enrich in batches so a long pass commits incrementally, and pause between SPA calls to stay polite
-# to the undocumented endpoint over the full history.
-_BATCH = 200
-_DELAY_SECONDS = 0.3
+# Enrich in batches so a long pass commits incrementally. The SPA detail endpoint costs ~1s per
+# call regardless of outcome, so throughput comes from bounded concurrency (see enrich_records) —
+# 8 workers puts the full ~22k-row history around 45 minutes instead of the ~8 hours a sequential
+# pass with pacing sleeps took.
+_BATCH = 400
+_WORKERS = 8
 
 
 def main() -> None:
@@ -30,6 +34,7 @@ def main() -> None:
         rows = rasff_recalls_needing_enrichment(session)
         print(f"Enriching {len(rows)} RASFF recalls lacking a national-authority link…")
 
+        started = time.monotonic()
         upgraded = 0
         for start in range(0, len(rows), _BATCH):
             batch = rows[start : start + _BATCH]
@@ -39,7 +44,7 @@ def main() -> None:
                 for row in batch
                 if row.event_id is not None
             ]
-            enrich_records(records, delay=_DELAY_SECONDS)
+            enrich_records(records, workers=_WORKERS)
             by_ref = {r.reference: r for r in records}
             for row in batch:
                 record = by_ref.get(row.recall_number)
@@ -53,7 +58,13 @@ def main() -> None:
                 if status:
                     row.status = status
             session.commit()
-            print(f"  {min(start + _BATCH, len(rows))}/{len(rows)}… ({upgraded} upgraded so far)")
+            done = min(start + _BATCH, len(rows))
+            rate = done / (time.monotonic() - started)
+            eta_min = (len(rows) - done) / rate / 60 if rate else 0
+            print(
+                f"  {done}/{len(rows)}… ({upgraded} upgraded, "
+                f"{rate:.1f} rows/s, ~{eta_min:.0f} min left)"
+            )
 
         print(f"Done: {upgraded}/{len(rows)} recalls now carry a national-authority link.")
     finally:

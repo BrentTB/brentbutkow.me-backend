@@ -18,7 +18,7 @@ native Class I/II/III ladder — only a risk decision — so `classification` st
 joins PREDICT_COUNTRIES (class_predictor.py), never the training set.
 """
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -323,7 +323,8 @@ def _enrich_one(record: RasffRecord, client: httpx.Client) -> None:
     Any failure (timeout, 404, schema drift, endpoint gone) is swallowed by the caller — the
     record stays valid on its official-API fields alone.
     """
-    response = client.get(_SPA_DETAIL.format(id=record.notif_id), timeout=15)
+    # Observed latency is ~1-1.5s per call (server-side); 8s already means something is wrong.
+    response = client.get(_SPA_DETAIL.format(id=record.notif_id), timeout=8)
     response.raise_for_status()
     measures = (response.json().get("product") or {}).get("measures") or []
     actions: list[str] = []
@@ -343,27 +344,33 @@ def _enrich_one(record: RasffRecord, client: httpx.Client) -> None:
     record.enrichment_attempted = True
 
 
-def enrich_records(records: list[RasffRecord], *, delay: float = 0.0) -> int:
+def _try_enrich(record: RasffRecord, client: httpx.Client) -> bool:
+    try:
+        _enrich_one(record, client)
+        return True
+    except (httpx.HTTPError, ValueError, KeyError):
+        return False
+
+
+def enrich_records(records: list[RasffRecord], *, workers: int = 4) -> int:
     """Enrich a batch in place, best-effort. Returns how many rows were successfully enriched.
 
-    Used by the daily ingest over its small window (delay=0) and by the one-off history backfill
-    (delay>0 to stay polite to the undocumented SPA endpoint over ~31k calls). Each row is
-    independent: one failure never aborts the batch, and a wholesale SPA outage yields zero
-    enrichments.
+    The SPA detail endpoint costs ~1s per call server-side regardless of outcome, so a sequential
+    pass over the full history would take hours — a small worker pool bounds the wall-clock while
+    staying polite (politeness = bounded concurrency, not pacing sleeps; the connection pool is
+    capped to the worker count so the endpoint never sees more than `workers` in flight). Each row
+    is independent: one failure never aborts the batch, and a wholesale SPA outage yields zero
+    enrichments. httpx.Client is thread-safe, so the workers share one connection pool.
     """
-    enriched = 0
-    with httpx.Client(follow_redirects=True) as client:
-        for index, record in enumerate(records):
-            if record.notif_id is None:
-                continue
-            if delay and index:
-                time.sleep(delay)
-            try:
-                _enrich_one(record, client)
-                enriched += 1
-            except (httpx.HTTPError, ValueError, KeyError):
-                continue
-    return enriched
+    todo = [record for record in records if record.notif_id is not None]
+    if not todo:
+        return 0
+    limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
+    with (
+        httpx.Client(follow_redirects=True, limits=limits) as client,
+        ThreadPoolExecutor(max_workers=workers) as pool,
+    ):
+        return sum(pool.map(lambda record: _try_enrich(record, client), todo))
 
 
 def fetch_rasff(*, days: int | None = 14, enrich: bool = True) -> list[RasffRecord]:
@@ -374,22 +381,22 @@ def fetch_rasff(*, days: int | None = 14, enrich: bool = True) -> list[RasffReco
     rows are kept (border rejections dropped). When `enrich`, each kept row gets a best-effort SPA
     enrichment pass.
     """
-    params: dict[str, str] = {
-        "format": "json",
-        "api-version": API_VERSION,
-        "NETWORK_DESC": "RASFF",
-    }
+    # The query is hand-built rather than passed as httpx params: the datalake API 400s on a
+    # percent-encoded timestamp (NOTIF_DATE_FROM=…T00%3A00%3A00Z), so the colons must go over the
+    # wire raw. httpx preserves a pre-built URL string but would %-encode a params dict. Every
+    # value here is a URL-safe literal, so no other encoding is needed.
+    query = f"format=json&api-version={API_VERSION}&NETWORK_DESC=RASFF"
     if days is not None:
         since = datetime.now(UTC) - timedelta(days=days)
-        params["NOTIF_DATE_FROM"] = since.strftime("%Y-%m-%dT00:00:00Z")
+        query += f"&NOTIF_DATE_FROM={since.strftime('%Y-%m-%dT00:00:00Z')}"
 
     records: list[RasffRecord] = []
     with httpx.Client(follow_redirects=True) as client:
-        url: str | None = API_ENDPOINT
-        first = True
+        url: str | None = f"{API_ENDPOINT}?{query}"
         while url:
-            # The official API echoes the query only on the first call; nextLink is fully-formed.
-            response = client.get(url, params=params if first else None, timeout=120)
+            # nextLink is fully-formed (it carries the API's own cursor), so later pages use it
+            # verbatim.
+            response = client.get(url, timeout=120)
             response.raise_for_status()
             payload = response.json()
             for item in payload.get("value", []):
@@ -399,7 +406,6 @@ def fetch_rasff(*, days: int | None = 14, enrich: bool = True) -> list[RasffReco
                 if record.reference and record.network == "RASFF" and is_recall(record):
                     records.append(record)
             url = payload.get("nextLink")
-            first = False
 
     if enrich:
         enrich_records(records)
