@@ -452,12 +452,12 @@ def test_rebuild_stats_materializes_a_row_per_country(session, monkeypatch):
 
     summary = service.rebuild_stats(session)
 
-    # rebuild_stats materializes a row for every dashboard country (us, uk, za, ca — see
+    # rebuild_stats materializes a row for every dashboard country (us, uk, za, ca, eu — see
     # _COUNTRY_SOURCES), not just the ones ingested here, so the endpoint always has a cached
-    # payload. za/ca simply come back empty.
-    assert summary == {"countries": 4}
+    # payload. za/ca/eu simply come back empty.
+    assert summary == {"countries": 5}
     cached = {row.country for row in session.scalars(select(RecallStatsCache)).all()}
-    assert cached == {"us", "uk", "za", "ca"}
+    assert cached == {"us", "uk", "za", "ca", "eu"}
     # The stored JSONB payload reconstructs into the same RecallStats shape get_stats returns.
     assert service.get_stats(session, "us").total == 1
     assert service.get_stats(session, "uk").total == 1
@@ -860,6 +860,11 @@ def test_list_recalls_filters_by_affected_country(session, monkeypatch):
     assert {i.recall_number for i in in_be.items} == {"2026.1"}
     in_de = service.list_recalls(session, limit=50, offset=0, affected_country="DE")
     assert {i.recall_number for i in in_de.items} == {"2026.2"}
+
+    # Codes are stored uppercase ISO; the filter must accept any case — a lowercase "fr" used to
+    # match nothing and silently return an empty list.
+    in_fr_lower = service.list_recalls(session, limit=50, offset=0, affected_country="fr")
+    assert {i.recall_number for i in in_fr_lower.items} == {"2026.1"}
 
     # The US state filter and the EU affected-country filter never cross: state matches only rows
     # with a `states` array, affected-country only rows with the RASFF geography columns.

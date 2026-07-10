@@ -85,7 +85,7 @@ in [0, 1] — how unlike its nearest neighbours it is in embedding space (1 − 
 cosine, missing slots floored at 0, materialised alongside the neighbours); `sort=novelty` surfaces
 the "unusual recalls" feed, with the most isolated recalls scoring highest (null only when the
 corpus is too small to compare). And recalls from countries with no native class
-ladder (UK, ZA) carry a `predictedClass` (`"Class I"` = serious, or `"not Class I"`) +
+ladder (UK, ZA, EU) carry a `predictedClass` (`"Class I"` = serious, or `"not Class I"`) +
 `predictedClassConfidence` — a Model2Vec-embedding + logistic-regression model trained on the
 countries that do (US FDA + CA CFIA, Class II/III collapsed) and applied to the ones that don't,
 materialised by `scripts/build_predictions.py` (see `app/modules/recalls/class_predictor.py` and its

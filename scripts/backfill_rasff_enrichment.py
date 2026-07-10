@@ -19,8 +19,8 @@ from app.modules.recalls.service import rasff_recalls_needing_enrichment
 
 # Enrich in batches so a long pass commits incrementally. The SPA detail endpoint costs ~1s per
 # call regardless of outcome, so throughput comes from bounded concurrency (see enrich_records) —
-# 16 workers puts the full ~22k-row history around 25 minutes instead of the ~8 hours a sequential
-# pass with pacing sleeps took. Sixteen in-flight requests is still a light load for the
+# 12 workers puts the full ~22k-row history around half an hour instead of the ~8 hours a
+# sequential pass with pacing sleeps took. Twelve in-flight requests is still a light load for the
 # Commission's infrastructure, but don't push further on an undocumented endpoint.
 _BATCH = 400
 _WORKERS = 12

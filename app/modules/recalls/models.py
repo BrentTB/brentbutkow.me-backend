@@ -80,8 +80,9 @@ class Recall(Base):
     event_cluster_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # Cross-country class prediction from scripts/build_predictions.py — a binary Class-I-vs-not
     # guess ("Class I" / "not Class I") for recalls from countries with no native class system
-    # (UK, ZA), with its confidence. NULL for US/CA (they carry a real `classification`) and until
-    # the predictions build runs. Derived, so its write must not bump updated_at (like topic_id).
+    # (UK, ZA, EU), with its confidence. NULL for US/CA (they carry a real `classification`) and
+    # until the predictions build runs. Derived, so its write must not bump updated_at (like
+    # topic_id).
     predicted_class: Mapped[str | None] = mapped_column(Text)
     predicted_class_confidence: Mapped[float | None] = mapped_column(Float)
     # Novelty from scripts/build_analytics.py — how unlike its nearest neighbours a recall is

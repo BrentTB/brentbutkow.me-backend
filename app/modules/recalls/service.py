@@ -1,4 +1,3 @@
-from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from typing import Any
@@ -329,27 +328,24 @@ def list_recalls(
 def _affected_country_counts(session: Session, conditions: list[Any]) -> list[LabelCount]:
     # "Affected country" = the notifying member state plus every distribution country, per recall
     # (EU/RASFF rows — both columns are NULL for other sources, so this is empty elsewhere). Each
-    # recall counts once per code even when the same code notified AND received distribution, which
-    # a plain union-of-unnests can't express without a distinct-per-recall subquery — so the small,
-    # EU-only (notifying, distribution) pairs merge in Python.
-    stmt = select(Recall.notifying_country, Recall.distribution_countries).where(
-        or_(
-            Recall.notifying_country.is_not(None),
-            func.jsonb_typeof(Recall.distribution_countries) == "array",
-        )
-    )
-    for condition in conditions:
-        stmt = stmt.where(condition)
-    counter: Counter[str] = Counter()
-    for notifying, distribution in session.execute(stmt):
-        codes = set(distribution or ())
-        if notifying:
-            codes.add(notifying)
-        counter.update(codes)
-    return [
-        LabelCount(label=code, count=count)
-        for code, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    ]
+    # recall counts once per code even when the same code notified AND received distribution:
+    # UNION (not UNION ALL) of the per-recall (pk, code) pairs dedupes that server-side. The whole
+    # aggregation stays in SQL — this sits on the unauthenticated /facets path, so streaming every
+    # matching row into Python would hand out CPU/RAM per request on the free tier.
+    notifying = select(
+        Recall.source.label("src"),
+        Recall.recall_number.label("num"),
+        Recall.notifying_country.label("code"),
+    ).where(Recall.notifying_country.is_not(None), *conditions)
+    distribution = select(
+        Recall.source.label("src"),
+        Recall.recall_number.label("num"),
+        func.jsonb_array_elements_text(Recall.distribution_countries).label("code"),
+    ).where(func.jsonb_typeof(Recall.distribution_countries) == "array", *conditions)
+    pairs = notifying.union(distribution).subquery()
+    count = func.count()
+    stmt = select(pairs.c.code, count).group_by(pairs.c.code).order_by(count.desc(), pairs.c.code)
+    return [LabelCount(label=code, count=n) for code, n in session.execute(stmt)]
 
 
 def get_facets(

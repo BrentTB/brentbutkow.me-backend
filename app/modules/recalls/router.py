@@ -259,9 +259,10 @@ def recall_stats(
     summary="Filter facet counts",
     description=(
         "Option counts for each filterable dimension (cause, classification, severity, source, "
-        "state) under the current filters. Every count ignores its own facet's selection but "
-        "honors the rest — so the dropdowns can show how many recalls each choice would return "
-        "and grey out the dead ends. Company counts come from /recalls/companies (a type-ahead)."
+        "state, affected country) under the current filters. Every count ignores its own facet's "
+        "selection but honors the rest — so the dropdowns can show how many recalls each choice "
+        "would return and grey out the dead ends. Company counts come from /recalls/companies "
+        "(a type-ahead)."
     ),
     responses=_RATE_LIMITED,
 )
