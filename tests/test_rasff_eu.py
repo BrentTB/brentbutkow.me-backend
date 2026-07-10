@@ -190,6 +190,36 @@ def test_enrichment_pool_counts_successes_and_skips_failures(monkeypatch):
     assert records[3].enrichment_attempted is False
 
 
+def test_enrichment_finds_url_under_related_products(monkeypatch):
+    # ~4% of no-URL notifications carry their only authority link under a *related* product's
+    # measures (live-corpus audit) — the harvest must cover those, not just product.measures.
+    detail = {
+        "product": {
+            "measures": [{"actionTaken": {"description": "withdrawal from the market"}}],
+            "relatedProducts": [
+                {
+                    "measures": [
+                        {
+                            "actionTaken": {"description": "recall from consumer"},
+                            "url": "https://www.lebensmittelwarnung.de/Meldungen/2026/06_Juni",
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=detail)
+
+    _mock_httpx(monkeypatch, handler)
+    record = RasffRecord.model_validate(ALERT)
+    assert enrich_records([record]) == 1
+    assert record.enriched_url == "https://www.lebensmittelwarnung.de/Meldungen/2026/06_Juni"
+    # Actions merge across the primary and related products.
+    assert record.enriched_actions == ["withdrawal from the market", "recall from consumer"]
+
+
 def test_enrichment_failure_is_swallowed(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)

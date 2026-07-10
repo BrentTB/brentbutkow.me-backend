@@ -326,7 +326,13 @@ def _enrich_one(record: RasffRecord, client: httpx.Client) -> None:
     # Observed latency is ~1-1.5s per call (server-side); 8s already means something is wrong.
     response = client.get(_SPA_DETAIL.format(id=record.notif_id), timeout=8)
     response.raise_for_status()
-    measures = (response.json().get("product") or {}).get("measures") or []
+    product = response.json().get("product") or {}
+    # The primary product's measures, then any related products' — an audit over the live corpus
+    # found ~4% of no-URL notifications carry their only authority link under relatedProducts
+    # (everything else URL-shaped in the payload is generic country alert pages or shop listings).
+    measures = list(product.get("measures") or [])
+    for related in product.get("relatedProducts") or []:
+        measures.extend((related or {}).get("measures") or [])
     actions: list[str] = []
     recall_url: str | None = None
     first_url: str | None = None
