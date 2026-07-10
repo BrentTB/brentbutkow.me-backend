@@ -1,6 +1,17 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Computed, Date, DateTime, Float, Integer, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    Computed,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -177,6 +188,30 @@ class RecallAnalyticsBuild(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     built_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# Operator-watch state, not recall data: every NRCS statement scripts/check_nrcs.py has already
+# seen (and, past a source's first run, emailed the operator about). The NRCS publishes SA recall
+# statements only on its non-indexable SharePoint site, so the watcher polls its API and notifies;
+# a human decides what joins the curated seed list (seed_za.py). Insert-only — the unique
+# constraint is the dedupe, in at table creation per CLAUDE.md.
+class NrcsWatchItem(Base):
+    __tablename__ = "nrcs_watch_items"
+    __table_args__ = (
+        UniqueConstraint("source", "item_key", name="uq_nrcs_watch_items_source_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Which NRCS container the item came from ("news" list / "media_release" library) — item ids
+    # are only unique within a container, hence the composite uniqueness with item_key.
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    item_key: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    release_date: Mapped[date | None] = mapped_column(Date)
+    url: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

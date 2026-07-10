@@ -90,6 +90,42 @@ jobs:
             -H "X-Internal-Token: ${INTERNAL_DISPATCH_TOKEN}" \
             -H "Content-Type: application/json"
 
+  # South Africa's NRCS publishes recall statements only on its SharePoint site — no feed, and not
+  # Google-indexable, so no alert can see it. This polls the SharePoint API (News list + Media
+  # Release library) and emails the operator when a new statement appears. Notify-only: a human
+  # decides what joins the curated seed list (app/modules/recalls/seed_za.py). Independent of the
+  # ingest job — it writes only nrcs_watch_items, so it can never affect digests. The NRCS site
+  # goes down for hours at a time; the script treats that as a skipped run, not a failure.
+  nrcs-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0 # v2.0.0
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DATABASE_URL: op://Developer/Neon-Postgres/CONNECTION_STRING
+          # Required by app config at import even though this script doesn't use it.
+          INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+          RESEND_API_KEY: op://Developer/Resend/API_KEY
+          OPERATOR_EMAIL: op://Developer/Resend/OPERATOR_EMAIL
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "." -c constraints.txt
+
+      - name: Check NRCS for new statements
+        run: python -m scripts.check_nrcs
+
   # Themes + similar-recall neighbours are a whole-corpus rebuild (TF-IDF + NMF), too heavy to run in
   # the API process — so this runs scripts.build_analytics directly against the live DB on the runner,
   # after the ingests above land their new recalls. DATABASE_URL resolves to the *external* Neon

@@ -130,6 +130,7 @@ python -m scripts.ingest_fsis                # pull USDA FSIS recalls + alerts (
 python -m scripts.ingest_uk                  # pull UK FSA food alerts (via curl_cffi)
 python -m scripts.ingest_ncc                 # pull South Africa NCC recall notices (via curl_cffi)
 python -m scripts.ingest_seed                # upsert the curated SA seed recalls (Woolworths/Shoprite/NRCS)
+python -m scripts.check_nrcs                 # email the operator any new NRCS statements (notify-only, via SharePoint API)
 python -m scripts.ingest_cfia                # pull Canada CFIA food recalls (Health Canada open data)
 python -m scripts.ingest_rasff               # pull recent EU RASFF alerts (official DG SANTE data-lake API)
 python -m scripts.ingest_all                 # run all source ingests, then rebuild analytics + events + stats

@@ -49,6 +49,10 @@ on:
           - reclassify
           - build_analytics
           - build_events
+          # check_nrcs: poll the NRCS SharePoint API and email the operator any new statements —
+          # daily via ingest.yml; run here for the initial silent backlog seed or to test. Needs
+          # RESEND_API_KEY/OPERATOR_EMAIL (loaded below): without them, new items are held unseen.
+          - check_nrcs
           # build_predictions: refresh UK/ZA/EU predicted classes — also daily via ingest_all; run
           # standalone after a one-off ingest or after retraining class_predictor.joblib.
           - build_predictions
@@ -77,6 +81,9 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           DATABASE_URL: op://Developer/Neon-Postgres/CONNECTION_STRING
           INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+          # For check_nrcs (operator notification email); inert for every other script.
+          RESEND_API_KEY: op://Developer/Resend/API_KEY
+          OPERATOR_EMAIL: op://Developer/Resend/OPERATOR_EMAIL
 
       - name: Install dependencies
         # Base deps only (no dev/ml); constraints pin the ML stack to the versions the committed
