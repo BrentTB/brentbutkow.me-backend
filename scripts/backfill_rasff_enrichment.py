@@ -13,9 +13,43 @@ that carry a NOTIF_ID (stored in event_id), which the detail endpoint is keyed o
 
 import time
 
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from app.db import SessionLocal
-from app.modules.recalls.rasff_eu import RasffRecord, _status, enrich_records
+from app.modules.recalls.models import Recall
+from app.modules.recalls.rasff_eu import RASFF_WINDOW_HOST, RasffRecord, _status, enrich_records
+from app.modules.recalls.schemas import RecallSource
 from app.modules.recalls.service import rasff_recalls_needing_enrichment
+
+NAME = "RASFF national-link enrichment"
+
+
+def status(session: Session) -> tuple[bool, str]:
+    # "Never ran" is the only state this can detect reliably: after any completed pass, roughly a
+    # fifth of rows carry a national link and the rest legitimately have none at source — so
+    # rows-still-on-fallback can NOT mean "due" (it would re-run a ~25-minute network pass forever).
+    # Re-running to retry the remainder (e.g. after the harvest learns a new payload location)
+    # stays a deliberate manual run.
+    total = (
+        session.scalar(select(func.count()).where(Recall.source == RecallSource.rasff.value)) or 0
+    )
+    if not total:
+        return False, "no EU RASFF rows to enrich (history seed runs first)"
+    national = (
+        session.scalar(
+            select(func.count()).where(
+                Recall.source == RecallSource.rasff.value,
+                Recall.source_url.is_not(None),
+                ~Recall.source_url.contains(RASFF_WINDOW_HOST),
+            )
+        )
+        or 0
+    )
+    if national == 0:
+        return True, f"none of {total} EU rows carry a national-authority link — never enriched"
+    return False, f"{national}/{total} EU rows carry a national link (re-run manually to retry)"
+
 
 # Enrich in batches so a long pass commits incrementally. The SPA detail endpoint costs ~1s per
 # call regardless of outcome, so throughput comes from bounded concurrency (see enrich_records) —
@@ -55,9 +89,9 @@ def main() -> None:
                 if record.enriched_url:
                     row.source_url = record.enriched_url
                     upgraded += 1
-                status = _status(record)
-                if status:
-                    row.status = status
+                actions_taken = _status(record)
+                if actions_taken:
+                    row.status = actions_taken
             session.commit()
             done = min(start + _BATCH, len(rows))
             rate = done / (time.monotonic() - started)

@@ -5,10 +5,13 @@ from scripts import backfill_all
 from scripts.backfill_all import (
     backfill_entities,
     backfill_fda,
+    backfill_rasff_enrichment,
     backfill_severity,
     build_analytics,
     build_events,
+    build_predictions,
     build_stats,
+    seed_rasff,
 )
 
 
@@ -34,6 +37,28 @@ def test_resolve_plan_fda_triggers_whole_corpus_rebuilds_only():
     assert needed[build_analytics] and needed[build_events] and needed[build_stats]
     assert not needed[backfill_entities] and not needed[backfill_severity]
     assert reason[build_analytics] == "triggered by openFDA history seed"
+
+
+def test_resolve_plan_rasff_seed_triggers_enrichment_predictions_and_rebuilds():
+    # At plan time there are zero RASFF rows, so the enrichment's own status reports clean — the
+    # trigger edge is what drags it in behind the seed. EU rows also need predicted classes.
+    needed, reason = backfill_all.resolve_plan(_status(seed_rasff), force_all=False)
+
+    assert needed[seed_rasff]
+    assert needed[backfill_rasff_enrichment]
+    assert needed[build_analytics] and needed[build_events]
+    assert needed[build_predictions] and needed[build_stats]
+    # In-place US-corpus backfills stay skipped: seeded rows self-populate at ingest.
+    assert not needed[backfill_fda] and not needed[backfill_entities]
+    assert reason[backfill_rasff_enrichment] == "triggered by EU RASFF history seed"
+
+
+def test_resolve_plan_rasff_enrichment_triggers_nothing():
+    # Enrichment writes source_url/status, which no aggregation reads — it must not drag in the
+    # whole-corpus rebuilds on its own.
+    needed, _ = backfill_all.resolve_plan(_status(backfill_rasff_enrichment), force_all=False)
+    assert needed[backfill_rasff_enrichment]
+    assert sum(needed.values()) == 1
 
 
 def test_resolve_plan_entities_cascades_through_severity_to_stats():
