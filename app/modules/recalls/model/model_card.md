@@ -13,10 +13,10 @@ is the model's predicted probability for the chosen class.
 
 **Training data:** 55807 openFDA food-enforcement recalls.
 
-**Held-out accuracy vs weak labels:** 0.979 — how faithfully it reproduces the labeler on
+**Held-out accuracy vs weak labels:** 0.977 — how faithfully it reproduces the labeler on
 a 20% test split.
 
-**Generalization:** 46 of 12836 recalls the weak labeler left as `other` were
+**Generalization:** 69 of 11746 recalls the weak labeler left as `other` were
 reclassified into a concrete category with confidence ≥ 0.6 — signal the labeler
 missed.
 
