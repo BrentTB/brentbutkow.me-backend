@@ -14,26 +14,38 @@ _BATCH = 1000
 _PROBE_SAMPLE = 500
 
 
+def _rescore(recall: Recall) -> tuple[float, str]:
+    # Mirror EXACTLY the inputs the score was last written with, or the recompute disagrees with the
+    # stored value on rows nothing actually changed. build_predictions re-scores UK/ZA/EU severity
+    # WITH the predicted class (a predicted Class I lifts the score), so this must pass the stored
+    # predicted_class too — omitting it recomputes the base score, sees every lifted row as stale,
+    # and reverts the lift build_predictions applied (churning severity + stats every run). For
+    # US/CA predicted_class is None, so this is a no-op there.
+    return score_severity(
+        classification=recall.classification,
+        category=recall.category,
+        entities=recall.entities,
+        states=recall.states,
+        distribution_pattern=recall.distribution_pattern,
+        reason_text=recall.reason_text,
+        predicted_class=recall.predicted_class,
+        predicted_class_confidence=recall.predicted_class_confidence,
+    )
+
+
 def status(session: Session) -> tuple[bool, str]:
-    # Severity is derived from classification + category + entities + states + distribution_pattern,
-    # so it goes stale when any of those change under it (e.g. an entities backfill adds the
-    # deadliest-pathogen bonus). A score==0 check only catches never-scored rows, so instead probe:
-    # re-score a sample and compare to what's stored. Real scores are never 0, so this still flags
-    # rows left at the migration default. (Re-scoring is read-only here.)
+    # Severity is derived from classification + category + entities + states + distribution_pattern
+    # (+ the predicted class for UK/ZA/EU), so it goes stale when any of those change under it (e.g.
+    # an entities backfill adds the deadliest-pathogen bonus). A score==0 check only catches
+    # never-scored rows, so instead probe: re-score a sample and compare to what's stored. Real
+    # scores are never 0, so this still flags rows left at the migration default. (Read-only here.)
     # Newest first so the probe is deterministic and weighted to recently-ingested rows.
     sample = session.scalars(
         select(Recall).order_by(Recall.report_date.desc()).limit(_PROBE_SAMPLE)
     ).all()
     stale = 0
     for recall in sample:
-        score, label = score_severity(
-            classification=recall.classification,
-            category=recall.category,
-            entities=recall.entities,
-            states=recall.states,
-            distribution_pattern=recall.distribution_pattern,
-            reason_text=recall.reason_text,
-        )
+        score, label = _rescore(recall)
         if label != recall.severity_label or abs(score - recall.severity_score) > 0.05:
             stale += 1
     if stale:
@@ -42,16 +54,7 @@ def status(session: Session) -> tuple[bool, str]:
 
 
 def _backfill(recall: Recall) -> None:
-    score, label = score_severity(
-        classification=recall.classification,
-        category=recall.category,
-        entities=recall.entities,
-        states=recall.states,
-        distribution_pattern=recall.distribution_pattern,
-        reason_text=recall.reason_text,
-    )
-    recall.severity_score = score
-    recall.severity_label = label
+    recall.severity_score, recall.severity_label = _rescore(recall)
 
 
 # One-time (re-runnable) pass: compute severity_score + severity_label for every stored recall from

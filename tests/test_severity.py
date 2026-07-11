@@ -25,6 +25,45 @@ def test_predicted_class_i_lifts_uk_severity_scaled_by_confidence():
     assert unpredicted < hesitant < confident
 
 
+def test_backfill_severity_rescore_preserves_the_predicted_class_lift():
+    # Regression: backfill_severity re-scored WITHOUT the stored predicted_class, so every UK/ZA/EU
+    # row build_predictions had lifted looked "stale", got reverted to the base score, and triggered
+    # a needless severity + stats pass on every backfill_all run. _rescore must reproduce the lifted
+    # score build_predictions wrote, so a predicted row reads as current.
+    from app.modules.recalls.models import Recall
+    from scripts import backfill_severity
+
+    # A UK-style row (no native class) with a confident predicted Class I — what build_predictions
+    # stores: severity computed WITH the prediction.
+    row = Recall(
+        classification=None,
+        category=RecallCategory.allergen.value,
+        entities=[],
+        states=None,
+        distribution_pattern=None,
+        reason_text="Undeclared milk",
+        predicted_class=RecallClass.class_i.value,
+        predicted_class_confidence=0.95,
+    )
+    lifted = score_severity(
+        classification=None,
+        category=RecallCategory.allergen.value,
+        entities=[],
+        reason_text="Undeclared milk",
+        predicted_class=RecallClass.class_i.value,
+        predicted_class_confidence=0.95,
+    )
+    base = score_severity(
+        classification=None,
+        category=RecallCategory.allergen.value,
+        entities=[],
+        reason_text="Undeclared milk",
+    )
+    # The fix reproduces the stored (lifted) score, not the base — proving it won't flag/revert.
+    assert backfill_severity._rescore(row) == lifted
+    assert backfill_severity._rescore(row) != base
+
+
 def test_predicted_not_class_i_does_not_change_severity():
     # Only a positive (Class I) prediction nudges; "not Class I" leaves the score at its anchor.
     base_kwargs = dict(
