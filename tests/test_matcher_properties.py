@@ -385,3 +385,40 @@ def test_affected_countries_only_constrains_eu_recalls():
     assert recall_matches(us_recall, sub) is True  # US unaffected by the EU narrowing
     assert recall_matches(_eu_recall("FR", ["ES"]), sub) is False  # EU still narrowed to DE
     assert recall_matches(_eu_recall("DE", None), sub) is True
+
+
+# ---------------------------------------------------------------------------
+# Company filter is skipped for company-less recalls (EU / Canada carry no operator)
+# ---------------------------------------------------------------------------
+
+
+def test_company_filter_does_not_drop_company_less_recalls():
+    # EU (RASFF) and CA (CFIA) recalls have company_name = None. A subscriber to those countries who
+    # also sets a company filter must still receive them — the filter can't apply, so it passes.
+    sub = _FakeSub(
+        entities=[],
+        companies=["acme foods"],
+        countries=["us", "eu", "ca"],
+        categories=[],
+        min_severity=None,
+        last_digest_at=None,
+        confirmed_at=None,
+    )
+
+    def recall(country: str, company: str | None) -> _FakeRecall:
+        return _FakeRecall(
+            entities=[],
+            company_name=company,
+            country=country,
+            category="pathogen",
+            severity_label="high",
+            report_date=None,
+            recall_initiation_date=None,
+        )
+
+    # Company-less EU and CA recalls pass the company filter (nothing to match against).
+    assert recall_matches(recall("eu", None), sub) is True
+    assert recall_matches(recall("ca", None), sub) is True
+    # A recall that DOES carry a company is still filtered normally.
+    assert recall_matches(recall("us", "Acme Foods Inc"), sub) is True
+    assert recall_matches(recall("us", "Other Brand"), sub) is False

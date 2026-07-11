@@ -18,9 +18,14 @@ def recall_matches(recall: Recall, sub: Subscription) -> bool:
         if not recall_entity_values.intersection(sub_entities_lower):
             return False
 
-    # (b) Company substring — match if the recall's company contains any of the subscribed names
-    if sub.companies:
-        recall_company = (recall.company_name or "").lower()
+    # (b) Company substring — match if the recall's company contains any of the subscribed names.
+    # Only constrains recalls that HAVE a company: EU (RASFF) and Canada (CFIA) carry no operator
+    # name, so a company filter must not silently drop every recall from those countries — a
+    # us+eu subscriber who adds a UK company still wants their EU recalls. A company filter simply
+    # can't apply to a company-less recall, so it passes (like state/affectedCountry only binding
+    # the countries they're meaningful for).
+    if sub.companies and recall.company_name:
+        recall_company = recall.company_name.lower()
         if not any(c.lower() in recall_company for c in sub.companies):
             return False
 
