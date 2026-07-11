@@ -546,6 +546,27 @@ def _recall_card(recall) -> str:
         company = _html_escape(recall.company_name)
         company_row = f'<span style="color:#555555;font-size:13px;">Company: {company}</span><br>'
 
+    # The recall reason is the "why" a subscriber most wants at a glance. Feed text can be long, so
+    # trim to a sentence's worth to keep cards scannable; truncate the raw string first, then
+    # escape, so we never slice through an HTML entity.
+    reason_row = ""
+    reason = (recall.reason_text or "").strip()
+    if reason:
+        if len(reason) > 160:
+            reason = reason[:159].rstrip() + "…"
+        reason_row = (
+            '<p style="margin:6px 0 0 0;color:#555555;font-size:13px;line-height:1.5;">'
+            f"{_html_escape(reason)}</p>"
+        )
+
+    # report_date is absent on some feeds; when present it rides on the meta line as one more dotted
+    # field. Build the day without strftime's zero-padding so it reads "Jul 3, 2026" like the site.
+    date_part = ""
+    if recall.report_date is not None:
+        d = recall.report_date
+        reported = _html_escape(f"{d:%b} {d.day}, {d.year}")
+        date_part = f"\n          &nbsp;&middot;&nbsp;\n          Reported: {reported}"
+
     product_description = _html_escape(recall.product_description)
     country = _html_escape(recall.country)
     category = _html_escape(recall.category)
@@ -557,12 +578,13 @@ def _recall_card(recall) -> str:
           {product_description}
         </p>
         {company_row}
+        {reason_row}
         <span style="color:#555555;font-size:13px;">
           Country: {country}
           &nbsp;&middot;&nbsp;
           Category: {category}
           &nbsp;&middot;&nbsp;
-          Severity: {severity_label}
+          Severity: {severity_label}{date_part}
         </span>
         <br>
         <a href="{detail_url}"

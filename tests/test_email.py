@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +13,8 @@ def _recall(**overrides) -> SimpleNamespace:
         "source": "fda",
         "recall_number": "F-001",
         "product_description": "Plain product",
+        "reason_text": "Undeclared peanuts",
+        "report_date": date(2026, 7, 3),
         "company_name": None,
         "country": "us",
         "category": "allergen",
@@ -33,6 +35,38 @@ def test_recall_card_escapes_dynamic_fields():
     assert "<script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; peanuts" in html
     assert "A &amp; B &lt;b&gt;" in html
+
+
+def test_recall_card_includes_reason_and_date():
+    recall = _recall(
+        reason_text="May contain undeclared milk and soy.",
+        report_date=date(2026, 7, 3),
+    )
+    html = email_module._recall_card(recall)
+
+    assert "May contain undeclared milk and soy." in html
+    # Day is not zero-padded, matching the site's date style.
+    assert "Reported: Jul 3, 2026" in html
+
+
+def test_recall_card_truncates_long_reason_and_escapes_it():
+    # A long reason is trimmed to a sentence's worth with an ellipsis; the trim happens before
+    # escaping so an entity is never split, and injected markup is still neutralised.
+    long_reason = "<b>peanuts</b> " + "x" * 300
+    recall = _recall(reason_text=long_reason)
+    html = email_module._recall_card(recall)
+
+    assert "<b>peanuts</b>" not in html
+    assert "&lt;b&gt;peanuts&lt;/b&gt;" in html
+    assert "…" in html
+    assert "x" * 300 not in html
+
+
+def test_recall_card_omits_date_row_when_absent():
+    recall = _recall(report_date=None)
+    html = email_module._recall_card(recall)
+
+    assert "Reported:" not in html
 
 
 def test_digest_html_escapes_recall_and_skipped_dates():
