@@ -96,6 +96,7 @@ class _FakeSub:
         entities: list | None = None,
         companies: list | None = None,
         countries: list | None = None,
+        affected_countries: list | None = None,
         categories: list | None = None,
         min_severity: str | None = None,
         management_token: str | None = None,
@@ -109,6 +110,7 @@ class _FakeSub:
         self.entities = entities if entities is not None else []
         self.companies = companies if companies is not None else []
         self.countries = countries if countries is not None else ["us"]
+        self.affected_countries = affected_countries if affected_countries is not None else []
         self.categories = categories if categories is not None else []
         self.min_severity = min_severity
         self.management_token = management_token or str(uuid.uuid4())
@@ -128,6 +130,7 @@ def make_subscription(
     entities: list | None = None,
     companies: list | None = None,
     countries: list | None = None,
+    affected_countries: list | None = None,
     categories: list | None = None,
     min_severity: str | None = None,
     management_token: str | None = None,
@@ -141,6 +144,7 @@ def make_subscription(
         entities=entities,
         companies=companies,
         countries=countries,
+        affected_countries=affected_countries,
         categories=categories,
         min_severity=min_severity,
         management_token=management_token,

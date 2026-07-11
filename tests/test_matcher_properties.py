@@ -33,6 +33,9 @@ class _FakeRecall:
     severity_label: str
     report_date: date | None
     recall_initiation_date: date | None
+    # EU geography — read only by the member-state narrowing criterion (default absent).
+    notifying_country: str | None = None
+    distribution_countries: list[str] | None = None
 
 
 @dataclass
@@ -46,6 +49,9 @@ class _FakeSub:
     min_severity: str | None
     last_digest_at: datetime | None
     confirmed_at: datetime | None
+    # EU member-state narrowing — default empty so the existing property runs exercise the
+    # "no constraint" path (the criterion is skipped), unchanged.
+    affected_countries: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +304,84 @@ def test_property_10_case_insensitive_entity_match(entity_value, country, catego
         f"Entity match must be case-insensitive: recall has '{entity_value.upper()}', "
         f"sub has '{entity_value.lower()}'"
     )
+
+
+# ---------------------------------------------------------------------------
+# EU member-state narrowing (affected_countries) — example-based, an EU-only refinement
+# ---------------------------------------------------------------------------
+
+
+def _eu_recall(notifying: str | None, distribution: list[str] | None) -> _FakeRecall:
+    return _FakeRecall(
+        entities=[],
+        company_name=None,
+        country="eu",
+        category="pathogen",
+        severity_label="high",
+        report_date=None,
+        recall_initiation_date=None,
+        notifying_country=notifying,
+        distribution_countries=distribution,
+    )
+
+
+def _eu_sub(affected: list[str] | None) -> _FakeSub:
+    return _FakeSub(
+        entities=[],
+        companies=[],
+        countries=["eu"],
+        categories=[],
+        min_severity=None,
+        last_digest_at=None,
+        confirmed_at=None,
+        affected_countries=affected,
+    )
+
+
+def test_affected_countries_empty_matches_every_eu_recall():
+    # Empty narrowing = the current behaviour: every EU recall passes.
+    recall = _eu_recall(notifying="FR", distribution=["ES"])
+    assert recall_matches(recall, _eu_sub(None)) is True
+    assert recall_matches(recall, _eu_sub([])) is True
+
+
+def test_affected_countries_matches_via_notifying_or_distribution():
+    de_sub = _eu_sub(["DE"])
+    # Notifying country counts...
+    assert recall_matches(_eu_recall("DE", None), de_sub) is True
+    # ...and so does distribution membership...
+    assert recall_matches(_eu_recall("FR", ["BE", "DE"]), de_sub) is True
+    # ...but a recall touching neither is filtered out.
+    assert recall_matches(_eu_recall("FR", ["BE", "ES"]), de_sub) is False
+
+
+def test_affected_countries_is_case_insensitive():
+    # Stored codes are uppercase; a lowercase subscription value must still match.
+    assert recall_matches(_eu_recall("de", ["be"]), _eu_sub(["DE"])) is True
+
+
+def test_affected_countries_only_constrains_eu_recalls():
+    # A mixed us+eu subscription narrowed to DE: US recalls still pass (the narrowing is EU-only),
+    # while EU recalls not touching DE are filtered.
+    sub = _FakeSub(
+        entities=[],
+        companies=[],
+        countries=["us", "eu"],
+        categories=[],
+        min_severity=None,
+        last_digest_at=None,
+        confirmed_at=None,
+        affected_countries=["DE"],
+    )
+    us_recall = _FakeRecall(
+        entities=[],
+        company_name="Acme",
+        country="us",
+        category="pathogen",
+        severity_label="high",
+        report_date=None,
+        recall_initiation_date=None,
+    )
+    assert recall_matches(us_recall, sub) is True  # US unaffected by the EU narrowing
+    assert recall_matches(_eu_recall("FR", ["ES"]), sub) is False  # EU still narrowed to DE
+    assert recall_matches(_eu_recall("DE", None), sub) is True

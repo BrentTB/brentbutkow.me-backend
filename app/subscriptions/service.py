@@ -47,6 +47,10 @@ def _normalise_criteria(data: SubscriptionCreate) -> dict:
         "entities": sorted(e.lower() for e in (data.entities or []) if e and e.strip()),
         "companies": sorted(c.lower() for c in (data.companies or []) if c and c.strip()),
         "countries": sorted(c.lower() for c in (data.countries or [])),
+        # ISO codes are canonically uppercase (matching the recall geography columns); dedupe+sort.
+        "affected_countries": sorted(
+            {c.upper() for c in (data.affected_countries or []) if c and c.strip()}
+        ),
         "categories": sorted(c.lower() for c in (data.categories or []) if c and c.strip()),
         "min_severity": (data.min_severity or "").lower() or None,
     }
@@ -75,6 +79,9 @@ def _apply_criteria(row: Subscription, norm: dict) -> None:
     row.entities = norm["entities"]
     row.companies = norm["companies"]
     row.countries = norm["countries"]
+    # .get default: a pending_update staged before this column existed won't carry the key, and
+    # confirm() replays that stored dict through here — an absent key must default, not 500.
+    row.affected_countries = norm.get("affected_countries", [])
     row.categories = norm["categories"]
     row.min_severity = norm["min_severity"]
     row.updated_at = datetime.now(UTC)
@@ -158,6 +165,7 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
         entities=norm["entities"],
         companies=norm["companies"],
         countries=norm["countries"],
+        affected_countries=norm["affected_countries"],
         categories=norm["categories"],
         min_severity=norm["min_severity"],
         confirmation_token_hash=token_hash,

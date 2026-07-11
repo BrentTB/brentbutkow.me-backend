@@ -29,6 +29,18 @@ def recall_matches(recall: Recall, sub: Subscription) -> bool:
         if recall.country not in sub.countries:
             return False
 
+    # (c2) EU member-state narrowing — an EU-only refinement, so it constrains *only* EU recalls
+    # (a mixed us+eu subscription still gets every US recall). A recall "affects" a chosen country
+    # when that country raised the alert or received distribution — the same notifying ∪
+    # distribution union the dashboard's affectedCountry filter uses. Empty = every EU recall.
+    if sub.affected_countries and recall.country == "eu":
+        chosen = {c.upper() for c in sub.affected_countries}
+        affected = {c.upper() for c in (recall.distribution_countries or [])}
+        if recall.notifying_country:
+            affected.add(recall.notifying_country.upper())
+        if not affected.intersection(chosen):
+            return False
+
     # (d) Category membership
     if sub.categories:
         if recall.category not in sub.categories:

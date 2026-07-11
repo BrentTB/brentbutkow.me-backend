@@ -46,6 +46,10 @@ class Subscription(Base):
     entities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     companies: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     countries: Mapped[list] = mapped_column(JSONB, nullable=False)
+    # EU-scoped narrowing (ISO alpha-2 member-state codes). Empty = every EU recall, so an existing
+    # EU subscriber is unaffected. Only constrains recalls where country == 'eu' (see matcher); it
+    # never touches US/UK/ZA/CA recalls in a mixed-country subscription.
+    affected_countries: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     categories: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     min_severity: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmation_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)

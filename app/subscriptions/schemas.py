@@ -16,10 +16,18 @@ CountriesField = Annotated[
     Field(min_length=1, description=f"At least one of: {', '.join(sorted(_VALID_COUNTRIES))}"),
 ]
 
+# EU-scoped narrowing: ISO 3166-1 alpha-2 member-state codes (e.g. DE). Empty = every EU recall.
+# Only applies to a subscription that also includes the "eu" country; ignored otherwise.
+AffectedCountriesField = Annotated[
+    list[Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")]],
+    Field(max_length=50, description="ISO alpha-2 EU member-state codes (empty = all)."),
+]
+
 
 class SubscriptionCreate(CamelModel):
     email: EmailStr
     countries: CountriesField
+    affected_countries: AffectedCountriesField = []
     entities: list[Annotated[str, Field(max_length=100)]] = Field(default=[], max_length=50)
     companies: list[Annotated[str, Field(max_length=200)]] = Field(default=[], max_length=50)
     categories: list[str] = []
@@ -57,6 +65,7 @@ class SubscriptionOut(CamelModel):
     email: str
     status: str
     countries: list[str]
+    affected_countries: list[str]
     entities: list[str]
     companies: list[str]
     categories: list[str]
@@ -65,6 +74,7 @@ class SubscriptionOut(CamelModel):
 
 class SubscriptionPatch(CamelModel):
     countries: CountriesField | None = None
+    affected_countries: AffectedCountriesField | None = None
     entities: list[Annotated[str, Field(max_length=100)]] | None = None
     companies: list[Annotated[str, Field(max_length=200)]] | None = None
     categories: list[str] | None = None
