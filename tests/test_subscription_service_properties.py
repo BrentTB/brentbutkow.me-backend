@@ -649,6 +649,21 @@ def test_mask_email_examples():
     assert service._mask_email("x@localhost") == "x***@l***"
 
 
+def test_patch_manage_normalises_stored_criteria():
+    # A PATCH stores criteria in the same canonical shape create() produces — ISO codes uppercased,
+    # names lowercased and sorted — so a patched row can't drift from a freshly created one.
+    mgmt_token = str(uuid.uuid4())
+    sub = make_subscription(status="active", countries=["us"], management_token=mgmt_token)
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    patch = SubscriptionPatch(affected_countries=["fr", "de"], entities=["Zebra", "Apple"])
+    status_code, _ = service.patch_manage(mgmt_token, patch, mock_db)
+
+    assert status_code == 200
+    assert sub.affected_countries == ["DE", "FR"]  # uppercased + sorted, matching create()
+    assert sub.entities == ["apple", "zebra"]  # lowercased + sorted
+
+
 # ---------------------------------------------------------------------------
 # Partial update leaves unspecified fields unchanged
 # ---------------------------------------------------------------------------

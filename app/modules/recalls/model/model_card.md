@@ -9,7 +9,9 @@ typed entity gazetteer sets the category when a pathogen, physical hazard, or al
 (pathogen wins ties, so an incidental ingredient word can't outrank the actual cause), falling back
 to the v1 keyword baseline otherwise. There is **no human ground-truth set**, so the model learns to
 *generalize* this taxonomy rather than beat an independent gold standard, and `category_confidence`
-is the model's predicted probability for the chosen class.
+is the model's predicted probability for the chosen class — except for rows the gazetteer rescues
+from `other` (a named entity outvoting the model's low-confidence `other`), which carry confidence
+1.0 rather than a model probability.
 
 **Training data:** 55807 openFDA food-enforcement recalls.
 

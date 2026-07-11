@@ -488,7 +488,7 @@ def recall_similar(
         description="The recall's identifier within its source (a number, or an NCC slug for ZA).",
     ),
     session: Session = Depends(get_session),
-    limit: int = Query(default=6, ge=1, le=20, description="Max similar recalls to return (1–20)."),
+    limit: int = Query(default=6, ge=1, le=6, description="Max similar recalls to return (1–6)."),
 ) -> list[SimilarRecall]:
     response.headers["Cache-Control"] = "public, max-age=300"
     return get_similar(session, source.value, recall_number, limit)

@@ -35,7 +35,7 @@ def generate_management_token() -> str:
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
 
 
-def _normalise_criteria(data: SubscriptionCreate) -> dict:
+def _normalise_criteria(data: SubscriptionCreate | SubscriptionPatch) -> dict:
     """Returns a dict of normalised filter fields for comparison.
 
     Normalisation rules:
@@ -332,8 +332,12 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
     # (the schema rejects an empty list); the other filters may all be cleared, which simply means
     # "every recall in the selected countries".
     patch_data = patch.model_dump(exclude_unset=True)
-    for field, value in patch_data.items():
-        setattr(row, field, value)
+    # Normalise exactly as create() does (lowercase/dedupe/sort, ISO codes uppercased) so a patched
+    # row stores criteria in the same canonical shape as a freshly created one, then apply only the
+    # fields the caller actually set.
+    normalised = _normalise_criteria(patch)
+    for field in patch_data:
+        setattr(row, field, normalised.get(field, patch_data[field]))
     row.updated_at = datetime.now(UTC)
     db.commit()
     body = SubscriptionOut.model_validate(row).model_dump(by_alias=True)
