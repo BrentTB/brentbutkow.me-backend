@@ -11,8 +11,11 @@ def _reclassify(recall: Recall) -> None:
     recall.category = category.value
     recall.category_confidence = confidence
     recall.entities = entities
-    # Severity depends on classification + category + entities + geography, so re-derive it with the
-    # freshly computed category/entities to keep the row consistent.
+    # Severity depends on classification + category + entities + geography (+ the predicted class
+    # for UK/ZA/EU), so re-derive it with the freshly computed category/entities to keep the row
+    # consistent. Pass the stored predicted_class so a UK/ZA/EU row keeps the prediction lift
+    # build_predictions applied — omitting it reverts to the base score (predicted_class is None for
+    # US/CA, so it's a no-op there).
     recall.severity_score, recall.severity_label = score_severity(
         classification=recall.classification,
         category=category.value,
@@ -20,6 +23,8 @@ def _reclassify(recall: Recall) -> None:
         states=recall.states,
         distribution_pattern=recall.distribution_pattern,
         reason_text=recall.reason_text,
+        predicted_class=recall.predicted_class,
+        predicted_class_confidence=recall.predicted_class_confidence,
     )
 
 
