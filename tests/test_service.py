@@ -376,6 +376,59 @@ def test_list_recalls_substring_search_matches_fragments_tsvector_misses(session
     assert {i.recall_number for i in pct.items} == {"F-3"}
 
 
+def test_list_recalls_search_skips_substring_scan_when_fts_matches_enough(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            # Five records carrying "8824" as a standalone token — the indexed tsvector matches
+            # them all, so the probe clears the fallback threshold and the substring pass is
+            # skipped...
+            _record("F-1", product_description="spinach lot 8824"),
+            _record("F-2", product_description="kale lot 8824"),
+            _record("F-3", product_description="arugula lot 8824"),
+            _record("F-4", product_description="chard lot 8824"),
+            _record("F-5", product_description="lettuce lot 8824"),
+            # ...so this substring-only match (the digits sit inside a longer UPC token that
+            # tsvector keeps whole) must NOT come back. The old always-OR search included it.
+            _record("F-6", product_description="peanut butter UPC 882479852232"),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    fts_only = service.list_recalls(session, limit=50, offset=0, search="8824")
+    assert {i.recall_number for i in fts_only.items} == {"F-1", "F-2", "F-3", "F-4", "F-5"}
+    assert fts_only.total == 5
+
+    # The facet counts make the same probe, so they describe the same 5-row set as the list.
+    facets = service.get_facets(session, search="8824")
+    assert {c.label: c.count for c in facets.source} == {"fda": 5}
+
+    # A term full-text can't match at all (probe finds 0) still gets the substring rescue in the
+    # very same corpus — fragment searches keep working after the fast path is preferred.
+    fragment = service.list_recalls(session, limit=50, offset=0, search="88247")
+    assert {i.recall_number for i in fragment.items} == {"F-6"}
+
+
+def test_list_recalls_search_adds_substring_when_fts_matches_are_sparse(session, monkeypatch):
+    _patch_fetch(
+        monkeypatch,
+        [
+            # Four tokenized matches — one short of the fallback threshold — so the substring pass
+            # is OR-ed in: it must ADD the fragment row to the full-text rows, not replace them.
+            _record("F-1", product_description="salsa batch 5150"),
+            _record("F-2", product_description="queso batch 5150"),
+            _record("F-3", product_description="guacamole batch 5150"),
+            _record("F-4", product_description="tortilla batch 5150"),
+            _record("F-5", product_description="hot sauce UPC 515099999999"),
+        ],
+    )
+    service.run_fda_ingest(session)
+
+    both = service.list_recalls(session, limit=50, offset=0, search="5150")
+    assert {i.recall_number for i in both.items} == {"F-1", "F-2", "F-3", "F-4", "F-5"}
+    assert both.total == 5
+
+
 def test_get_stats_aggregates_by_category_and_month(session, monkeypatch):
     _patch_fetch(
         monkeypatch,
