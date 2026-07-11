@@ -44,6 +44,32 @@ def test_eu_scientific_contaminants():
     }
 
 
+def test_more_eu_contaminants_and_pathogens():
+    # Process contaminants, illegal dyes, vet-drug residues, metals, and pathogens seen in EU RASFF.
+    assert _values("3-MCPD and glycidyl esters in corn snack", "contaminant") == {
+        "process contaminant"
+    }
+    assert _values("Elevated benzo(a)pyrene in smoked sausage", "contaminant") == {
+        "process contaminant"
+    }
+    assert _values("Unauthorized food color Sudan I in sauces", "contaminant") == {"illegal dye"}
+    assert _values("Dexamethasone above the MRL in beef", "contaminant") == {
+        "veterinary drug residue"
+    }
+    assert _values("Nickel in asparagus from Spain", "contaminant") == {"nickel"}
+    assert _values("Formetanate in nectarines", "contaminant") == {"pesticide"}
+    assert _values("Vibrio parahaemolyticus in live mussels", "pathogen") == {"Vibrio"}
+    assert _values("Bacillus cereus in dried mushrooms", "pathogen") == {"Bacillus cereus"}
+    assert _values("Anisakis in wild smoked salmon", "pathogen") == {"Anisakis"}
+
+
+def test_sudan_dye_does_not_match_the_country():
+    # "Sudan I" is a dye; "from Sudan" (the country) must not trigger the illegal-dye entity.
+    values = _values("Aflatoxin in peanuts from Sudan")
+    assert "illegal dye" not in values
+    assert "aflatoxin" in values
+
+
 def test_mycotoxin_plurals_and_spellings_match():
     # Word-boundary matching used to miss the plural / non-English spellings, so an incidental food
     # word decided the category. The mycotoxin must win as the contaminant.

@@ -23,6 +23,16 @@ def test_flags_mislabeling():
     )
 
 
+def test_flags_eu_labelling_and_species_defects():
+    # EU RASFF labelling / date-mark / species-substitution notices → mislabeling.
+    assert categorize("Non compliant labelling of table salt") == RecallCategory.mislabeling
+    assert (
+        categorize("Error regarding the use-by date on poultry sausages")
+        == RecallCategory.mislabeling
+    )
+    assert categorize("Pork DNA in beef trimming from Latvia") == RecallCategory.mislabeling
+
+
 def test_falls_back_to_other():
     assert categorize("Product quality defect of unknown origin.") == RecallCategory.other
 
