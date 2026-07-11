@@ -83,6 +83,7 @@ class SubscriptionAdminOut(CamelModel):
     email: str
     status: str
     countries: list[str]
+    affected_countries: list[str]
     entities: list[str]
     companies: list[str]
     categories: list[str]

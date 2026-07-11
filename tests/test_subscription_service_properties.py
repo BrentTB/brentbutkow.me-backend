@@ -96,6 +96,7 @@ class _FakeSub:
         entities: list | None = None,
         companies: list | None = None,
         countries: list | None = None,
+        affected_countries: list | None = None,
         categories: list | None = None,
         min_severity: str | None = None,
         management_token: str | None = None,
@@ -109,6 +110,7 @@ class _FakeSub:
         self.entities = entities if entities is not None else []
         self.companies = companies if companies is not None else []
         self.countries = countries if countries is not None else ["us"]
+        self.affected_countries = affected_countries if affected_countries is not None else []
         self.categories = categories if categories is not None else []
         self.min_severity = min_severity
         self.management_token = management_token or str(uuid.uuid4())
@@ -128,6 +130,7 @@ def make_subscription(
     entities: list | None = None,
     companies: list | None = None,
     countries: list | None = None,
+    affected_countries: list | None = None,
     categories: list | None = None,
     min_severity: str | None = None,
     management_token: str | None = None,
@@ -141,6 +144,7 @@ def make_subscription(
         entities=entities,
         companies=companies,
         countries=countries,
+        affected_countries=affected_countries,
         categories=categories,
         min_severity=min_severity,
         management_token=management_token,
@@ -274,6 +278,29 @@ def test_resubscribe_pending_updates_and_resends_optin():
     assert existing.entities == ["peanut"]
     assert existing.pending_update is None
     optin.assert_called_once()
+    update_confirm.assert_not_called()
+
+
+def test_resubscribe_paused_is_inert_and_never_500s():
+    # An operator paused this subscription. A public resubscribe must NOT insert a second row
+    # (which would hit the unique lower(email) index → IntegrityError → 500, the reported bug),
+    # must NOT reactivate it or change its criteria, and must send no email — the pause holds.
+    existing = make_subscription(email="a@b.com", status="paused", entities=["milk"])
+    mock_db, added = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with (
+        patch("app.subscriptions.service._try_send_optin") as optin,
+        patch("app.subscriptions.service._try_send_update_confirm") as update_confirm,
+    ):
+        status_code, _ = service.create(data, mock_db)
+
+    assert status_code == 200  # uniform response — doesn't reveal the address's state
+    assert added == []  # no second row inserted (no IntegrityError path)
+    assert existing.status == "paused"  # admin's pause untouched
+    assert existing.entities == ["milk"]  # criteria unchanged
+    assert existing.pending_update is None  # nothing staged
+    optin.assert_not_called()
     update_confirm.assert_not_called()
 
 
@@ -620,6 +647,21 @@ def test_mask_email_examples():
     assert service._mask_email("a@b.co") == "a***@b***.co"
     # No dot in the domain — mask the whole domain, no TLD to keep.
     assert service._mask_email("x@localhost") == "x***@l***"
+
+
+def test_patch_manage_normalises_stored_criteria():
+    # A PATCH stores criteria in the same canonical shape create() produces — ISO codes uppercased,
+    # names lowercased and sorted — so a patched row can't drift from a freshly created one.
+    mgmt_token = str(uuid.uuid4())
+    sub = make_subscription(status="active", countries=["us"], management_token=mgmt_token)
+    mock_db, _ = make_mock_db(existing_rows=[sub])
+
+    patch = SubscriptionPatch(affected_countries=["fr", "de"], entities=["Zebra", "Apple"])
+    status_code, _ = service.patch_manage(mgmt_token, patch, mock_db)
+
+    assert status_code == 200
+    assert sub.affected_countries == ["DE", "FR"]  # uppercased + sorted, matching create()
+    assert sub.entities == ["apple", "zebra"]  # lowercased + sorted
 
 
 # ---------------------------------------------------------------------------

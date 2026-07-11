@@ -203,6 +203,7 @@ def _subscription_row(**overrides) -> SimpleNamespace:
         email="a@b.com",
         status="paused",
         countries=["us"],
+        affected_countries=[],
         entities=[],
         companies=[],
         categories=[],

@@ -35,7 +35,7 @@ def generate_management_token() -> str:
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
 
 
-def _normalise_criteria(data: SubscriptionCreate) -> dict:
+def _normalise_criteria(data: SubscriptionCreate | SubscriptionPatch) -> dict:
     """Returns a dict of normalised filter fields for comparison.
 
     Normalisation rules:
@@ -47,6 +47,10 @@ def _normalise_criteria(data: SubscriptionCreate) -> dict:
         "entities": sorted(e.lower() for e in (data.entities or []) if e and e.strip()),
         "companies": sorted(c.lower() for c in (data.companies or []) if c and c.strip()),
         "countries": sorted(c.lower() for c in (data.countries or [])),
+        # ISO codes are canonically uppercase (matching the recall geography columns); dedupe+sort.
+        "affected_countries": sorted(
+            {c.upper() for c in (data.affected_countries or []) if c and c.strip()}
+        ),
         "categories": sorted(c.lower() for c in (data.categories or []) if c and c.strip()),
         "min_severity": (data.min_severity or "").lower() or None,
     }
@@ -75,6 +79,9 @@ def _apply_criteria(row: Subscription, norm: dict) -> None:
     row.entities = norm["entities"]
     row.companies = norm["companies"]
     row.countries = norm["countries"]
+    # .get default: a pending_update staged before this column existed won't carry the key, and
+    # confirm() replays that stored dict through here — an absent key must default, not 500.
+    row.affected_countries = norm.get("affected_countries", [])
     row.categories = norm["categories"]
     row.min_severity = norm["min_severity"]
     row.updated_at = datetime.now(UTC)
@@ -117,12 +124,23 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
 
     stmt = select(Subscription).where(func.lower(Subscription.email) == func.lower(data.email))
     rows: list[Subscription] = list(db.scalars(stmt).all())
-    # One subscription per email: act on a single primary row, preferring an active one.
+    # One subscription per email (the unique lower(email) index): act on a single primary row,
+    # preferring active, then a paused one. `paused` must be in this chain — otherwise a paused-only
+    # email leaves primary None, falls through to the INSERT below, and hits the unique index →
+    # IntegrityError → 500 (the resubscribe-a-paused-email bug).
     primary = (
         next((r for r in rows if r.status == "active"), None)
+        or next((r for r in rows if r.status == "paused"), None)
         or next((r for r in rows if r.status == "pending_confirmation"), None)
         or next((r for r in rows if r.status == "unsubscribed"), None)
     )
+
+    if primary is not None and primary.status == "paused":
+        # An operator paused this subscription; a public (unauthenticated) resubscribe must neither
+        # reactivate it nor change its criteria — only the admin controls a pause. Change nothing
+        # and send no email, but return the uniform response so the address's state isn't revealed.
+        db.rollback()  # release the advisory xact lock; nothing to persist
+        return _CREATE_RESPONSE
 
     if primary is not None and primary.status == "active":
         # Confirmed already — but this request is unauthenticated, so don't touch the live criteria.
@@ -158,6 +176,7 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
         entities=norm["entities"],
         companies=norm["companies"],
         countries=norm["countries"],
+        affected_countries=norm["affected_countries"],
         categories=norm["categories"],
         min_severity=norm["min_severity"],
         confirmation_token_hash=token_hash,
@@ -313,8 +332,12 @@ def patch_manage(management_token: str, patch: SubscriptionPatch, db: Session) -
     # (the schema rejects an empty list); the other filters may all be cleared, which simply means
     # "every recall in the selected countries".
     patch_data = patch.model_dump(exclude_unset=True)
-    for field, value in patch_data.items():
-        setattr(row, field, value)
+    # Normalise exactly as create() does (lowercase/dedupe/sort, ISO codes uppercased) so a patched
+    # row stores criteria in the same canonical shape as a freshly created one, then apply only the
+    # fields the caller actually set.
+    normalised = _normalise_criteria(patch)
+    for field in patch_data:
+        setattr(row, field, normalised.get(field, patch_data[field]))
     row.updated_at = datetime.now(UTC)
     db.commit()
     body = SubscriptionOut.model_validate(row).model_dump(by_alias=True)

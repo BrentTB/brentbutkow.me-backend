@@ -59,8 +59,11 @@ _KMEANS_N_INIT = 10
 # coverage while dropping the worst-fitting tail.
 _MIN_TOPIC_SIM = 0.55
 
-# Similarity: nearest neighbours kept per recall.
-_N_NEIGHBORS = 8
+# Similarity: nearest neighbours kept per recall. 6 = the similar-recalls endpoint's cap (its
+# `limit` Query is bounded at 6, so it can never ask for more than are stored) and comfortably above
+# _NOVELTY_K; trimmed from 8 because the neighbour table is derived storage that grows K× faster
+# than the corpus.
+_N_NEIGHBORS = 6  # keep in sync with the /similar `limit` Query ceiling in router.py
 
 # Novelty — 1 − the mean cosine of a recall's top-_NOVELTY_K neighbours, missing slots floored at
 # cosine 0. A recall whose nearest neighbours are all far away (or which has fewer than _NOVELTY_K

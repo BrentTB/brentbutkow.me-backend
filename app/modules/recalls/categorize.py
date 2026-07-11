@@ -63,6 +63,17 @@ _RULES: list[tuple[RecallCategory, list[str]]] = [
             "incorrect ingredient",
             "ingredient statement",
             "wrong product",
+            # EU labelling / date-marking / species-substitution notices.
+            "labelling",
+            "non compliant label",
+            "use-by date",
+            "use by date",
+            "best before",
+            "expiry date",
+            "species not declared",
+            "not declared on the label",
+            "pork dna",
+            "horse dna",
         ],
     ),
 ]

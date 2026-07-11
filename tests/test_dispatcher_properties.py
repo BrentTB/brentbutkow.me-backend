@@ -49,6 +49,9 @@ class _FakeRecall:
     severity_label: str
     report_date: date | None
     recall_initiation_date: date | None
+    # EU geography — read by the matcher's member-state narrowing (default absent).
+    notifying_country: str | None = None
+    distribution_countries: list[str] | None = None
 
 
 @dataclass
@@ -61,6 +64,7 @@ class _FakeSubscription:
     entities: list[str] = field(default_factory=list)
     companies: list[str] = field(default_factory=list)
     countries: list[str] = field(default_factory=list)
+    affected_countries: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     min_severity: str | None = None
     last_digest_at: datetime | None = None

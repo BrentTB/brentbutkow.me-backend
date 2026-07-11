@@ -69,6 +69,11 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (EntityType.pathogen, "Cronobacter", ("cronobacter",)),
     (EntityType.pathogen, "Campylobacter", ("campylobacter",)),
     (EntityType.pathogen, "Staphylococcus", ("staphylococcus", "staph aureus")),
+    (EntityType.pathogen, "Vibrio", ("vibrio",)),
+    (EntityType.pathogen, "Bacillus cereus", ("bacillus cereus",)),
+    (EntityType.pathogen, "Shigella", ("shigella",)),
+    (EntityType.pathogen, "Yersinia", ("yersinia",)),
+    (EntityType.pathogen, "Anisakis", ("anisakis", "anisakidae")),
     (EntityType.hazard, "metal", ("metal",)),
     (EntityType.hazard, "plastic", ("plastic",)),
     (EntityType.hazard, "glass", ("glass",)),
@@ -97,6 +102,17 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
             "dmaa",
             "ephedrine",
             "ephedra",
+            # Pharmacologically-active substances repeatedly flagged as "unauthorised" in EU
+            # food-supplement notifications — named, so gazetteer-matchable (the generic
+            # "unauthorised substance" wording without a name stays uncategorised, by design).
+            "yohimbine",
+            "yohimbe",
+            "hordenine",
+            "evodiamine",
+            "higenamine",
+            "synephrine",
+            "pancreatin",
+            "phenolphthalein",
         ),
     ),
     (EntityType.contaminant, "arsenic", ("arsenic",)),
@@ -108,8 +124,70 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (EntityType.contaminant, "cadmium", ("cadmium",)),
     (EntityType.contaminant, "mercury", ("mercury",)),
     (EntityType.contaminant, "histamine", ("histamine", "scombrotoxin", "scombroid")),
-    (EntityType.contaminant, "aflatoxin", ("aflatoxin", "mycotoxin", "ochratoxin")),
+    # Mycotoxins — EU RASFF writes them plural / in other languages, which word-boundary matching
+    # misses on the singular alone ("aflatoxins", "aflatoxine"), so the incidental food word
+    # ("almond") would otherwise decide the category. List the variants explicitly.
+    (
+        EntityType.contaminant,
+        "aflatoxin",
+        (
+            "aflatoxin",
+            "aflatoxins",
+            "aflatoxine",
+            "mycotoxin",
+            "mycotoxins",
+            "ochratoxin",
+            "ochratoxine",
+            "fumonisin",
+            "fumonisins",
+            "deoxynivalenol",
+            "zearalenone",
+        ),
+    ),
     (EntityType.contaminant, "patulin", ("patulin",)),
+    # Toxic plant alkaloids — tropane (weed seeds), pyrrolizidine (tea/honey), opium (poppy seed).
+    # Common in EU notices; "alkaloids" in a recall reason is a toxin, not caffeine.
+    (
+        EntityType.contaminant,
+        "alkaloids",
+        (
+            "alkaloid",
+            "alkaloids",
+            "tropane",
+            "pyrrolizidine",
+            "opium alkaloid",
+            "morphine",
+        ),
+    ),
+    # Cannabinoids in food (unauthorised) — the RASFF spellings, including the delta-9 prefix.
+    (
+        EntityType.contaminant,
+        "cannabinoids",
+        (
+            "tetrahydrocannabinol",
+            "delta-9-tetrahydrocannabinol",
+            "cannabinol",
+            "cannabidiol",
+        ),
+    ),
+    # Chlorate / perchlorate — disinfection-byproduct + fertiliser residues (a frequent RASFF flag).
+    (
+        EntityType.contaminant,
+        "chlorate",
+        ("chlorate", "chlorates", "perchlorate", "perchlorates"),
+    ),
+    # Chemical migration from food-contact materials — the "Migration of X from packaging" notices.
+    (
+        EntityType.contaminant,
+        "food-contact migration",
+        (
+            "migration of",
+            "bisphenol",
+            "primary aromatic amine",
+            "primary aromatic amines",
+            "formaldehyde",
+        ),
+    ),
     (
         EntityType.contaminant,
         "marine biotoxin",
@@ -128,8 +206,84 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
     (
         EntityType.contaminant,
         "pesticide",
-        ("pesticide", "pesticides", "chlorpyrifos", "malathion", "glyphosate", "carbofuran"),
+        (
+            "pesticide",
+            "pesticides",
+            "chlorpyrifos",
+            "malathion",
+            "glyphosate",
+            "carbofuran",
+            # Neonicotinoids + other residues frequently named in EU RASFF notifications.
+            "acetamiprid",
+            "imidacloprid",
+            "thiacloprid",
+            "clothianidin",
+            "thiamethoxam",
+            "phosmet",
+            "dimethoate",
+            "prochloraz",
+            "carbendazim",
+            "formetanate",
+            "carbaryl",
+            "linuron",
+            "ethephon",
+            "methomyl",
+            "omethoate",
+            "profenofos",
+            "oxamyl",
+            "chlorpyrifos-methyl",
+        ),
     ),
+    # Process contaminants — formed during processing/heating, not added. Common EU flags.
+    (
+        EntityType.contaminant,
+        "process contaminant",
+        (
+            "3-mcpd",
+            "glycidyl",
+            "acrylamide",
+            "benzo(a)pyrene",
+            "benzopyrene",
+            "polycyclic aromatic",
+        ),
+    ),
+    # Illegal / unauthorised colours. Specific Sudan variants, not bare "sudan" (the country).
+    (
+        EntityType.contaminant,
+        "illegal dye",
+        (
+            "sudan i",
+            "sudan ii",
+            "sudan iii",
+            "sudan iv",
+            "sudan red",
+            "sudan dye",
+            "rhodamine",
+            "para red",
+            "metanil yellow",
+            "butter yellow",
+            "auramine",
+        ),
+    ),
+    # Veterinary drug residues (antibiotics, hormones) above limits or banned. Chloramphenicol and
+    # nitrofuran have their own entries above; these are the other frequently-named residues.
+    (
+        EntityType.contaminant,
+        "veterinary drug residue",
+        (
+            "dexamethasone",
+            "florfenicol",
+            "enrofloxacin",
+            "ciprofloxacin",
+            "metronidazole",
+            "nicarbazin",
+            "nitrofurazone",
+            "amoz",
+            "aoz",
+        ),
+    ),
+    (EntityType.contaminant, "aluminium", ("aluminium", "aluminum")),
+    (EntityType.contaminant, "nickel", ("nickel",)),
     (EntityType.contaminant, "ethylene oxide", ("ethylene oxide",)),
     (
         EntityType.contaminant,

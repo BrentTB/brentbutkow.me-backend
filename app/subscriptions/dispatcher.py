@@ -57,6 +57,10 @@ _RECALL_COLUMNS = (
     Recall.category,
     Recall.severity_label,
     Recall.entities,
+    # The matcher's EU member-state narrowing reads these; without them here `load_only` would
+    # lazy-reload each one per recall (an N+1), or error on an expired row.
+    Recall.notifying_country,
+    Recall.distribution_countries,
 )
 
 # Only the fields the operator digest row renders — keeps a long backlog of full message bodies

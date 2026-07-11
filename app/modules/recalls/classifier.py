@@ -30,4 +30,15 @@ def classify(reason_text: str) -> tuple[RecallCategory, float]:
         return category, 1.0 if category != RecallCategory.other else 0.0
     probabilities = model.predict_proba([reason_text])[0]
     best = int(probabilities.argmax())
-    return RecallCategory(str(model.classes_[best])), float(probabilities[best])
+    category = RecallCategory(str(model.classes_[best]))
+    confidence = float(probabilities[best])
+    # Gazetteer rescue: when the model shrugs "other", defer to the high-precision entity vocabulary
+    # if it names a cause. The model is trained on gazetteer-derived labels, so a term the gazetteer
+    # gained *after* the last training run (e.g. EU-specific "acetamiprid", "aflatoxine") reads as
+    # "other" to the model but is a confident contaminant/pathogen here — no retrain needed. Only
+    # ever upgrades an "other", never overrides a confident model class.
+    if category == RecallCategory.other:
+        gazetteer_category = label_category(reason_text)
+        if gazetteer_category != RecallCategory.other:
+            return gazetteer_category, 1.0
+    return category, confidence

@@ -101,8 +101,11 @@ class Recall(Base):
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR, Computed(_SEARCH_EXPR, persisted=True), deferred=True
     )
-    # Lowercased searchable text for trigram substring/ILIKE search — generated, GIN-indexed with
-    # gin_trgm_ops (deferred so the list query doesn't load it). Expression matches the migration.
+    # Lowercased searchable text for substring/ILIKE search — generated (deferred so the list
+    # query doesn't load it). Expression matches the migration. Deliberately unindexed: its
+    # pg_trgm GIN index outweighed the text it indexed ~6:1 on disk, so search probes the indexed
+    # tsvector first and seq-scans this column only when full-text finds too little
+    # (service._needs_substring_search).
     search_text: Mapped[str | None] = mapped_column(
         Text, Computed(_SEARCH_TEXT_LOWER_EXPR, persisted=True), deferred=True
     )

@@ -172,9 +172,12 @@ def _recall_conditions(
     since: date | None = None,
     until: date | None = None,
     search: str | None = None,
+    search_substring: bool,
 ) -> list[Any]:
     # The shared filter set behind both the recall list and the trend chart, so the two scope
-    # identically. Each arg is optional; an omitted one adds no constraint.
+    # identically. Each arg is optional; an omitted one adds no constraint. `search_substring` has
+    # no default on purpose: every caller must decide (via _needs_substring_search) whether search
+    # also gets the unindexed substring pass, so a new call site can't silently pick a behavior.
     conditions: list[Any] = []
     if country:
         conditions.append(Recall.country == country)
@@ -231,19 +234,46 @@ def _recall_conditions(
         conditions.append(Recall.report_date <= until)
     if search and search.strip():
         term = search.strip()
-        # Escape LIKE metacharacters so a user's literal % or _ matches literally instead of acting
-        # as a wildcard (the term is already bound, so this is correctness, not injection safety).
-        like_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        # Match either way: full-text search (whole-lexeme, good word/relevance matching) OR a
-        # trigram substring match (catches partial UPCs, codes, and word fragments tsvector misses,
-        # e.g. "882479" inside a 12-digit UPC). The ILIKE is backed by the pg_trgm GIN index.
-        conditions.append(
-            or_(
-                Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", term)),
-                Recall.search_text.ilike(f"%{like_term}%", escape="\\"),
+        # Full-text first: whole-lexeme matching with relevance ranking, backed by the GIN index
+        # on search_vector. The substring match (catches partial UPCs, codes, and word fragments
+        # tsvector misses, e.g. "882479" inside a 12-digit UPC) lost its trigram GIN index — it
+        # outweighed the text it indexed ~6:1 on disk — so it's a seq scan now, OR-ed in only when
+        # the caller's probe says full-text alone found too little.
+        fts_match = Recall.search_vector.op("@@")(func.websearch_to_tsquery("english", term))
+        if search_substring:
+            # Escape LIKE metacharacters so a user's literal % or _ matches literally instead of
+            # acting as a wildcard (the term is already bound, so this is correctness, not
+            # injection safety).
+            like_term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(
+                or_(fts_match, Recall.search_text.ilike(f"%{like_term}%", escape="\\"))
             )
-        )
+        else:
+            conditions.append(fts_match)
     return conditions
+
+
+# Search is two-phase: the indexed full-text match always runs, and the unindexed substring scan
+# joins it only when full-text finds fewer rows than this under the request's filters. Low on
+# purpose — a word search with even a few hits doesn't need the substring rescue, which exists for
+# fragments (partial UPCs, lot codes) full-text can never match, where the probe finds 0.
+_SUBSTRING_FALLBACK_MAX_FTS_MATCHES = 5
+
+
+def _needs_substring_search(session: Session, filters: dict[str, Any]) -> bool:
+    """One probe per request: does this search also need the substring scan?
+
+    Counts the indexed full-text matches under the request's FULL filter set. Every consumer of
+    the same filters (recall list, facet counts, trend chart, company type-ahead) makes the same
+    probe, so they keep describing the same result set — the outcome depends only on the term plus
+    the filters, never on pagination or which facet is being counted.
+    """
+    if not filters.get("search"):
+        return False
+    stmt = select(func.count()).select_from(Recall)
+    for condition in _recall_conditions(**filters, search_substring=False):
+        stmt = stmt.where(condition)
+    return (session.scalar(stmt) or 0) < _SUBSTRING_FALLBACK_MAX_FTS_MATCHES
 
 
 def list_recalls(
@@ -271,22 +301,25 @@ def list_recalls(
     # Treat blank/whitespace-only as "no search" so it doesn't build a no-op tsquery + ranking.
     search = search.strip() if search else None
 
+    filters: dict[str, Any] = {
+        "country": country,
+        "source": source,
+        "category": category,
+        "classification": classification,
+        "state": state,
+        "affected_country": affected_country,
+        "company": company,
+        "entity": entity,
+        "min_severity": min_severity,
+        "severity": severity,
+        "topic": topic,
+        "event": event,
+        "since": since,
+        "until": until,
+        "search": search,
+    }
     conditions = _recall_conditions(
-        country=country,
-        source=source,
-        category=category,
-        classification=classification,
-        state=state,
-        affected_country=affected_country,
-        company=company,
-        entity=entity,
-        min_severity=min_severity,
-        severity=severity,
-        topic=topic,
-        event=event,
-        since=since,
-        until=until,
-        search=search,
+        **filters, search_substring=_needs_substring_search(session, filters)
     )
 
     stmt = select(Recall)
@@ -390,6 +423,9 @@ def get_facets(
         "until": until,
         "search": search,
     }
+    # Probe once against the full filter set, then carry the verdict in `base` so every per-facet
+    # spread below scopes search identically to the list the facets sit next to.
+    base["search_substring"] = _needs_substring_search(session, base)
 
     def counts(column: Any, own: str, *, not_null: bool = False) -> list[LabelCount]:
         stmt = select(column, func.count())
@@ -732,26 +768,28 @@ def get_trend(
     search: str | None = None,
 ) -> TrendResult:
     # Monthly counts, optionally split by category / source / severity / classification, scoped by
-    # the same filters as the recall list — so the chart and the list always describe the same set.
+    # the same filters as the recall list — so the chart and the list always describe the same set
+    # (including the same search probe, via _needs_substring_search).
+    filters: dict[str, Any] = {
+        "country": country,
+        "category": category,
+        "classification": classification,
+        "state": state,
+        "affected_country": affected_country,
+        "company": company,
+        "source": source,
+        "entity": entity,
+        "min_severity": min_severity,
+        "severity": severity,
+        "topic": topic,
+        "event": event,
+        "since": since,
+        "until": until,
+        "search": search.strip() if search else None,
+    }
     where = [
         Recall.report_date.is_not(None),
-        *_recall_conditions(
-            country=country,
-            category=category,
-            classification=classification,
-            state=state,
-            affected_country=affected_country,
-            company=company,
-            source=source,
-            entity=entity,
-            min_severity=min_severity,
-            severity=severity,
-            topic=topic,
-            event=event,
-            since=since,
-            until=until,
-            search=search,
-        ),
+        *_recall_conditions(**filters, search_substring=_needs_substring_search(session, filters)),
     ]
     month = func.to_char(Recall.report_date, "YYYY-MM")
     dimension = {
@@ -886,21 +924,24 @@ def search_companies(
     # Ranked by count so the busiest matches lead; the type-ahead reaches any of the thousands of
     # firms, not just the top handful in the stats breakdown.
     stmt = select(Recall.company_name, func.count()).where(Recall.company_name.is_not(None))
+    filters: dict[str, Any] = {
+        "country": country,
+        "source": source,
+        "category": category,
+        "classification": classification,
+        "state": state,
+        "affected_country": affected_country,
+        "company": None,
+        "entity": entity,
+        "severity": severity,
+        "topic": topic,
+        "event": event,
+        "since": since,
+        "until": until,
+        "search": search.strip() if search else None,
+    }
     for condition in _recall_conditions(
-        country=country,
-        source=source,
-        category=category,
-        classification=classification,
-        state=state,
-        affected_country=affected_country,
-        company=None,
-        entity=entity,
-        severity=severity,
-        topic=topic,
-        event=event,
-        since=since,
-        until=until,
-        search=search.strip() if search else None,
+        **filters, search_substring=_needs_substring_search(session, filters)
     ):
         stmt = stmt.where(condition)
     term = q.strip()
