@@ -281,6 +281,29 @@ def test_resubscribe_pending_updates_and_resends_optin():
     update_confirm.assert_not_called()
 
 
+def test_resubscribe_paused_is_inert_and_never_500s():
+    # An operator paused this subscription. A public resubscribe must NOT insert a second row
+    # (which would hit the unique lower(email) index → IntegrityError → 500, the reported bug),
+    # must NOT reactivate it or change its criteria, and must send no email — the pause holds.
+    existing = make_subscription(email="a@b.com", status="paused", entities=["milk"])
+    mock_db, added = make_mock_db(existing_rows=[existing])
+    data = SubscriptionCreate(email="a@b.com", countries=["us"], entities=["peanut"])
+
+    with (
+        patch("app.subscriptions.service._try_send_optin") as optin,
+        patch("app.subscriptions.service._try_send_update_confirm") as update_confirm,
+    ):
+        status_code, _ = service.create(data, mock_db)
+
+    assert status_code == 200  # uniform response — doesn't reveal the address's state
+    assert added == []  # no second row inserted (no IntegrityError path)
+    assert existing.status == "paused"  # admin's pause untouched
+    assert existing.entities == ["milk"]  # criteria unchanged
+    assert existing.pending_update is None  # nothing staged
+    optin.assert_not_called()
+    update_confirm.assert_not_called()
+
+
 def test_resubscribe_unsubscribed_restages_as_pending():
     existing = make_subscription(email="a@b.com", status="unsubscribed", entities=["milk"])
     mock_db, added = make_mock_db(existing_rows=[existing])

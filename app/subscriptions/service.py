@@ -124,12 +124,23 @@ def create(data: SubscriptionCreate, db: Session) -> tuple[int, dict]:
 
     stmt = select(Subscription).where(func.lower(Subscription.email) == func.lower(data.email))
     rows: list[Subscription] = list(db.scalars(stmt).all())
-    # One subscription per email: act on a single primary row, preferring an active one.
+    # One subscription per email (the unique lower(email) index): act on a single primary row,
+    # preferring active, then a paused one. `paused` must be in this chain — otherwise a paused-only
+    # email leaves primary None, falls through to the INSERT below, and hits the unique index →
+    # IntegrityError → 500 (the resubscribe-a-paused-email bug).
     primary = (
         next((r for r in rows if r.status == "active"), None)
+        or next((r for r in rows if r.status == "paused"), None)
         or next((r for r in rows if r.status == "pending_confirmation"), None)
         or next((r for r in rows if r.status == "unsubscribed"), None)
     )
+
+    if primary is not None and primary.status == "paused":
+        # An operator paused this subscription; a public (unauthenticated) resubscribe must neither
+        # reactivate it nor change its criteria — only the admin controls a pause. Change nothing
+        # and send no email, but return the uniform response so the address's state isn't revealed.
+        db.rollback()  # release the advisory xact lock; nothing to persist
+        return _CREATE_RESPONSE
 
     if primary is not None and primary.status == "active":
         # Confirmed already — but this request is unauthenticated, so don't touch the live criteria.
