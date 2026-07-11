@@ -33,6 +33,27 @@ def test_contaminants():
     assert _values("scombrotoxin (histamine) fish poisoning", "contaminant") == {"histamine"}
 
 
+def test_eu_scientific_contaminants():
+    # EU RASFF vocabulary that used to fall through to "other". Real reason texts from the feed.
+    assert _values("Acetamiprid in pears from Turkey", "contaminant") == {"pesticide"}
+    assert _values("Perchlorate in herbal tea from Poland", "contaminant") == {"chlorate"}
+    assert _values("Tropane alkaloids in cumin", "contaminant") == {"alkaloids"}
+    assert _values("Delta-9-tetrahydrocannabinol in olive oil", "contaminant") == {"cannabinoids"}
+    assert _values("Migration of Bisphenol S from pizza boxes", "contaminant") == {
+        "food-contact migration"
+    }
+
+
+def test_mycotoxin_plurals_and_spellings_match():
+    # Word-boundary matching used to miss the plural / non-English spellings, so an incidental food
+    # word decided the category. The mycotoxin must win as the contaminant.
+    for text in ("excessive aflatoxins in almond powder", "Aflatoxine in Erdnüssen", "mycotoxins"):
+        assert "aflatoxin" in _values(text, "contaminant"), text
+    # The aflatoxin/almond case: contaminant is present alongside the incidental allergen.
+    both = {e["type"] for e in extract_entities("aflatoxins in almond powder")}
+    assert "contaminant" in both
+
+
 def test_multiple_types_in_one_reason():
     types = {e["type"] for e in extract_entities("Undeclared peanuts and possible Salmonella")}
     assert types == {"allergen", "pathogen"}
