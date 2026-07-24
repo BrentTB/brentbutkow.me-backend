@@ -26,7 +26,14 @@ jobs:
           INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
           INTERNAL_DISPATCH_TOKEN: op://Developer/API-Backend/INTERNAL_DISPATCH_TOKEN
 
+      # Each source step below is continue-on-error: upstream feeds go down routinely (the NCC site
+      # especially), and one flaky source must not block the other sources' ingests or the digest.
+      # Nothing is lost — dispatch newness keys off `created_at` (ingest time), so a source that
+      # fails today simply lands in the next successful run's digest. The step still shows its
+      # failure in the run log; only the dispatch step below fails the job, so a systemic outage
+      # (API down, bad token) still surfaces via GitHub Actions notifications.
       - name: Trigger FDA ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error \
             -X POST "${API_BASE_URL}/recalls/ingest/fda" \
@@ -34,6 +41,7 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger FSIS ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/fsis" \
@@ -41,6 +49,7 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger UK FSA ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/uk" \
@@ -48,6 +57,7 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger NCC (South Africa) ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/ncc" \
@@ -55,6 +65,7 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger SA curated seed ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 120 \
             -X POST "${API_BASE_URL}/recalls/ingest/seed" \
@@ -62,6 +73,7 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Trigger CFIA (Canada) ingest endpoint
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 300 \
             -X POST "${API_BASE_URL}/recalls/ingest/cfia" \
@@ -72,6 +84,7 @@ jobs:
         # Longer timeout: this fetches a rolling window from the official DG SANTE API *and* makes a
         # best-effort SPA enrichment call per new recall, so it runs longer than the single-fetch
         # sources. Must stay before the dispatch step below.
+        continue-on-error: true
         run: |
           curl --fail-with-body --silent --show-error --max-time 600 \
             -X POST "${API_BASE_URL}/recalls/ingest/rasff" \
@@ -79,8 +92,10 @@ jobs:
             -H "Content-Type: application/json"
 
       - name: Dispatch recall alert emails
-        # Runs only after every ingest above succeeds — a failed step short-circuits the job, so a
-        # digest never claims completeness off a partial ingest (those recalls land next run).
+        # Must stay the last step, after every source ingest has had its attempt, so the digest
+        # covers everything that landed this run. A failed source doesn't block it (recalls from a
+        # down feed land next run via the created_at cursor), but this step itself is NOT
+        # continue-on-error: it's the job's canary, so a systemic outage still fails the job.
         # Uses the INTERNAL_DISPATCH_TOKEN resolved from 1Password, matching the backend's env var.
         # --fail-with-body turns a non-2xx into a non-zero exit and --max-time 30 a timeout, so either
         # fails the step and surfaces via GitHub Actions notifications.
