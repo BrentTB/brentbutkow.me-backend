@@ -31,7 +31,9 @@ run it even for "trivial" changes (missed twice, surfacing only at commit time).
    hardcode agency lists inside templates (#27)
 4. Admin per-country counts — app/modules/admin/schemas.py + service.py
 5. scripts/ingest_all.py, a new scripts/ingest_<src>.py, and a step in .github/workflows/ingest.yml
-   (dispatch must stay the last step — a digest must never run off a partial ingest)
+   (source steps are `continue-on-error` — flaky upstreams like NCC must not block other sources or
+   the digest; missed recalls land next run via the created_at cursor. Dispatch stays the last step
+   and stays fail-hard: it's the job's canary for systemic outages)
 6. Human-readable strings listing countries/agencies — grep the *values* (`"us, uk"`, `"FDA"`),
    they hide in Query descriptions and docstrings outside any diff hunk (#27)
 7. The dispatch backfill guard is per-country: seeding a new country's history must not suppress
