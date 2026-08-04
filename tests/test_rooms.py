@@ -484,3 +484,112 @@ def test_the_clock_blames_whoever_is_actually_on_turn():
     )
     enforce_clock(_FakeSession(), room)
     assert room.winner_seat == 0
+
+
+# --- matchmaking must not offer rooms nobody is sitting in ---
+
+
+def test_a_waiting_room_whose_host_has_gone_is_not_a_match():
+    """
+    Regression: the matchmaker offers the oldest open room first, and an abandoned one still reads
+    as joinable. Two people searching at once each land in a different empty room instead of finding
+    each other.
+    """
+    window = settings.room_presence_timeout_seconds
+    stale = (service.now_utc() - timedelta(seconds=window + 5)).isoformat()
+    ghost = _room(
+        code="GHOST1",
+        is_open=True,
+        seats=[_seat(seat=0, name="Gone", last_seen=stale)],
+    )
+    # Nobody is there, so there is nothing to play against.
+    assert service.present_seats(ghost.seats, service.now_utc()) == []
+    # The seat does read as free, which is exactly why the free-seat check alone was not enough.
+    assert service.free_seat(ghost.seats, service.now_utc()) == 0
+
+
+def test_a_waiting_room_with_a_live_host_is_a_match():
+    host = _room(
+        code="LIVE01",
+        is_open=True,
+        seats=[_seat(seat=0, name="Host", last_seen=service.now_utc().isoformat())],
+    )
+    now = service.now_utc()
+    assert len(service.present_seats(host.seats, now)) == 1
+    # The joiner takes the second seat rather than replacing the host.
+    assert service.free_seat(host.seats, now) == 1
+
+
+# --- a waiting room's settings belong to whoever opened it ---
+
+
+def test_settings_forwards_the_new_terms(monkeypatch):
+    captured = {}
+
+    def fake_update(session, **kw):
+        captured.update(kw)
+        return _room(first_seat=1, is_open=True, move_limit_seconds=60)
+
+    monkeypatch.setattr(service, "update_settings", fake_update)
+    res = client.post(
+        "/rooms/ABCDEF/settings",
+        json={"token": "tok", "firstSeat": 1, "isOpen": True, "moveLimitSeconds": 60},
+    )
+    assert res.status_code == 200
+    assert captured == {
+        "code": "ABCDEF",
+        "token": "tok",
+        "first_seat": 1,
+        "is_open": True,
+        "move_limit_seconds": 60,
+    }
+    # The response describes the room, so a client can render what it now is.
+    body = res.json()
+    assert body["firstSeat"] == 1
+    assert body["isOpen"] is True
+    assert body["moveLimitSeconds"] == 60
+
+
+def test_settings_rejects_a_seat_that_did_not_open_the_room():
+    seats = _seats_with_tokens("opener", "joiner")
+    room = _room(seats=seats, status="waiting")
+    session = _FakeSession()
+
+    def fake_live(_session, _code, lock=False):
+        return room
+
+    original = service._live_room
+    service._live_room = fake_live  # type: ignore[assignment]
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.update_settings(
+                session,
+                code="ABCDEF",
+                token="joiner",
+                first_seat=1,
+                is_open=True,
+                move_limit_seconds=None,
+            )
+        assert exc.value.status_code == 403
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+
+
+def test_settings_are_settled_once_the_game_starts():
+    seats = _seats_with_tokens("opener", "joiner")
+    room = _room(seats=seats, status="active")
+    original = service._live_room
+    service._live_room = lambda _s, _c, lock=False: room  # type: ignore[assignment]
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.update_settings(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                first_seat=1,
+                is_open=False,
+                move_limit_seconds=None,
+            )
+        assert exc.value.status_code == 409
+    finally:
+        service._live_room = original  # type: ignore[assignment]

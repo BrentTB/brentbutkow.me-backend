@@ -46,7 +46,9 @@ class MatchmakeRequest(CamelModel):
     name: str = Field(default="", max_length=_MAX_NAME)
     colour: str = Field(min_length=1, max_length=_MAX_COLOUR)
     cell_count: int = Field(ge=1, le=_MAX_CELLS)
-    # Only used when nobody is waiting and this player opens the room instead.
+    # These apply only when nobody is waiting and this player opens the room instead. Joining
+    # somebody means playing by the settings they already chose.
+    first_seat: int = Field(default=0, ge=0, le=1)
     move_limit_seconds: int | None = Field(default=None, ge=_MIN_MOVE_LIMIT, le=_MAX_MOVE_LIMIT)
 
 
@@ -59,6 +61,10 @@ class ProfileRequest(CamelModel):
     token: str = Field(min_length=1, max_length=_MAX_TOKEN)
     name: str = Field(default="", max_length=_MAX_NAME)
     colour: str = Field(min_length=1, max_length=_MAX_COLOUR)
+
+
+class SettingsRequest(RoomOptions):
+    token: str = Field(min_length=1, max_length=_MAX_TOKEN)
 
 
 class TokenRequest(CamelModel):

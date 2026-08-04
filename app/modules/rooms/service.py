@@ -320,6 +320,39 @@ def update_profile(session: Session, *, code: str, token: str, name: str, colour
     return room
 
 
+def update_settings(
+    session: Session,
+    *,
+    code: str,
+    token: str,
+    first_seat: int,
+    is_open: bool,
+    move_limit_seconds: int | None,
+) -> Room:
+    """
+    Changes a waiting room's settings, for the player who opened it.
+
+    Only before the game starts, and only from seat 0: once both players are in, the terms they
+    agreed to are not one side's to rewrite.
+    """
+    room = _live_room(session, code, lock=True)
+    seat = seat_for_token(room.seats, token)
+    if seat != 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the room's opener can change this"
+        )
+    if room.status != "waiting":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="The game has already started"
+        )
+    room.first_seat = first_seat
+    room.is_open = is_open
+    room.move_limit_seconds = move_limit_seconds
+    session.commit()
+    session.refresh(room)
+    return room
+
+
 def rematch(session: Session, *, code: str, token: str) -> Room:
     """
     Starts another game between the same two players, with the other seat opening this time.
@@ -352,6 +385,7 @@ def matchmake(
     cell_count: int,
     name: str,
     colour: str,
+    first_seat: int = 0,
     move_limit_seconds: int | None = None,
 ) -> tuple[Room, str]:
     """
@@ -359,6 +393,9 @@ def matchmake(
 
     `SKIP LOCKED` is what makes two people arriving at once safe. Each takes a different row
     rather than queueing on the same one, so they never both claim the same seat.
+
+    `first_seat` and `move_limit_seconds` only apply to a room this opens. Joining somebody means
+    playing by the settings they already chose.
     """
     now = now_utc()
     candidates = session.scalars(
@@ -375,9 +412,21 @@ def matchmake(
         .with_for_update(skip_locked=True)
     ).all()
 
+    retired = False
     for room in candidates:
+        # A waiting room whose host has gone quiet is a ghost: joining it means sitting alone in
+        # somebody else's abandoned room, and because the oldest rooms are offered first, two people
+        # looking at the same moment would each be sent to a different one. Retire it instead, so it
+        # stops being offered at all.
+        if not present_seats(room.seats, now):
+            room.status = "abandoned"
+            retired = True
+            continue
         if free_seat(room.seats, now) is not None:
             return _claim_seat(session, room, name=name, colour=colour)
+
+    if retired:
+        session.commit()
 
     # Nobody to match with, so this player becomes the one waiting — open, for the next arrival.
     return create_room(
@@ -386,6 +435,7 @@ def matchmake(
         name=name,
         colour=colour,
         cell_count=cell_count,
+        first_seat=first_seat,
         is_open=True,
         move_limit_seconds=move_limit_seconds,
     )

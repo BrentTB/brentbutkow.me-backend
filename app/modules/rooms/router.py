@@ -16,6 +16,7 @@ from app.modules.rooms.schemas import (
     RoomCredentials,
     RoomState,
     SeatOut,
+    SettingsRequest,
     TokenRequest,
 )
 from app.rate_limit import limiter
@@ -117,6 +118,7 @@ def matchmake(
         cell_count=body.cell_count,
         name=body.name,
         colour=body.colour,
+        first_seat=body.first_seat,
         move_limit_seconds=body.move_limit_seconds,
     )
     seat = service.seat_for_token(room.seats, token)
@@ -177,6 +179,34 @@ def rematch(
     session: Session = Depends(get_session),
 ) -> RoomState:
     return _state(service.rematch(session, code=code, token=body.token))
+
+
+@router.post(
+    "/{code}/settings",
+    response_model=RoomState,
+    summary="Change a waiting room's settings",
+    description=(
+        "Updates the opening move, clock and open flag. Only before the game starts, and only "
+        "for the player who opened the room."
+    ),
+    responses=_RATE_LIMITED,
+)
+@limiter.limit("30/minute")
+def update_settings(
+    request: Request,
+    body: SettingsRequest,
+    code: str = RoomCode,
+    session: Session = Depends(get_session),
+) -> RoomState:
+    room = service.update_settings(
+        session,
+        code=code,
+        token=body.token,
+        first_seat=body.first_seat,
+        is_open=body.is_open,
+        move_limit_seconds=body.move_limit_seconds,
+    )
+    return _state(room)
 
 
 @router.post(
