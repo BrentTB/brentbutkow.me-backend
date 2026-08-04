@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # How long a multiplayer room lives before it expires (default 24h). Expiry is checked on read,
     # and expired rooms are pruned on the next create, so a stale game frees its code.
     room_ttl_seconds: int = 86400
+    # How long a player's seat survives without a read before the other side is told they left. Wide
+    # enough to ride out a slow network on a two-second poll; short enough that a closed tab
+    # shows up while the opponent is still watching.
+    room_presence_timeout_seconds: int = 20
 
     @field_validator("allowed_origin_regex", mode="after")
     @classmethod
