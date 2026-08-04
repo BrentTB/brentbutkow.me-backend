@@ -15,6 +15,7 @@ from app.modules.admin.router import router as admin_router
 from app.modules.contact.router import router as contact_router
 from app.modules.nullspace.router import router as nullspace_router
 from app.modules.recalls.router import router as recalls_router
+from app.modules.rooms.router import router as rooms_router
 from app.rate_limit import limiter
 from app.subscriptions.router import router as subscriptions_router
 
@@ -39,6 +40,7 @@ OPENAPI_TAGS = [
     },
     {"name": "contact", "description": "Visitor contact messages."},
     {"name": "nullspace", "description": "Null Space game leaderboard."},
+    {"name": "rooms", "description": "Turn-based multiplayer rooms (game-agnostic)."},
     {
         "name": "subscriptions",
         "description": "Recall alert subscriptions: create, confirm, manage, unsubscribe.",
@@ -93,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(recalls_router, prefix="/recalls", tags=["recalls"])
     app.include_router(contact_router, prefix="/contact", tags=["contact"])
     app.include_router(nullspace_router, prefix="/nullspace", tags=["nullspace"])
+    app.include_router(rooms_router, prefix="/rooms", tags=["rooms"])
     app.include_router(subscriptions_router, prefix="/subscriptions", tags=["subscriptions"])
     app.include_router(internal_router, prefix="/internal", tags=["internal"])
     app.include_router(admin_router, prefix="/admin", tags=["admin"])

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # instead of every request sharing the proxy's IP. Never trust XFF when this is 0 — a client
     # can forge the header, so an unset value must fall back to the direct peer.
     trusted_proxy_hops: int = 0
+    # How long a multiplayer room lives before it expires (default 24h). Expiry is checked on read,
+    # and expired rooms are pruned on the next create, so a stale game frees its code.
+    room_ttl_seconds: int = 86400
 
     @field_validator("allowed_origin_regex", mode="after")
     @classmethod
