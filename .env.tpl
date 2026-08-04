@@ -19,6 +19,7 @@ ADMIN_PASSWORD=op://Developer/Website-Admin-Password-Local/password
 ALLOWED_ORIGIN=op://Developer/API-Backend/ALLOWED_ORIGIN
 ALLOWED_ORIGIN_REGEX=op://Developer/API-Backend/ALLOWED_ORIGIN_REGEX_LOCAL
 TRUSTED_PROXY_HOPS=op://Developer/API-Backend/TRUSTED_PROXY_HOPS_LOCAL
+ROOM_TTL_SECONDS=op://Developer/API-Backend/ROOM_TTL_SECONDS
 PORT=op://Developer/Neon-Postgres/PORT
 
 RESEND_API_KEY=op://Developer/Resend/API_KEY
