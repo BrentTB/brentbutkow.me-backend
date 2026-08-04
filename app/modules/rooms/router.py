@@ -11,6 +11,7 @@ from app.modules.rooms.schemas import (
     JoinRoomRequest,
     MoveRequest,
     MoveResult,
+    ProfileRequest,
     RoomCredentials,
     RoomState,
     SeatOut,
@@ -25,7 +26,12 @@ _RATE_LIMITED: dict[int | str, dict[str, Any]] = {429: {"description": "Rate lim
 def _state(room: Room) -> RoomState:
     # Seat tokens never leave the server — only seat number, colour, and join status.
     seats = [
-        SeatOut(seat=int(s["seat"]), colour=s["colour"], joined=bool(s["joined"]))
+        SeatOut(
+            seat=int(s["seat"]),
+            name=s.get("name", ""),
+            colour=s["colour"],
+            joined=bool(s["joined"]),
+        )
         for s in room.seats
     ]
     return RoomState(
@@ -54,7 +60,11 @@ def create_room(
     session: Session = Depends(get_session),
 ) -> RoomCredentials:
     room, token = service.create_room(
-        session, game_id=body.game_id, colour=body.colour, cell_count=body.cell_count
+        session,
+        game_id=body.game_id,
+        name=body.name,
+        colour=body.colour,
+        cell_count=body.cell_count,
     )
     return RoomCredentials(
         code=room.code,
@@ -80,7 +90,7 @@ def join_room(
     body: JoinRoomRequest,
     session: Session = Depends(get_session),
 ) -> RoomCredentials:
-    room, token = service.join_room(session, code=code, colour=body.colour)
+    room, token = service.join_room(session, code=code, name=body.name, colour=body.colour)
     return RoomCredentials(
         code=room.code,
         game_id=room.game_id,
@@ -89,6 +99,26 @@ def join_room(
         token=token,
         status=room.status,
     )
+
+
+@router.post(
+    "/{code}/profile",
+    response_model=RoomState,
+    summary="Update your seat's name and colour",
+    description="Changes the caller's own name and colour. The opponent sees it on their next poll",
+    responses=_RATE_LIMITED,
+)
+@limiter.limit("60/minute")
+def update_profile(
+    request: Request,
+    code: str,
+    body: ProfileRequest,
+    session: Session = Depends(get_session),
+) -> RoomState:
+    room = service.update_profile(
+        session, code=code, token=body.token, name=body.name, colour=body.colour
+    )
+    return _state(room)
 
 
 @router.get(

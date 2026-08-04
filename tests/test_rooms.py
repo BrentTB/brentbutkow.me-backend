@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -24,8 +26,9 @@ def _room(**over) -> Room:
         game_id="tic-tac-toe",
         cell_count=64,
         moves=[],
-        seats=[{"seat": 0, "token_hash": "h0", "colour": "1,2,3", "joined": True}],
+        seats=[{"seat": 0, "token_hash": "h0", "name": "Ada", "colour": "1,2,3", "joined": True}],
         status="waiting",
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
     )
     base.update(over)
     return Room(**base)
@@ -37,7 +40,10 @@ def _room(**over) -> Room:
 def test_create_returns_seat_zero_and_token(monkeypatch):
     room = _room()
     monkeypatch.setattr(service, "create_room", lambda s, **kw: (room, "secret-token"))
-    res = client.post("/rooms", json={"gameId": "tic-tac-toe", "colour": "1,2,3", "cellCount": 64})
+    res = client.post(
+        "/rooms",
+        json={"gameId": "tic-tac-toe", "name": "Ada", "colour": "1,2,3", "cellCount": 64},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["seat"] == 0
@@ -51,15 +57,12 @@ def test_create_rejects_out_of_range_cell_count():
 
 
 def test_state_never_exposes_seat_tokens(monkeypatch):
-    from datetime import UTC, datetime
-
     room = _room(
         moves=[0, 1],
         status="active",
-        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
         seats=[
-            {"seat": 0, "token_hash": "h0", "colour": "1,2,3", "joined": True},
-            {"seat": 1, "token_hash": "h1", "colour": "4,5,6", "joined": True},
+            {"seat": 0, "token_hash": "h0", "name": "Ada", "colour": "1,2,3", "joined": True},
+            {"seat": 1, "token_hash": "h1", "name": "Bo", "colour": "4,5,6", "joined": True},
         ],
     )
     monkeypatch.setattr(service, "get_room", lambda s, code: room)
@@ -69,8 +72,11 @@ def test_state_never_exposes_seat_tokens(monkeypatch):
     assert body["version"] == 2
     assert body["moves"] == [0, 1]
     # The wire form of a seat carries no token, hashed or otherwise.
-    assert set(body["seats"][0]) == {"seat", "colour", "joined"}
+    assert set(body["seats"][0]) == {"seat", "name", "colour", "joined"}
     assert "tokenHash" not in body["seats"][0]
+    # Each seat keeps its own name and colour, so the two players never render alike.
+    assert [s["name"] for s in body["seats"]] == ["Ada", "Bo"]
+    assert body["seats"][0]["colour"] != body["seats"][1]["colour"]
 
 
 def test_move_forwards_fields_and_returns_state(monkeypatch):
@@ -98,6 +104,30 @@ def test_move_rejects_pass_sentinel_below_range():
     assert res.status_code == 422
 
 
+def test_profile_update_forwards_the_callers_fields(monkeypatch):
+    captured = {}
+
+    def fake_update(session, **kw):
+        captured.update(kw)
+        return _room(status="active")
+
+    monkeypatch.setattr(service, "update_profile", fake_update)
+    res = client.post(
+        "/rooms/ABCDEF/profile",
+        json={"token": "tok", "name": "Ada", "colour": "9,9,9"},
+    )
+    assert res.status_code == 200
+    assert captured == {"code": "ABCDEF", "token": "tok", "name": "Ada", "colour": "9,9,9"}
+
+
+def test_profile_update_rejects_an_overlong_name():
+    res = client.post(
+        "/rooms/ABCDEF/profile",
+        json={"token": "tok", "name": "x" * 200, "colour": "9,9,9"},
+    )
+    assert res.status_code == 422
+
+
 # --- authorize_move: pure enforcement, no DB ---
 
 
@@ -108,8 +138,8 @@ def _seats_with_tokens(t0: str, t1: str) -> list[dict]:
         return hashlib.sha256(t.encode()).hexdigest()
 
     return [
-        {"seat": 0, "token_hash": h(t0), "colour": "a", "joined": True},
-        {"seat": 1, "token_hash": h(t1), "colour": "b", "joined": True},
+        {"seat": 0, "token_hash": h(t0), "name": "Ada", "colour": "a", "joined": True},
+        {"seat": 1, "token_hash": h(t1), "name": "Bo", "colour": "b", "joined": True},
     ]
 
 

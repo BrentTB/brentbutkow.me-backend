@@ -89,8 +89,18 @@ def _unique_code(session: Session) -> str:
     )
 
 
+def _seat_entry(seat: int, token: str, name: str, colour: str) -> dict:
+    return {
+        "seat": seat,
+        "token_hash": _hash_token(token),
+        "name": name,
+        "colour": colour,
+        "joined": True,
+    }
+
+
 def create_room(
-    session: Session, *, game_id: str, colour: str, cell_count: int
+    session: Session, *, game_id: str, name: str, colour: str, cell_count: int
 ) -> tuple[Room, str]:
     """Open a room; the creator takes seat 0. Returns the room and the creator's raw token."""
     _prune_expired(session)
@@ -100,7 +110,7 @@ def create_room(
         game_id=game_id,
         cell_count=cell_count,
         moves=[],
-        seats=[{"seat": 0, "token_hash": _hash_token(token), "colour": colour, "joined": True}],
+        seats=[_seat_entry(0, token, name, colour)],
         status="waiting",
         expires_at=_now() + timedelta(seconds=settings.room_ttl_seconds),
     )
@@ -126,21 +136,31 @@ def get_room(session: Session, code: str) -> Room:
     return _live_room(session, code)
 
 
-def join_room(session: Session, *, code: str, colour: str) -> tuple[Room, str]:
+def join_room(session: Session, *, code: str, name: str, colour: str) -> tuple[Room, str]:
     """Claim the open second seat. Returns the room and the joiner's raw token."""
     room = _live_room(session, code, lock=True)
     if any(int(seat["seat"]) == 1 for seat in room.seats):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Room is full")
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     # Reassign (not mutate) so SQLAlchemy tracks the JSONB change.
-    room.seats = [
-        *room.seats,
-        {"seat": 1, "token_hash": _hash_token(token), "colour": colour, "joined": True},
-    ]
+    room.seats = [*room.seats, _seat_entry(1, token, name, colour)]
     room.status = "active"
     session.commit()
     session.refresh(room)
     return room, token
+
+
+def update_profile(session: Session, *, code: str, token: str, name: str, colour: str) -> Room:
+    """Change the caller's own seat name and colour, so the opponent sees it on their next read."""
+    room = _live_room(session, code, lock=True)
+    seat = seat_for_token(room.seats, token)
+    room.seats = [
+        {**entry, "name": name, "colour": colour} if int(entry["seat"]) == seat else entry
+        for entry in room.seats
+    ]
+    session.commit()
+    session.refresh(room)
+    return room
 
 
 def append_move(
