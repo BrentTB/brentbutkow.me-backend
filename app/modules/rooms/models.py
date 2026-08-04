@@ -30,6 +30,7 @@ class Room(Base):
             name="ck_rooms_outcome",
         ),
         CheckConstraint("first_seat IN (0,1)", name="ck_rooms_first_seat"),
+        CheckConstraint("owner_seat IN (0,1)", name="ck_rooms_owner_seat"),
         Index("uq_rooms_code", "code", unique=True),
         # Read-time expiry and write-time pruning both scan by expiry.
         Index("ix_rooms_expires_at", "expires_at"),
@@ -56,6 +57,12 @@ class Room(Base):
     # Which seat opens the game. Turn is (first_seat + moves played) % 2, so either seat can
     # start and a rematch can hand the advantage over.
     first_seat: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # Whose room it is: the seat that may change the settings and start a game. Seat 0 opens it,
+    # and if that player walks out the seat still here inherits it, so a room is never left with
+    # nobody able to start it.
+    owner_seat: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
     # Whether matchmaking may hand this room to a stranger looking for a game.

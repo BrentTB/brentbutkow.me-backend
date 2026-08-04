@@ -51,6 +51,7 @@ def _state(room: Room) -> RoomState:
         version=len(room.moves),
         expires_at=room.expires_at,
         first_seat=room.first_seat,
+        owner_seat=room.owner_seat,
         is_open=room.is_open,
         move_limit_seconds=room.move_limit_seconds,
         turn_ends_at=service.turn_deadline(room),
@@ -165,20 +166,23 @@ def leave_room(
 
 
 @router.post(
-    "/{code}/rematch",
+    "/{code}/start",
     response_model=RoomState,
-    summary="Play again with the same opponent",
-    description="Clears the board in this room and hands the opening move to the other seat.",
+    summary="Start a game in this room",
+    description=(
+        "Clears the board and begins play. Needs both players present, and refuses while a game is "
+        "already running. Either player may start it."
+    ),
     responses=_RATE_LIMITED,
 )
 @limiter.limit("30/minute")
-def rematch(
+def start_game(
     request: Request,
     body: TokenRequest,
     code: str = RoomCode,
     session: Session = Depends(get_session),
 ) -> RoomState:
-    return _state(service.rematch(session, code=code, token=body.token))
+    return _state(service.start_game(session, code=code, token=body.token))
 
 
 @router.post(

@@ -105,6 +105,8 @@ class RoomState(CamelModel):
     expires_at: datetime
     # Which seat opened this game, so a client can work out whose turn it is.
     first_seat: int
+    # Whose room it is: the seat that may change the settings and start a game.
+    owner_seat: int
     is_open: bool
     move_limit_seconds: int | None
     # When the player on turn runs out of time. Null when the room has no clock running.

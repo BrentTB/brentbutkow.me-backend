@@ -43,6 +43,7 @@ def _room(**over) -> Room:
         expires_at=datetime(2030, 1, 1, tzinfo=UTC),
         # An unsaved Room gets no column defaults, so the fixture spells them out.
         first_seat=0,
+        owner_seat=0,
         is_open=False,
         move_limit_seconds=None,
         turn_started_at=None,
@@ -342,15 +343,15 @@ def test_leave_forwards_the_token(monkeypatch):
     assert captured == {"code": "ABCDEF", "token": "tok"}
 
 
-def test_rematch_forwards_the_token(monkeypatch):
+def test_start_forwards_the_token(monkeypatch):
     captured = {}
 
-    def fake_rematch(session, **kw):
+    def fake_start(session, **kw):
         captured.update(kw)
         return _room(status="active")
 
-    monkeypatch.setattr(service, "rematch", fake_rematch)
-    res = client.post("/rooms/ABCDEF/rematch", json={"token": "tok"})
+    monkeypatch.setattr(service, "start_game", fake_start)
+    res = client.post("/rooms/ABCDEF/start", json={"token": "tok"})
     assert res.status_code == 200
     assert captured == {"code": "ABCDEF", "token": "tok"}
 
@@ -550,7 +551,7 @@ def test_settings_forwards_the_new_terms(monkeypatch):
     assert body["moveLimitSeconds"] == 60
 
 
-def test_settings_rejects_a_seat_that_did_not_open_the_room():
+def test_settings_rejects_a_seat_that_does_not_own_the_room():
     seats = _seats_with_tokens("opener", "joiner")
     room = _room(seats=seats, status="waiting")
     session = _FakeSession()
@@ -593,3 +594,132 @@ def test_settings_are_settled_once_the_game_starts():
         assert exc.value.status_code == 409
     finally:
         service._live_room = original  # type: ignore[assignment]
+
+
+# --- nothing starts on its own ---
+
+
+def _room_with_both(**over) -> Room:
+    """A room both players are sitting in, fresh enough to count as present."""
+    now = service.now_utc().isoformat()
+    seats = [{**entry, "last_seen": now} for entry in _seats_with_tokens("opener", "joiner")]
+    return _room(seats=seats, **over)
+
+
+def _patch_live(room: Room):
+    """Points the room lookup at one object, so a start can be driven without a database."""
+    original = service._live_room
+    service._live_room = lambda _s, _c, lock=False: room  # type: ignore[assignment]
+    return original
+
+
+def test_filling_the_second_seat_does_not_start_the_game():
+    room = _room(status="waiting", seats=_seats_with_tokens("opener", "joiner")[:1])
+    session = _FakeSession()
+    original = _patch_live(room)
+    try:
+        service._claim_seat(session, room, name="Bo", colour="4,5,6")
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    # Ready, not running: somebody still has to press start, which is what keeps the settings open.
+    assert room.status == "waiting"
+    assert room.turn_started_at is None
+
+
+def test_starting_clears_the_last_game_and_begins_play():
+    room = _room_with_both(status="finished", moves=[1, 2, 3], outcome="win", winner_seat=0)
+    original = _patch_live(room)
+    try:
+        service.start_game(_FakeSession(), code="ABCDEF", token="opener")
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.status == "active"
+    assert room.moves == []
+    assert room.outcome is None
+    assert room.winner_seat is None
+    assert room.turn_started_at is not None
+
+
+def test_only_the_owner_may_start():
+    room = _room_with_both(status="waiting")
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.start_game(_FakeSession(), code="ABCDEF", token="joiner")
+        assert exc.value.status_code == 403
+        service.start_game(_FakeSession(), code="ABCDEF", token="opener")
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.status == "active"
+
+
+def test_the_room_passes_to_whoever_is_left_when_the_owner_walks_out():
+    room = _room_with_both(status="waiting")
+    original = _patch_live(room)
+    try:
+        service.leave_room(_FakeSession(), code="ABCDEF", token="opener")
+        assert room.owner_seat == 1
+        # The seat that stayed can now set the terms, and a stranger filling seat 0 cannot.
+        service.update_settings(
+            _FakeSession(),
+            code="ABCDEF",
+            token="joiner",
+            first_seat=1,
+            is_open=True,
+            move_limit_seconds=None,
+        )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.first_seat == 1
+
+
+def test_the_owner_keeps_the_room_when_the_other_player_leaves():
+    room = _room_with_both(status="waiting")
+    original = _patch_live(room)
+    try:
+        service.leave_room(_FakeSession(), code="ABCDEF", token="joiner")
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.owner_seat == 0
+
+
+def test_starting_needs_both_players_here():
+    room = _room(status="waiting", seats=_seats_with_tokens("opener", "joiner")[:1])
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.start_game(_FakeSession(), code="ABCDEF", token="opener")
+        assert exc.value.status_code == 409
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+
+
+def test_starting_a_running_game_is_refused():
+    room = _room_with_both(status="active")
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.start_game(_FakeSession(), code="ABCDEF", token="opener")
+        assert exc.value.status_code == 409
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+
+
+def test_the_owner_may_change_settings_after_a_game_as_well_as_before():
+    for state in ("waiting", "finished"):
+        room = _room_with_both(status=state)
+        original = _patch_live(room)
+        try:
+            service.update_settings(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                first_seat=1,
+                is_open=True,
+                move_limit_seconds=60,
+            )
+        finally:
+            service._live_room = original  # type: ignore[assignment]
+        assert room.first_seat == 1
+        assert room.is_open is True
+        assert room.move_limit_seconds == 60

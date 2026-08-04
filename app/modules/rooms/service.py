@@ -271,9 +271,8 @@ def _claim_seat(session: Session, room: Room, *, name: str, colour: str) -> tupl
     # rather than added to, so the room does not accumulate ghosts.
     kept = [e for e in room.seats if int(e["seat"]) != seat]
     room.seats = [*kept, _seat_entry(seat, token, name, colour)]
-    if len(present_seats(room.seats, now)) == MAX_SEATS:
-        room.status = "active"
-        room.turn_started_at = now
+    # Filling the second seat makes the room ready, not running: somebody still has to start it,
+    # which is what keeps the settings open to change until then.
     session.commit()
     session.refresh(room)
     return room, token
@@ -296,6 +295,10 @@ def leave_room(session: Session, *, code: str, token: str) -> Room:
     room = _live_room(session, code, lock=True)
     seat = seat_for_token(room.seats, token)
     room.seats = [{**e, "joined": False} if int(e["seat"]) == seat else e for e in room.seats]
+    # The room outlives its opener: whoever is still sitting here takes it over, rather than the
+    # settings and the start passing to the next stranger who fills the empty seat.
+    if seat == room.owner_seat:
+        room.owner_seat = other_seat(seat)
     if room.status == "active":
         room.status = "finished"
         room.outcome = Outcome_FORFEIT
@@ -332,18 +335,18 @@ def update_settings(
     """
     Changes a waiting room's settings, for the player who opened it.
 
-    Only before the game starts, and only from seat 0: once both players are in, the terms they
-    agreed to are not one side's to rewrite.
+    Only from the owner's seat, and only between games: mid-game the terms are settled, but before a
+    game starts, including after one has finished, the owner may still change them.
     """
     room = _live_room(session, code, lock=True)
     seat = seat_for_token(room.seats, token)
-    if seat != 0:
+    if seat != room.owner_seat:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Only the room's opener can change this"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the room's owner can change this"
         )
-    if room.status != "waiting":
+    if room.status == "active":
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="The game has already started"
+            status_code=status.HTTP_409_CONFLICT, detail="A game is already running"
         )
     room.first_seat = first_seat
     room.is_open = is_open
@@ -353,24 +356,32 @@ def update_settings(
     return room
 
 
-def rematch(session: Session, *, code: str, token: str) -> Room:
+def start_game(session: Session, *, code: str, token: str) -> Room:
     """
-    Starts another game between the same two players, with the other seat opening this time.
+    Starts a game in a room that is ready for one, clearing whatever the last game left behind.
 
-    Either player can call it, so nobody waits on an agreement neither side can see. Seats keep
-    their names and colours, so only the board and the outcome reset.
+    The gate every game goes through, the first and the fifth alike. Nothing begins on its own, so
+    the room's settings stay open to change right up to the moment start is pressed, and both
+    players see the terms before a move is possible. The owner's call, since the terms are theirs.
     """
     room = _live_room(session, code, lock=True)
-    seat_for_token(room.seats, token)  # players only
+    seat = seat_for_token(room.seats, token)
+    if seat != room.owner_seat:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the room's owner can start a game"
+        )
     now = now_utc()
     if len(present_seats(room.seats, now)) < MAX_SEATS:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Both players have to be here"
         )
+    if room.status == "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="A game is already running"
+        )
     room.moves = []
     room.outcome = None
     room.winner_seat = None
-    room.first_seat = other_seat(room.first_seat)
     room.status = "active"
     room.turn_started_at = now
     session.commit()
