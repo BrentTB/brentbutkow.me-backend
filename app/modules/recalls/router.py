@@ -43,12 +43,9 @@ from app.modules.recalls.service import (
     run_uk_ingest,
     search_companies,
 )
+from app.openapi import RATE_LIMITED
 
 router = APIRouter()
-
-_RATE_LIMITED: dict[int | str, dict[str, Any]] = {
-    429: {"description": "Rate limit exceeded — 60 requests/min per IP."}
-}
 
 
 def _validate_date_range(since: date | None, until: date | None) -> None:
@@ -127,7 +124,7 @@ def recall_filters(
     response_model=RecallListResult,
     summary="List recalls",
     description="Most-recent-first, paginated. All filters are optional and combine (AND).",
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def get_recalls(
     response: Response,
@@ -242,7 +239,7 @@ def get_recalls(
         "plus anomaly callouts, a short-horizon volume forecast, and the last successful ingest "
         "time."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_stats(
     response: Response,
@@ -264,7 +261,7 @@ def recall_stats(
         "would return and grey out the dead ends. Company counts come from /recalls/companies "
         "(a type-ahead)."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_facets(
     response: Response,
@@ -282,7 +279,7 @@ def recall_facets(
     response_model=TrendResult,
     summary="Monthly trend",
     description="Monthly recall counts, optionally grouped by cause category or data source.",
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_trend(
     response: Response,
@@ -387,7 +384,7 @@ def recall_trend(
         "(company is a facet too, so its own selection is excluded). Ranked by count — feeds the "
         "company filter's type-ahead."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_companies(
     response: Response,
@@ -413,7 +410,7 @@ def recall_companies(
         "Themes discovered across recalls (k-means clusters over neural text embeddings), largest "
         "first. Scope the list or trend to one with `topic=<slug>`."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_topics(
     response: Response,
@@ -433,7 +430,7 @@ def recall_topics(
         "window, or the same FDA event). Outbreaks (multi-recall, pathogen-driven) come first. "
         "Scope the list or trend to one with `event=<slug>`."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_events(
     response: Response,
@@ -452,7 +449,7 @@ def recall_events(
     response_model=RecallOut,
     summary="Get one recall",
     description="A single recall by its source + identifier - backs the recall detail page.",
-    responses={**_RATE_LIMITED, 404: {"description": "No recall with that source + number."}},
+    responses={**RATE_LIMITED, 404: {"description": "No recall with that source + number."}},
 )
 def recall_detail(
     source: RecallSource,
@@ -478,7 +475,7 @@ def recall_detail(
         "Recalls most similar to this one by reason/product text — precomputed cosine nearest "
         "neighbours in neural embedding space."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 def recall_similar(
     source: RecallSource,
@@ -500,7 +497,7 @@ def recall_similar(
     summary="Trigger an openFDA ingest",
     description="Fetches the latest recalls from openFDA and upserts them. Bearer-protected.",
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest(session: Session = Depends(get_session)) -> IngestResult:
     return run_fda_ingest(session)
@@ -515,7 +512,7 @@ def ingest(session: Session = Depends(get_session)) -> IngestResult:
         "Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
     return run_fsis_ingest(session)
@@ -529,7 +526,7 @@ def ingest_fsis(session: Session = Depends(get_session)) -> IngestResult:
         "Fetches the latest food alerts from the UK FSA and upserts them. Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
     return run_uk_ingest(session)
@@ -544,7 +541,7 @@ def ingest_uk(session: Session = Depends(get_session)) -> IngestResult:
         "human-food recalls, and upserts them. Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
     return run_ncc_ingest(session)
@@ -559,7 +556,7 @@ def ingest_ncc(session: Session = Depends(get_session)) -> IngestResult:
         "(Woolworths / Shoprite / NRCS). Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
     return run_seed_ingest(session)
@@ -574,7 +571,7 @@ def ingest_seed(session: Session = Depends(get_session)) -> IngestResult:
         "upserts them. Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_cfia(session: Session = Depends(get_session)) -> IngestResult:
     return run_cfia_ingest(session)
@@ -590,7 +587,7 @@ def ingest_cfia(session: Session = Depends(get_session)) -> IngestResult:
         "national food-authority link where available, and upserts them. Bearer-protected."
     ),
     dependencies=[Depends(require_bearer)],
-    responses={**_RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
+    responses={**RATE_LIMITED, 401: {"description": "Missing or invalid bearer token."}},
 )
 def ingest_rasff(session: Session = Depends(get_session)) -> IngestResult:
     return run_rasff_ingest(session)

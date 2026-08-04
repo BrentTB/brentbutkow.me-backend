@@ -8,6 +8,7 @@ from app.db import Base
 from app.modules.contact import models as contact_models  # noqa: F401  (registers tables)
 from app.modules.nullspace import models as nullspace_models  # noqa: F401  (registers tables)
 from app.modules.recalls import models  # noqa: F401  (registers tables on Base.metadata)
+from app.modules.rooms import models as rooms_models  # noqa: F401  (registers tables)
 
 config = context.config
 # Single source of truth for the URL — app settings (reads DATABASE_URL, normalizes to psycopg).
