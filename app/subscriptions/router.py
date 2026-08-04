@@ -1,11 +1,11 @@
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.openapi import RATE_LIMITED
 from app.rate_limit import limiter
 from app.subscriptions import service
 from app.subscriptions.schemas import SubscriptionCreate, SubscriptionPatch
@@ -13,8 +13,6 @@ from app.subscriptions.schemas import SubscriptionCreate, SubscriptionPatch
 router = APIRouter()
 # uvicorn's configured logger so these land alongside the access logs.
 logger = logging.getLogger("uvicorn.error")
-
-_RATE_LIMITED: dict[int | str, dict[str, Any]] = {429: {"description": "Rate limit exceeded."}}
 
 # The service layer returns (status_code, body) so it stays framework-agnostic and unit-testable
 # without a request; the router just forwards that to the client.
@@ -34,7 +32,7 @@ _TOKEN_HEADER = "X-Subscription-Token"
         "state, so the response never reveals whether an email is already registered "
         "(422 on validation error)."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("5/minute")
 def create_subscription(

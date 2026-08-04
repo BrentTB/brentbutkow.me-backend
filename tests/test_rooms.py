@@ -1,13 +1,18 @@
+import importlib.util
+import inspect
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import CheckConstraint
 
 from app.config import settings
 from app.db import get_session
 from app.main import app
-from app.modules.rooms import service
+from app.modules.rooms import constants, service
+from app.modules.rooms.constants import RoomStatus
 from app.modules.rooms.models import Room
 from app.modules.rooms.service import (
     CODE_ALPHABET,
@@ -222,11 +227,13 @@ def test_authorize_rejects_out_of_range_cell():
 
 
 def test_default_placement_rejects_pass_and_occupied():
+    # Takes the full MoveValidator signature, seat included, so it is the registry's fallback value
+    # rather than a special case.
     with pytest.raises(InvalidMove):
-        default_placement_check([0, 1], -1, 64)  # pass is not legal for a placement game
+        default_placement_check([0, 1], -1, 0, 64)  # pass is not legal for a placement game
     with pytest.raises(InvalidMove):
-        default_placement_check([0, 1], 1, 64)  # occupied
-    default_placement_check([0, 1], 2, 64)  # a free in-range cell is fine
+        default_placement_check([0, 1], 1, 0, 64)  # occupied
+    default_placement_check([0, 1], 2, 0, 64)  # a free in-range cell is fine
 
 
 def test_registered_validator_is_used(monkeypatch):
@@ -426,9 +433,14 @@ class _FakeSession:
 
     def __init__(self):
         self.commits = 0
+        self.flushes = 0
 
     def commit(self):
         self.commits += 1
+
+    def flush(self):
+        # The clock and presence checks flush, so the caller's commit stays the only boundary.
+        self.flushes += 1
 
     def refresh(self, _obj):
         pass
@@ -703,6 +715,58 @@ def test_starting_a_running_game_is_refused():
         assert exc.value.status_code == 409
     finally:
         service._live_room = original  # type: ignore[assignment]
+
+
+# --- the model and the migrations spell the same SQL ---
+
+
+def _migration(revision: str):
+    """Loads a migration by revision id; alembic/versions is not an importable package."""
+    root = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    path = next(p for p in root.glob("*.py") if p.name.startswith(revision))
+    spec = importlib.util.spec_from_file_location(f"migration_{revision}", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _check_constraints() -> dict[str, str]:
+    return {
+        arg.name: str(arg.sqltext)
+        for arg in Room.__table_args__
+        if isinstance(arg, CheckConstraint) and arg.name
+    }
+
+
+def test_the_status_and_outcome_checks_match_the_enums_they_come_from():
+    # The enums are the source; a member added or renamed without a migration shows up here.
+    assert constants.ROOM_STATUS_CHECK == "status IN ('waiting','active','finished','abandoned')"
+    assert (
+        constants.ROOM_OUTCOME_CHECK
+        == "outcome IS NULL OR outcome IN ('win','draw','timeout','forfeit')"
+    )
+    checks = _check_constraints()
+    assert checks["ck_rooms_status"] == constants.ROOM_STATUS_CHECK
+    assert checks["ck_rooms_outcome"] == constants.ROOM_OUTCOME_CHECK
+    # The same text the table was created with, so the live constraint still admits every member.
+    created = _migration("a0b1c2d3e4f5")
+    assert constants.ROOM_STATUS_CHECK in inspect.getsource(created.upgrade)
+    outcomes = _migration("c5d6e7f8a9b0")
+    assert constants.ROOM_OUTCOME_CHECK in inspect.getsource(outcomes.upgrade)
+
+
+def test_the_winner_seat_check_and_open_index_match_their_migration():
+    migration = _migration("e7f8a9b0c1d2")
+    assert _check_constraints()["ck_rooms_winner_seat"] == constants.ROOM_WINNER_SEAT_CHECK
+    assert migration._WINNER_SEAT_CHECK == constants.ROOM_WINNER_SEAT_CHECK
+    assert migration._OPEN_INDEX_WHERE == constants.ROOM_OPEN_INDEX_WHERE
+    assert tuple(migration._OPEN_INDEX_COLUMNS) == constants.ROOM_OPEN_INDEX_COLUMNS
+    index = next(i for i in Room.__table__.indexes if i.name == "ix_rooms_open")
+    assert tuple(c.name for c in index.columns) == constants.ROOM_OPEN_INDEX_COLUMNS
+    assert str(index.dialect_options["postgresql"]["where"]) == constants.ROOM_OPEN_INDEX_WHERE
+    # Matchmaking reads exactly the statuses the index admits.
+    assert constants.MATCHABLE_STATUSES == (constants.RoomStatus.waiting, RoomStatus.finished)
 
 
 def test_the_owner_may_change_settings_after_a_game_as_well_as_before():

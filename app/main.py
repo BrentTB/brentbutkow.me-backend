@@ -29,7 +29,9 @@ Ingests [openFDA](https://open.fda.gov/apis/food/enforcement/) and USDA FSIS (US
 classifies each by likely cause, and serves them to the
 [brentbutkow.me](https://brentbutkow.me) dashboard.
 
-- Public reads are rate-limited to **60 requests/min per IP**.
+- Public endpoints are rate-limited **per IP**, at **60 requests/min** unless the endpoint sets its
+  own — writes are tighter, and the multiplayer polling route is far looser. Each route's own limit
+  is stated in its description below.
 - The `POST /recalls/ingest/*` endpoints are **bearer-protected** (used by the daily ingest job).
 """
 

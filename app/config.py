@@ -1,4 +1,6 @@
-from pydantic import field_validator
+from typing import Any
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,13 +43,31 @@ class Settings(BaseSettings):
     # enough to ride out a slow network on a two-second poll; short enough that a closed tab
     # shows up while the opponent is still watching.
     room_presence_timeout_seconds: int = 20
+    # How long a seat may go quiet before a game in progress is forfeited to the player still here.
+    # Far wider than the presence window on purpose: presence is a display signal, and a browser
+    # throttles a background tab's polling to roughly once a minute, so a player who switches tabs
+    # must not lose a game they are still playing.
+    room_forfeit_timeout_seconds: int = 300
 
-    @field_validator("allowed_origin_regex", mode="after")
+    @model_validator(mode="before")
     @classmethod
-    def _blank_regex_is_none(cls, value: str | None) -> str | None:
-        # `ALLOWED_ORIGIN_REGEX=` (blank) loads as "", which Starlette would compile into an empty
-        # regex run uselessly on every request; treat blank as unset so the None path applies.
-        return value if value and value.strip() else None
+    def _blank_means_unset(cls, values: Any) -> Any:
+        """
+        A blank value means "use the default".
+
+        `op inject` renders a 1Password field that holds nothing as an empty string, so a template
+        line left blank on purpose arrives as `SETTING=`. Pydantic counts that as a value it must
+        parse: an int field rejects it outright, and a `str | None` field lands on `""` rather than
+        the None its default promises. Dropping the key leaves the field absent, which is the only
+        state that actually reaches a default.
+        """
+        if not isinstance(values, dict):
+            return values
+        return {
+            key: value
+            for key, value in values.items()
+            if not (isinstance(value, str) and not value.strip())
+        }
 
     @property
     def origins(self) -> list[str]:

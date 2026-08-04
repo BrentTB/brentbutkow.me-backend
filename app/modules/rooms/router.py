@@ -1,12 +1,12 @@
-from typing import Any
-
 from fastapi import APIRouter, Depends, Header, Path, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.modules.rooms import service
+from app.modules.rooms.constants import RoomOutcome, RoomStatus
 from app.modules.rooms.models import Room
 from app.modules.rooms.schemas import (
+    MAX_TOKEN,
     CreateRoomRequest,
     JoinRoomRequest,
     MatchmakeRequest,
@@ -19,14 +19,36 @@ from app.modules.rooms.schemas import (
     SettingsRequest,
     TokenRequest,
 )
+from app.openapi import RATE_LIMITED
 from app.rate_limit import limiter
 
 router = APIRouter()
 
-_RATE_LIMITED: dict[int | str, dict[str, Any]] = {429: {"description": "Rate limit exceeded."}}
+# Length and charset both, from the alphabet codes are drawn out of: a code no server could have
+# minted is a 422 before it costs a query, and third parties read the alphabet off the schema.
+RoomCode = Path(
+    min_length=service.CODE_LENGTH,
+    max_length=service.CODE_LENGTH,
+    pattern=f"^[{service.CODE_ALPHABET}]{{{service.CODE_LENGTH}}}$",
+)
 
-# Every code the server mints is this long, so anything else cannot name a room.
-RoomCode = Path(min_length=service.CODE_LENGTH, max_length=service.CODE_LENGTH)
+# A stricter, wider window alongside the per-minute limit: unauthenticated room creation with a
+# day-long TTL is otherwise an open invitation to leave a day's worth of rows for matchmaking to
+# walk through.
+_CREATE_LIMITS = "20/minute;100/hour"
+
+
+def _status(room: Room) -> RoomStatus:
+    """The room's status as the enum the responses declare.
+
+    The column is a plain string with a CHECK behind it, so this is where a value that somehow got
+    past the constraint becomes a loud 500 rather than a status no client knows how to read.
+    """
+    return RoomStatus(room.status)
+
+
+def _outcome(room: Room) -> RoomOutcome | None:
+    return RoomOutcome(room.outcome) if room.outcome is not None else None
 
 
 def _state(room: Room) -> RoomState:
@@ -47,7 +69,7 @@ def _state(room: Room) -> RoomState:
         cell_count=room.cell_count,
         moves=list(room.moves),
         seats=seats,
-        status=room.status,
+        status=_status(room),
         version=len(room.moves),
         expires_at=room.expires_at,
         first_seat=room.first_seat,
@@ -55,7 +77,7 @@ def _state(room: Room) -> RoomState:
         is_open=room.is_open,
         move_limit_seconds=room.move_limit_seconds,
         turn_ends_at=service.turn_deadline(room),
-        outcome=room.outcome,
+        outcome=_outcome(room),
         winner_seat=room.winner_seat,
     )
 
@@ -67,7 +89,7 @@ def _credentials(room: Room, seat: int, token: str) -> RoomCredentials:
         cell_count=room.cell_count,
         seat=seat,
         token=token,
-        status=room.status,
+        status=_status(room),
     )
 
 
@@ -75,10 +97,13 @@ def _credentials(room: Room, seat: int, token: str) -> RoomCredentials:
     "",
     response_model=RoomCredentials,
     summary="Open a multiplayer room",
-    description="Creates a room for the given game and claims seat 0. Returns your seat token.",
-    responses=_RATE_LIMITED,
+    description=(
+        "Creates a room for the given game and claims seat 0, which owns the room. Returns your "
+        "seat token. Public, rate-limited to 20/min and 100/hour per IP."
+    ),
+    responses=RATE_LIMITED,
 )
-@limiter.limit("20/minute")
+@limiter.limit(_CREATE_LIMITS)
 def create_room(
     request: Request,
     body: CreateRoomRequest,
@@ -103,11 +128,13 @@ def create_room(
     summary="Find a game against anyone",
     description=(
         "Joins the longest-waiting open room for this game, or opens one and waits when there is "
-        "nobody to match with. Returns your seat token either way."
+        "nobody to match with. Returns your seat token either way. `firstSeat` and "
+        "`moveLimitSeconds` apply only to a room this opens — joining somebody means playing by "
+        "the settings they chose. Public, rate-limited to 20/min and 100/hour per IP."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
-@limiter.limit("20/minute")
+@limiter.limit(_CREATE_LIMITS)
 def matchmake(
     request: Request,
     body: MatchmakeRequest,
@@ -130,8 +157,11 @@ def matchmake(
     "/{code}/join",
     response_model=RoomCredentials,
     summary="Join a room by code",
-    description="Claims the room's open seat. Returns your seat token.",
-    responses=_RATE_LIMITED,
+    description=(
+        "Claims the room's open seat. Returns your seat token. 409s while a game is running, and "
+        "when both seats are taken; a room whose last game ended clears as you sit down."
+    ),
+    responses=RATE_LIMITED,
 )
 @limiter.limit("20/minute")
 def join_room(
@@ -151,9 +181,9 @@ def join_room(
     summary="Give up your seat",
     description=(
         "Frees the caller's seat. Walking out of a game in progress hands it to the other player; "
-        "leaving before it starts just reopens the seat."
+        "leaving before it starts, or after it has ended, just reopens the seat."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("30/minute")
 def leave_room(
@@ -170,10 +200,10 @@ def leave_room(
     response_model=RoomState,
     summary="Start a game in this room",
     description=(
-        "Clears the board and begins play. Needs both players present, and refuses while a game is "
-        "already running. Either player may start it."
+        "Clears the board and begins play. Only the room's owner may start it, and only with both "
+        "players present; refuses while a game is already running."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("30/minute")
 def start_game(
@@ -188,12 +218,13 @@ def start_game(
 @router.post(
     "/{code}/settings",
     response_model=RoomState,
-    summary="Change a waiting room's settings",
+    summary="Change the room's settings between games",
     description=(
-        "Updates the opening move, clock and open flag. Only before the game starts, and only "
-        "for the player who opened the room."
+        "Replaces the opening seat, clock and open flag — all three are required, so a partial "
+        "body is a 422 rather than a reset of what it left out. Only the room's owner may call it, "
+        "and only between games: before the first one, and after any game has ended."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("30/minute")
 def update_settings(
@@ -218,7 +249,7 @@ def update_settings(
     response_model=RoomState,
     summary="Update your seat's name and colour",
     description="Changes the caller's own name and colour. The opponent sees it on their next poll",
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("60/minute")
 def update_profile(
@@ -239,15 +270,17 @@ def update_profile(
     summary="Read room state",
     description=(
         "The current move list and seats, polled by both clients. Send your seat token as "
-        "`X-Seat-Token` so the room knows you are still here; without it the read is anonymous."
+        "`X-Seat-Token` so the room knows you are still here; without it the read is anonymous. "
+        "Reading also settles the game: a turn whose clock ran out, or an opponent gone long "
+        "enough to forfeit, is decided here."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("240/minute")
 def get_room(
     request: Request,
     code: str = RoomCode,
-    x_seat_token: str = Header(default=""),
+    x_seat_token: str = Header(default="", max_length=MAX_TOKEN),
     session: Session = Depends(get_session),
 ) -> RoomState:
     # A player's own poll doubles as their heartbeat, so presence costs no extra request.
@@ -261,10 +294,14 @@ def get_room(
     response_model=MoveResult,
     summary="Submit a move",
     description=(
-        "Appends a move after checking the seat token, that it is your turn, that your version is "
-        "current, and that the move is legal for the game. Rejects otherwise (403/409/422)."
+        "Appends a move after checking the seat token (403), that your version is current (409), "
+        "that it is your turn (403), and that the move is legal for the game (422). Whether the "
+        "move ended the game is the server's own reading wherever that game has a judge — for "
+        "`tic-tac-toe` the `finished` and `won` fields are ignored. Games with no judge keep the "
+        "client's verdict. Resubmitting the move the server already applied returns that state "
+        "rather than an error, so a lost reply is safe to retry."
     ),
-    responses=_RATE_LIMITED,
+    responses=RATE_LIMITED,
 )
 @limiter.limit("120/minute")
 def submit_move(
@@ -285,7 +322,9 @@ def submit_move(
     return MoveResult(
         version=len(room.moves),
         moves=list(room.moves),
-        status=room.status,
-        outcome=room.outcome,
+        status=_status(room),
+        # The move restarted the clock, so the mover gets the new deadline in the same reply.
+        turn_ends_at=service.turn_deadline(room),
+        outcome=_outcome(room),
         winner_seat=room.winner_seat,
     )

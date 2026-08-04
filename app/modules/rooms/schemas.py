@@ -1,22 +1,42 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from app.camel import CamelModel
+from app.config import settings
+from app.modules.rooms.constants import RoomOutcome, RoomStatus
 
 _MAX_GAME_ID = 40
 _MAX_COLOUR = 32
 _MAX_NAME = 24
-_MAX_TOKEN = 128
+MAX_TOKEN = 128
 # Generous cell bound so future games with bigger boards fit; the room's own cell_count is the real
 # limit the default legality check applies. -1 is the reserved pass sentinel (games that allow it
 # validate it themselves).
 _MIN_MOVE = -1
 _MAX_MOVE = 4095
 _MAX_CELLS = 4096
-# A clock has to leave time to look at the board, and a day is already the room's whole TTL.
+# A clock has to leave time to look at the board.
 _MIN_MOVE_LIMIT = 5
-_MAX_MOVE_LIMIT = 86400
+
+
+def _within_room_lifetime(value: int | None) -> int | None:
+    """Keeps a turn deadline inside the room's own lifetime.
+
+    A clock longer than `ROOM_TTL_SECONDS` gives the player on turn a deadline the room does not
+    live to see: every read 410s and the game disappears mid-turn. Read from config on each
+    validation rather than baked in, so lowering the TTL tightens this with it.
+    """
+    ttl = settings.room_ttl_seconds
+    if value is not None and value > ttl:
+        raise ValueError(f"cannot exceed the room lifetime of {ttl} seconds")
+    return value
+
+
+MoveLimitSeconds = Annotated[
+    int | None, Field(ge=_MIN_MOVE_LIMIT), AfterValidator(_within_room_lifetime)
+]
 
 
 class SeatOut(CamelModel):
@@ -31,7 +51,7 @@ class SeatOut(CamelModel):
 class RoomOptions(CamelModel):
     first_seat: int = Field(default=0, ge=0, le=1)
     is_open: bool = False
-    move_limit_seconds: int | None = Field(default=None, ge=_MIN_MOVE_LIMIT, le=_MAX_MOVE_LIMIT)
+    move_limit_seconds: MoveLimitSeconds = None
 
 
 class CreateRoomRequest(RoomOptions):
@@ -49,7 +69,7 @@ class MatchmakeRequest(CamelModel):
     # These apply only when nobody is waiting and this player opens the room instead. Joining
     # somebody means playing by the settings they already chose.
     first_seat: int = Field(default=0, ge=0, le=1)
-    move_limit_seconds: int | None = Field(default=None, ge=_MIN_MOVE_LIMIT, le=_MAX_MOVE_LIMIT)
+    move_limit_seconds: MoveLimitSeconds = None
 
 
 class JoinRoomRequest(CamelModel):
@@ -58,23 +78,33 @@ class JoinRoomRequest(CamelModel):
 
 
 class ProfileRequest(CamelModel):
-    token: str = Field(min_length=1, max_length=_MAX_TOKEN)
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
     name: str = Field(default="", max_length=_MAX_NAME)
     colour: str = Field(min_length=1, max_length=_MAX_COLOUR)
 
 
 class SettingsRequest(RoomOptions):
-    token: str = Field(min_length=1, max_length=_MAX_TOKEN)
+    """A full replacement of the room's settings, not a patch.
+
+    Every option is required, so a body that omits one is a 422 rather than a silent reset of the
+    field it left out — inherited defaults would quietly hand back seat 0, a closed room and no
+    clock to a client that only meant to change the clock.
+    """
+
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
+    first_seat: int = Field(ge=0, le=1)
+    is_open: bool
+    move_limit_seconds: MoveLimitSeconds
 
 
 class TokenRequest(CamelModel):
     """Just proof of a seat, for the actions that need nothing else."""
 
-    token: str = Field(min_length=1, max_length=_MAX_TOKEN)
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
 
 
 class MoveRequest(CamelModel):
-    token: str = Field(min_length=1, max_length=_MAX_TOKEN)
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
     move: int = Field(ge=_MIN_MOVE, le=_MAX_MOVE)
     expected_version: int = Field(ge=0)
     # The client runs the engine and knows when the game is over; the server just records it.
@@ -90,7 +120,7 @@ class RoomCredentials(CamelModel):
     cell_count: int
     seat: int
     token: str
-    status: str
+    status: RoomStatus
 
 
 # The public view, safe to poll — seat tokens are never included.
@@ -100,7 +130,7 @@ class RoomState(CamelModel):
     cell_count: int
     moves: list[int]
     seats: list[SeatOut]
-    status: str
+    status: RoomStatus
     version: int
     expires_at: datetime
     # Which seat opened this game, so a client can work out whose turn it is.
@@ -111,13 +141,16 @@ class RoomState(CamelModel):
     move_limit_seconds: int | None
     # When the player on turn runs out of time. Null when the room has no clock running.
     turn_ends_at: datetime | None
-    outcome: str | None
+    outcome: RoomOutcome | None
     winner_seat: int | None
 
 
 class MoveResult(CamelModel):
     version: int
     moves: list[int]
-    status: str
-    outcome: str | None
+    status: RoomStatus
+    # The accepted move restarts the clock, so the mover's own reply carries the new deadline;
+    # without it their client keeps counting the turn it just ended. Null when there is no clock.
+    turn_ends_at: datetime | None
+    outcome: RoomOutcome | None
     winner_seat: int | None

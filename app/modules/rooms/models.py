@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Integer, String, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.modules.rooms.constants import (
+    ROOM_FIRST_SEAT_CHECK,
+    ROOM_OPEN_INDEX_COLUMNS,
+    ROOM_OPEN_INDEX_WHERE,
+    ROOM_OUTCOME_CHECK,
+    ROOM_OWNER_SEAT_CHECK,
+    ROOM_STATUS_CHECK,
+    ROOM_WINNER_SEAT_CHECK,
+    RoomStatus,
+    SeatEntry,
+    now_utc,
+)
 
 
 class Room(Base):
@@ -21,46 +33,49 @@ class Room(Base):
 
     __tablename__ = "rooms"
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('waiting','active','finished','abandoned')",
-            name="ck_rooms_status",
-        ),
-        CheckConstraint(
-            "outcome IS NULL OR outcome IN ('win','draw','timeout','forfeit')",
-            name="ck_rooms_outcome",
-        ),
-        CheckConstraint("first_seat IN (0,1)", name="ck_rooms_first_seat"),
-        CheckConstraint("owner_seat IN (0,1)", name="ck_rooms_owner_seat"),
+        CheckConstraint(ROOM_STATUS_CHECK, name="ck_rooms_status"),
+        CheckConstraint(ROOM_OUTCOME_CHECK, name="ck_rooms_outcome"),
+        CheckConstraint(ROOM_FIRST_SEAT_CHECK, name="ck_rooms_first_seat"),
+        CheckConstraint(ROOM_OWNER_SEAT_CHECK, name="ck_rooms_owner_seat"),
+        CheckConstraint(ROOM_WINNER_SEAT_CHECK, name="ck_rooms_winner_seat"),
         Index("uq_rooms_code", "code", unique=True),
         # Read-time expiry and write-time pruning both scan by expiry.
         Index("ix_rooms_expires_at", "expires_at"),
-        # Matchmaking takes the oldest room still open and waiting, for one game.
+        # Matchmaking takes the oldest matchable open room, for one game and board size.
         Index(
             "ix_rooms_open",
-            "game_id",
-            "created_at",
-            postgresql_where=text("is_open AND status = 'waiting'"),
+            *ROOM_OPEN_INDEX_COLUMNS,
+            postgresql_where=text(ROOM_OPEN_INDEX_WHERE),
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Wider than the six characters the server mints and the router accepts, which leaves room for a
+    # longer or prefixed code without a migration.
     code: Mapped[str] = mapped_column(String(12), nullable=False)
     game_id: Mapped[str] = mapped_column(String(40), nullable=False)
     cell_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Ordered wire moves; a whole game replays from this list. Opaque to the server.
-    moves: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    # [{ seat, token_hash, name, colour, joined, last_seen }] — only each token's sha256 is
-    # stored, and last_seen is an ISO timestamp of that seat's last read, which is how presence
-    # is judged.
-    seats: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="waiting")
+    # Ordered wire moves; a whole game replays from this list. Opaque to the transport.
+    moves: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    # One record per seat — see ``SeatEntry``. Presence is judged from ``last_seen`` on read.
+    seats: Mapped[list[SeatEntry]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=RoomStatus.waiting,
+        server_default=text(f"'{RoomStatus.waiting.value}'"),
+    )
     # Which seat opens the game. Turn is (first_seat + moves played) % 2, so either seat can
     # start and a rematch can hand the advantage over.
     first_seat: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    # Whose room it is: the seat that may change the settings and start a game. Seat 0 opens it,
-    # and if that player walks out the seat still here inherits it, so a room is never left with
+    # Whose room it is: the seat that may change the settings and start a game. Seat 0 opens it, and
+    # it moves on only to a seat somebody is actually sitting in, so a room is never left with
     # nobody able to start it.
     owner_seat: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -73,17 +88,19 @@ class Room(Base):
     move_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # When the current turn began, so the clock has something to count from.
     turn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # How the game ended and who took it. The server sets these itself on a timeout or a
-    # forfeit, and records what the client reports for an ordinary win or draw.
+    # How the game ended and who took it. The server decides these — on a timeout, a walk-out, an
+    # opponent who vanished, and for any game with a registered outcome judge.
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
     winner_seat: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), nullable=False, default=now_utc, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
+        default=now_utc,
+        onupdate=now_utc,
+        server_default=func.now(),
     )
+    # Measures idleness, not age: every write pushes it out by the room TTL.
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
