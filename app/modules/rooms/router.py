@@ -241,6 +241,7 @@ def update_settings(
         first_seat=body.first_seat,
         is_open=body.is_open,
         move_limit_seconds=body.move_limit_seconds,
+        cell_count=body.cell_count,
     )
     return _state(room)
 

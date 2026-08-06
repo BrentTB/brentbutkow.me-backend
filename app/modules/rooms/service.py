@@ -603,12 +603,17 @@ def update_settings(
     first_seat: int,
     is_open: bool,
     move_limit_seconds: int | None,
+    cell_count: int | None = None,
 ) -> Room:
     """
     Changes a waiting room's settings, for the player who opened it.
 
     Only from the owner's seat, and only between games: mid-game the terms are settled, but before a
     game starts, including after one has finished, the owner may still change them.
+
+    `cell_count` is sent only by a game whose board size can change; left as ``None`` the size
+    holds. A new size cannot keep moves played on the old one, so changing it clears the board back
+    to waiting, which is safe here, since settings are editable only while no game is running.
     """
     room = _live_room_checked(session, code, lock=True)
     seat = seat_for_token(room.seats, token)
@@ -623,6 +628,9 @@ def update_settings(
     room.first_seat = first_seat
     room.is_open = is_open
     room.move_limit_seconds = move_limit_seconds
+    if cell_count is not None and cell_count != room.cell_count:
+        room.cell_count = cell_count
+        _clear_last_game(room)
     session.commit()
     session.refresh(room)
     return room

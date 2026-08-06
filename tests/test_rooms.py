@@ -637,12 +637,36 @@ def test_settings_forwards_the_new_terms(monkeypatch):
         "first_seat": 1,
         "is_open": True,
         "move_limit_seconds": 60,
+        # A body without a board size forwards None, leaving the room's size untouched.
+        "cell_count": None,
     }
     # The response describes the room, so a client can render what it now is.
     body = res.json()
     assert body["firstSeat"] == 1
     assert body["isOpen"] is True
     assert body["moveLimitSeconds"] == 60
+
+
+def test_settings_forwards_a_board_size_when_one_is_sent(monkeypatch):
+    captured = {}
+
+    def fake_update(session, **kw):
+        captured.update(kw)
+        return _room(cell_count=36)
+
+    monkeypatch.setattr(service, "update_settings", fake_update)
+    res = client.post(
+        "/rooms/ABCDEF/settings",
+        json={
+            "token": "tok",
+            "firstSeat": 0,
+            "isOpen": False,
+            "moveLimitSeconds": None,
+            "cellCount": 36,
+        },
+    )
+    assert res.status_code == 200
+    assert captured["cell_count"] == 36
 
 
 def test_settings_rejects_a_seat_that_does_not_own_the_room():
@@ -869,3 +893,44 @@ def test_the_owner_may_change_settings_after_a_game_as_well_as_before():
         assert room.first_seat == 1
         assert room.is_open is True
         assert room.move_limit_seconds == 60
+
+
+def test_settings_omitting_the_board_size_keeps_it():
+    room = _room_with_both(status="finished", cell_count=64, moves=[1, 2, 3], winner_seat=0)
+    original = _patch_live(room)
+    try:
+        service.update_settings(
+            _FakeSession(),
+            code="ABCDEF",
+            token="opener",
+            first_seat=0,
+            is_open=False,
+            move_limit_seconds=None,
+        )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.cell_count == 64
+    # A settings change that leaves the size alone must not wipe a finished game's board.
+    assert room.moves == [1, 2, 3]
+
+
+def test_settings_changing_the_board_size_resets_the_board():
+    room = _room_with_both(status="finished", cell_count=64, moves=[1, 2, 3], winner_seat=0)
+    original = _patch_live(room)
+    try:
+        service.update_settings(
+            _FakeSession(),
+            code="ABCDEF",
+            token="opener",
+            first_seat=0,
+            is_open=False,
+            move_limit_seconds=None,
+            cell_count=36,
+        )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert room.cell_count == 36
+    # A different size cannot keep moves played on the old board, so the room goes back to waiting.
+    assert room.status == "waiting"
+    assert room.moves == []
+    assert room.winner_seat is None

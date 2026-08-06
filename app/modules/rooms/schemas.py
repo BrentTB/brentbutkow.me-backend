@@ -95,6 +95,9 @@ class SettingsRequest(RoomOptions):
     first_seat: int = Field(ge=0, le=1)
     is_open: bool
     move_limit_seconds: MoveLimitSeconds
+    # Only a game whose board size can change sends this; left off, the room keeps its current size.
+    # Changing it resets the board, so the service allows it only before a game has started.
+    cell_count: int | None = Field(default=None, ge=1, le=_MAX_CELLS)
 
 
 class TokenRequest(CamelModel):
