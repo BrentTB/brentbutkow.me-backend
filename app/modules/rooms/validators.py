@@ -21,6 +21,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import NamedTuple, Protocol
 
+from app.modules.rooms import othello
 from app.modules.rooms.constants import MAX_SEATS
 
 
@@ -45,9 +46,20 @@ def default_placement_check(moves: list[int], move: int, seat: int, cell_count: 
         raise InvalidMove("cell already taken")
 
 
-# Games register here only when the default placement rule is not enough. Empty today; Othello adds
-# an entry when it ships. Adding a game touches this map, never the router or service.
-GAME_VALIDATORS: dict[str, MoveValidator] = {}
+def othello_move_check(moves: list[int], move: int, seat: int, cell_count: int) -> None:
+    """Othello legality: a move must flip at least one disc, and a pass is legal only when stuck.
+
+    Ignores ``seat`` like the default check — the colour to move follows from the move count, since
+    dark always opens (see ``othello.py``). The board is rebuilt from ``moves`` on each call.
+    """
+    legal, reason = othello.is_legal(moves, move, cell_count)
+    if not legal:
+        raise InvalidMove(reason)
+
+
+# Games register here only when the default placement rule is not enough. Adding a game touches this
+# map, never the router or service.
+GAME_VALIDATORS: dict[str, MoveValidator] = {"othello": othello_move_check}
 
 
 def validate_move(game_id: str, moves: list[int], move: int, seat: int, cell_count: int) -> None:
@@ -150,9 +162,24 @@ def cube_placement_outcome(moves: list[int], first_seat: int, cell_count: int) -
     return Verdict(False, None)
 
 
+def othello_outcome(moves: list[int], first_seat: int, cell_count: int) -> Verdict | None:
+    """The result of an Othello position: over when neither colour can move, won by disc count.
+
+    Reads only the move list and who opened, so the server never takes the mover's word for a win.
+    """
+    result = othello.outcome(moves, first_seat, cell_count)
+    if result is None:
+        return None
+    finished, winner_seat = result
+    return Verdict(finished, winner_seat)
+
+
 # Games whose result the server works out for itself. A game absent from this map keeps the client's
 # word for it — see ``append_move``.
-GAME_OUTCOMES: dict[str, OutcomeJudge] = {"tic-tac-toe": cube_placement_outcome}
+GAME_OUTCOMES: dict[str, OutcomeJudge] = {
+    "tic-tac-toe": cube_placement_outcome,
+    "othello": othello_outcome,
+}
 
 
 def judge_outcome(
