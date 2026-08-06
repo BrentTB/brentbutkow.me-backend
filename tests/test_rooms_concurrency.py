@@ -450,6 +450,34 @@ def test_matchmaking_takes_the_oldest_waiting_room(sessions, clock):
     assert room.code == "OLDER1"
 
 
+def test_othello_matches_across_board_sizes(sessions):
+    session = sessions()
+    # An open 10x10 Othello room waiting; the newcomer asked for 8x8. Othello is size-agnostic to
+    # match, so they join it and adopt its size rather than opening a second, lonelier room.
+    _seed_room(session, code="OTHXXX", game_id="othello", cell_count=100, is_open=True)
+    session.commit()
+
+    room, _ = service.matchmake(sessions(), game_id="othello", cell_count=64, name="Bo", colour="0")
+    assert room.code == "OTHXXX"
+    assert room.cell_count == 100
+    assert _room_count(sessions()) == 1
+
+
+def test_a_size_specific_game_still_matches_only_its_own_size(sessions):
+    session = sessions()
+    # A game not in MATCH_ANY_SIZE_GAMES keeps size-specific pools: a different-sized room is not a
+    # match, so this caller opens its own instead of joining.
+    _seed_room(session, code="TTTBIG", game_id=GAME, cell_count=27, is_open=True)
+    session.commit()
+
+    room, _ = service.matchmake(
+        sessions(), game_id=GAME, cell_count=CELLS, name="Bo", colour="4,5,6"
+    )
+    assert room.code != "TTTBIG"
+    assert room.cell_count == CELLS
+    assert _room_count(sessions()) == 2
+
+
 def test_the_query_skips_a_full_room_and_finds_the_one_behind_it(sessions, clock):
     session = sessions()
     _seed_room(

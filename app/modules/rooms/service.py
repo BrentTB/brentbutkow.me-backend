@@ -36,6 +36,12 @@ _TOUCH_INTERVAL_SECONDS = 5
 # free seat even when both records are still there.
 _SEAT_LEFT_MARKER = [{"joined": False}]
 
+# Games whose players are matched regardless of board size, so a small audience still finds a game.
+# Every other game matches only within its own board size. A game listed here has to be one where a
+# guest can simply adopt the size of the room they land in — Othello plays the same at any size.
+# Keyed by game_id like the validator and outcome registries, so a game opts in without a wire flag.
+MATCH_ANY_SIZE_GAMES = frozenset({"othello"})
+
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -620,22 +626,26 @@ def matchmake(
     which is what makes the claim that follows safe.
 
     `first_seat` and `move_limit_seconds` only apply to a room this opens. Joining somebody means
-    playing by the settings they already chose.
+    playing by the settings they already chose — including the board size, for a game in
+    ``MATCH_ANY_SIZE_GAMES``, where a match across sizes beats no match at all. `cell_count` is
+    still the size any room this opens is created at.
     """
     now = now_utc()
+    filters = [
+        Room.game_id == game_id,
+        Room.is_open.is_(True),
+        Room.status.in_(MATCHABLE_STATUSES),
+        Room.expires_at > now,
+        or_(
+            func.jsonb_array_length(Room.seats) < MAX_SEATS,
+            Room.seats.contains(_SEAT_LEFT_MARKER),
+        ),
+    ]
+    if game_id not in MATCH_ANY_SIZE_GAMES:
+        filters.append(Room.cell_count == cell_count)
     candidates = session.scalars(
         select(Room)
-        .where(
-            Room.game_id == game_id,
-            Room.cell_count == cell_count,
-            Room.is_open.is_(True),
-            Room.status.in_(MATCHABLE_STATUSES),
-            Room.expires_at > now,
-            or_(
-                func.jsonb_array_length(Room.seats) < MAX_SEATS,
-                Room.seats.contains(_SEAT_LEFT_MARKER),
-            ),
-        )
+        .where(*filters)
         .order_by(Room.created_at.asc())
         .limit(_MATCH_CANDIDATES)
         .with_for_update(skip_locked=True)
