@@ -132,6 +132,29 @@ def test_move_rejects_pass_sentinel_below_range():
     assert res.status_code == 422
 
 
+def test_aim_forwards_fields_and_returns_state(monkeypatch):
+    captured = {}
+
+    def fake_aim(session, **kw):
+        captured.update(kw)
+        return _room(status="active")
+
+    monkeypatch.setattr(service, "aim_move", fake_aim)
+    res = client.post(
+        "/rooms/ABCDEF/aim",
+        json={"token": "t", "move": 19, "expectedVersion": 0},
+    )
+    assert res.status_code == 200
+    assert captured["move"] == 19
+    assert captured["expected_version"] == 0
+
+
+def test_aim_rejects_the_pass_sentinel():
+    # Aiming is for real cells; -1 (a pass) is below the aim schema's bound.
+    res = client.post("/rooms/ABCDEF/aim", json={"token": "t", "move": -1, "expectedVersion": 0})
+    assert res.status_code == 422
+
+
 def test_profile_update_forwards_the_callers_fields(monkeypatch):
     captured = {}
 
@@ -497,6 +520,65 @@ def test_the_clock_blames_whoever_is_actually_on_turn():
     )
     enforce_clock(_FakeSession(), room)
     assert room.winner_seat == 0
+
+
+def test_running_out_of_time_plays_an_aimed_move_instead_of_forfeiting():
+    # Seat 0 is on the clock in an Othello game, with a legal opening move aimed but not committed.
+    aimed = 2 * 8 + 3  # d3: flips the centre light disc for dark on the 8x8 board
+    room = _room(
+        game_id="othello",
+        cell_count=64,
+        status="active",
+        moves=[],
+        first_seat=0,
+        move_limit_seconds=30,
+        turn_started_at=service.now_utc() - timedelta(seconds=31),
+        seats=[
+            {
+                "seat": 0,
+                "token_hash": "h0",
+                "name": "Ada",
+                "colour": "d",
+                "joined": True,
+                "pending_move": aimed,
+            },
+            {"seat": 1, "token_hash": "h1", "name": "Bo", "colour": "l", "joined": True},
+        ],
+    )
+    enforce_clock(_FakeSession(), room)
+    # The aimed move is played and the game goes on, rather than the turn being forfeited.
+    assert room.status == "active"
+    assert room.outcome is None
+    assert room.moves == [aimed]
+    assert "pending_move" not in room.seats[0]  # cleared once it settled
+
+
+def test_a_pending_that_is_no_longer_legal_forfeits_as_usual():
+    # 27 (d4) is an occupied centre cell, so this aimed move is illegal — it cannot save the turn.
+    room = _room(
+        game_id="othello",
+        cell_count=64,
+        status="active",
+        moves=[],
+        first_seat=0,
+        move_limit_seconds=30,
+        turn_started_at=service.now_utc() - timedelta(seconds=31),
+        seats=[
+            {
+                "seat": 0,
+                "token_hash": "h0",
+                "name": "Ada",
+                "colour": "d",
+                "joined": True,
+                "pending_move": 27,
+            },
+            {"seat": 1, "token_hash": "h1", "name": "Bo", "colour": "l", "joined": True},
+        ],
+    )
+    enforce_clock(_FakeSession(), room)
+    assert room.status == "finished"
+    assert room.outcome == "timeout"
+    assert room.winner_seat == 1
 
 
 # --- matchmaking must not offer rooms nobody is sitting in ---

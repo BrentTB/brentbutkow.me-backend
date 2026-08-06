@@ -113,6 +113,17 @@ class MoveRequest(CamelModel):
     won: bool = False
 
 
+class AimRequest(CamelModel):
+    """A move aimed but not committed, kept so the clock plays it rather than forfeiting the game.
+
+    A real cell only — the pass sentinel is not something a player aims, so ``move`` starts at 0.
+    """
+
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
+    move: int = Field(ge=0, le=_MAX_MOVE)
+    expected_version: int = Field(ge=0)
+
+
 # Returned only to the seat that owns it, on create/join — carries the secret token.
 class RoomCredentials(CamelModel):
     code: str

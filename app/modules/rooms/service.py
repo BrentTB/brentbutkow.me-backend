@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import cast as as_type
 
 from fastapi import HTTPException, status
 from sqlalchemy import Text, cast, delete, func, or_, select, update
@@ -123,6 +124,26 @@ def present_seats(seats: list[SeatEntry], now: datetime) -> list[SeatEntry]:
 
 def _seat_records(seats: list[SeatEntry]) -> dict[int, SeatEntry]:
     return {int(entry["seat"]): entry for entry in seats}
+
+
+def _clear_pending(seats: list[SeatEntry]) -> list[SeatEntry]:
+    """The seats with any aimed-but-uncommitted move dropped — a new move settles the position."""
+    cleared: list[SeatEntry] = []
+    for entry in seats:
+        if "pending_move" not in entry:
+            cleared.append(entry)
+            continue
+        trimmed = dict(entry)
+        trimmed.pop("pending_move", None)
+        cleared.append(as_type(SeatEntry, trimmed))
+    return cleared
+
+
+def _seat_pending(seats: list[SeatEntry], seat: int) -> int | None:
+    """The move a seat has aimed but not committed, or None."""
+    entry = _seat_records(seats).get(seat)
+    move = entry.get("pending_move") if entry is not None else None
+    return int(move) if move is not None else None
 
 
 def free_seat(seats: list[SeatEntry], now: datetime) -> int | None:
@@ -314,9 +335,41 @@ def _live_room(session: Session, code: str, *, lock: bool = False) -> Room:
     return room
 
 
+def _play_timeout_move(session: Session, room: Room, seat: int, move: int) -> bool:
+    """Plays a seat's aimed move because their clock ran out, or False if it is no longer legal.
+
+    The board has not moved since the aim — only the seat on turn can change it — so this normally
+    just appends. It is re-checked anyway so a pending that somehow went stale forfeits rather than
+    lands. The move settles the position exactly as a submitted one does: the clock restarts for the
+    player, the game's judge decides any result, and every seat's pending is cleared.
+    """
+    try:
+        validate_move(room.game_id, room.moves, move, seat, room.cell_count)
+    except InvalidMove:
+        return False
+    now = now_utc()
+    room.moves = [*room.moves, move]
+    room.turn_started_at = now
+    room.expires_at = _expiry(now)
+    room.seats = _clear_pending(room.seats)
+    verdict = judge_outcome(
+        room.game_id, moves=room.moves, first_seat=room.first_seat, cell_count=room.cell_count
+    )
+    if verdict is not None and verdict.finished:
+        room.status = RoomStatus.finished
+        room.outcome = RoomOutcome.win if verdict.winner_seat is not None else RoomOutcome.draw
+        room.winner_seat = verdict.winner_seat
+    session.flush()
+    return True
+
+
 def enforce_clock(session: Session, room: Room) -> Room:
     """
-    Ends a game whose player on turn ran out of time, awarding it to the one still waiting.
+    Settles a game whose player on turn ran out of time.
+
+    If that player had aimed a move but not committed it, the clock plays it for them and the game
+    goes on — running out of time costs the turn, not the game. Otherwise the game is over, given to
+    the player still waiting.
 
     Checked whenever the room is read or written rather than swept by a job: nobody is harmed by
     a timeout they have not looked at, and by the time either side asks, the answer is right.
@@ -328,6 +381,9 @@ def enforce_clock(session: Session, room: Room) -> Room:
     if deadline is None or now_utc() <= deadline:
         return room
     loser = turn_seat(room.first_seat, room.moves)
+    pending = _seat_pending(room.seats, loser)
+    if pending is not None and _play_timeout_move(session, room, loser, pending):
+        return room
     room.status = RoomStatus.finished
     room.outcome = RoomOutcome.timeout
     room.winner_seat = other_seat(loser)
@@ -450,6 +506,7 @@ def _clear_last_game(room: Room) -> None:
     room.outcome = None
     room.winner_seat = None
     room.turn_started_at = None
+    room.seats = _clear_pending(room.seats)
 
 
 def _claim_seat(session: Session, room: Room, *, name: str, colour: str) -> tuple[Room, str]:
@@ -728,6 +785,8 @@ def append_move(
     room.moves = [*room.moves, move]
     room.turn_started_at = now
     room.expires_at = _expiry(now)
+    # The position moved on, so any move a seat had aimed is stale — drop them all.
+    room.seats = _clear_pending(room.seats)
     verdict = judge_outcome(
         room.game_id,
         moves=room.moves,
@@ -740,6 +799,36 @@ def append_move(
         room.status = RoomStatus.finished
         room.outcome = RoomOutcome.win if verdict.winner_seat is not None else RoomOutcome.draw
         room.winner_seat = verdict.winner_seat
+    session.commit()
+    session.refresh(room)
+    return room
+
+
+def aim_move(session: Session, *, code: str, token: str, move: int, expected_version: int) -> Room:
+    """Record a move a player has aimed but not committed, so the clock can play it on a timeout.
+
+    Held to the same rules as a real move short of ending the turn: your seat, your turn, the right
+    version, and a move legal in the position. Stored on your seat until you commit a move, aim a
+    different one, or the clock runs out and plays it. Only the seat on turn can hold one.
+    """
+    room = _live_room_checked(session, code, lock=True)
+    seat = seat_for_token(room.seats, token)
+    if room.status != RoomStatus.active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This game is not running")
+    if expected_version != len(room.moves):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Move is out of date")
+    if turn_seat(room.first_seat, room.moves) != seat:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your turn")
+    try:
+        validate_move(room.game_id, room.moves, move, seat, room.cell_count)
+    except InvalidMove as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    room.seats = [
+        {**entry, "pending_move": move} if int(entry["seat"]) == seat else entry
+        for entry in room.seats
+    ]
     session.commit()
     session.refresh(room)
     return room

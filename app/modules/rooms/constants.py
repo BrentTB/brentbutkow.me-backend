@@ -47,7 +47,9 @@ class SeatEntry(TypedDict):
 
     ``token_hash`` is the sha256 of the seat's token; the raw token is returned once and never
     stored. ``last_seen`` is an ISO timestamp of that seat's last read and is missing until the
-    player polls for the first time.
+    player polls for the first time. ``pending_move`` is a move this seat has aimed but not yet
+    committed; if the clock runs out on their turn while it is set, the server plays it for them
+    instead of forfeiting. Cleared the moment any move is appended.
     """
 
     seat: int
@@ -56,6 +58,7 @@ class SeatEntry(TypedDict):
     colour: str
     joined: bool
     last_seen: NotRequired[str]
+    pending_move: NotRequired[int]
 
 
 def now_utc() -> datetime:

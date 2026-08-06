@@ -478,6 +478,31 @@ def test_a_size_specific_game_still_matches_only_its_own_size(sessions):
     assert _room_count(sessions()) == 2
 
 
+def test_a_timed_out_turn_plays_the_aimed_move(sessions, clock):
+    session = sessions()
+    _seed_room(
+        session,
+        code="AIMXXX",
+        game_id="othello",
+        status=RoomStatus.active,
+        move_limit_seconds=30,
+        turn_started_at=clock.now,
+        seats=[_seat(0, HOST_TOKEN), _seat(1, GUEST_TOKEN, name="Bo")],
+    )
+    session.commit()
+
+    aimed = 2 * 8 + 3  # a legal opening move for seat 0 (dark) on the 8x8 board
+    service.aim_move(sessions(), code="AIMXXX", token=HOST_TOKEN, move=aimed, expected_version=0)
+
+    # The clock runs out; the next read settles the room by playing the aimed move rather than
+    # forfeiting, and the game carries on with seat 1 to move on a fresh clock.
+    clock.advance(31)
+    room = service.get_room(sessions(), "AIMXXX")
+    assert room.status == RoomStatus.active
+    assert list(room.moves) == [aimed]
+    assert all("pending_move" not in seat for seat in room.seats)
+
+
 def test_the_query_skips_a_full_room_and_finds_the_one_behind_it(sessions, clock):
     session = sessions()
     _seed_room(
