@@ -18,10 +18,20 @@ Two hooks, each with a registry:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
-from typing import NamedTuple, Protocol
+from typing import Protocol
 
-from app.modules.rooms.constants import MAX_SEATS
+from app.modules.rooms import othello
+from app.modules.rooms.constants import MAX_SEATS, GameId, Verdict
+
+__all__ = [
+    "InvalidMove",
+    "Verdict",
+    "validate_move",
+    "judge_outcome",
+    "is_valid_cell_count",
+]
 
 
 class InvalidMove(Exception):
@@ -45,22 +55,26 @@ def default_placement_check(moves: list[int], move: int, seat: int, cell_count: 
         raise InvalidMove("cell already taken")
 
 
-# Games register here only when the default placement rule is not enough. Empty today; Othello adds
-# an entry when it ships. Adding a game touches this map, never the router or service.
-GAME_VALIDATORS: dict[str, MoveValidator] = {}
+def othello_move_check(moves: list[int], move: int, seat: int, cell_count: int) -> None:
+    """Othello legality: a move must flip at least one disc, and a pass is legal only when stuck.
+
+    Ignores ``seat`` like the default check — the colour to move follows from the move count, since
+    dark always opens (see ``othello.py``). The board is rebuilt from ``moves`` on each call.
+    """
+    legal, reason = othello.is_legal(moves, move, cell_count)
+    if not legal:
+        raise InvalidMove(reason)
+
+
+# Games register here only when the default placement rule is not enough. Adding a game touches this
+# map, never the router or service.
+GAME_VALIDATORS: dict[str, MoveValidator] = {GameId.othello: othello_move_check}
 
 
 def validate_move(game_id: str, moves: list[int], move: int, seat: int, cell_count: int) -> None:
     """Run the game's validator, or the default placement check if it has none."""
     validator = GAME_VALIDATORS.get(game_id, default_placement_check)
     validator(moves, move, seat, cell_count)
-
-
-class Verdict(NamedTuple):
-    """Whether the game is over, and who took it. ``winner_seat`` is None for a draw."""
-
-    finished: bool
-    winner_seat: int | None
 
 
 class OutcomeJudge(Protocol):
@@ -152,7 +166,10 @@ def cube_placement_outcome(moves: list[int], first_seat: int, cell_count: int) -
 
 # Games whose result the server works out for itself. A game absent from this map keeps the client's
 # word for it — see ``append_move``.
-GAME_OUTCOMES: dict[str, OutcomeJudge] = {"tic-tac-toe": cube_placement_outcome}
+GAME_OUTCOMES: dict[str, OutcomeJudge] = {
+    GameId.tic_tac_toe: cube_placement_outcome,
+    GameId.othello: othello.outcome,
+}
 
 
 def judge_outcome(
@@ -163,3 +180,26 @@ def judge_outcome(
     if judge is None:
         return None
     return judge(moves, first_seat, cell_count)
+
+
+def _othello_board_ok(cell_count: int) -> bool:
+    # An even edge of at least 4: the four-disc start needs a well-defined centre 2x2 and room to
+    # play around it, so 2x2 (starts full) and odd edges are out.
+    edge = othello.board_size(cell_count)
+    return edge is not None and edge >= 4 and edge % 2 == 0
+
+
+# The board sizes each game will actually run. A game absent from this map accepts any size the wire
+# schema allows — but a game with a registered outcome judge MUST be here, or a size its judge
+# cannot read (a non-cube tic-tac-toe, a non-square Othello) silently disables the judge and hands
+# the win back to the client's claim (see ``append_move``). Keyed like the registries above.
+GAME_BOARDS: dict[str, Callable[[int], bool]] = {
+    GameId.tic_tac_toe: lambda cell_count: _cube_edge(cell_count) is not None,
+    GameId.othello: _othello_board_ok,
+}
+
+
+def is_valid_cell_count(game_id: str, cell_count: int) -> bool:
+    """Whether ``cell_count`` is a board this game can actually play. Unknown games accept any."""
+    check = GAME_BOARDS.get(game_id)
+    return check is None or check(cell_count)

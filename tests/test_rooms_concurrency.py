@@ -450,6 +450,59 @@ def test_matchmaking_takes_the_oldest_waiting_room(sessions, clock):
     assert room.code == "OLDER1"
 
 
+def test_othello_matches_across_board_sizes(sessions):
+    session = sessions()
+    # An open 10x10 Othello room waiting; the newcomer asked for 8x8. Othello is size-agnostic to
+    # match, so they join it and adopt its size rather than opening a second, lonelier room.
+    _seed_room(session, code="OTHXXX", game_id="othello", cell_count=100, is_open=True)
+    session.commit()
+
+    room, _ = service.matchmake(sessions(), game_id="othello", cell_count=64, name="Bo", colour="0")
+    assert room.code == "OTHXXX"
+    assert room.cell_count == 100
+    assert _room_count(sessions()) == 1
+
+
+def test_a_size_specific_game_still_matches_only_its_own_size(sessions):
+    session = sessions()
+    # A game not in MATCH_ANY_SIZE_GAMES keeps size-specific pools: a different-sized room is not a
+    # match, so this caller opens its own instead of joining.
+    _seed_room(session, code="TTTBIG", game_id=GAME, cell_count=27, is_open=True)
+    session.commit()
+
+    room, _ = service.matchmake(
+        sessions(), game_id=GAME, cell_count=CELLS, name="Bo", colour="4,5,6"
+    )
+    assert room.code != "TTTBIG"
+    assert room.cell_count == CELLS
+    assert _room_count(sessions()) == 2
+
+
+def test_a_timed_out_turn_plays_the_aimed_move(sessions, clock):
+    session = sessions()
+    _seed_room(
+        session,
+        code="AIMXXX",
+        game_id="othello",
+        status=RoomStatus.active,
+        move_limit_seconds=30,
+        turn_started_at=clock.now,
+        seats=[_seat(0, HOST_TOKEN), _seat(1, GUEST_TOKEN, name="Bo")],
+    )
+    session.commit()
+
+    aimed = 2 * 8 + 3  # a legal opening move for seat 0 (dark) on the 8x8 board
+    service.aim_move(sessions(), code="AIMXXX", token=HOST_TOKEN, move=aimed, expected_version=0)
+
+    # The clock runs out; the next read settles the room by playing the aimed move rather than
+    # forfeiting, and the game carries on with seat 1 to move on a fresh clock.
+    clock.advance(31)
+    room = service.get_room(sessions(), "AIMXXX")
+    assert room.status == RoomStatus.active
+    assert list(room.moves) == [aimed]
+    assert all("pending_move" not in seat for seat in room.seats)
+
+
 def test_the_query_skips_a_full_room_and_finds_the_one_behind_it(sessions, clock):
     session = sessions()
     _seed_room(

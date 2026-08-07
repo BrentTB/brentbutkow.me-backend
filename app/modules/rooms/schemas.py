@@ -84,17 +84,22 @@ class ProfileRequest(CamelModel):
 
 
 class SettingsRequest(RoomOptions):
-    """A full replacement of the room's settings, not a patch.
+    """A full replacement of the room's core settings, not a patch.
 
-    Every option is required, so a body that omits one is a 422 rather than a silent reset of the
-    field it left out — inherited defaults would quietly hand back seat 0, a closed room and no
-    clock to a client that only meant to change the clock.
+    ``firstSeat``, ``isOpen`` and ``moveLimitSeconds`` are all required, so a body that omits one
+    is a 422 rather than a silent reset of the field it left out — inherited defaults would quietly
+    hand back seat 0, a closed room and no clock to a client that only meant to change the clock.
+    ``cellCount`` is the exception: it is optional, since only a game whose board size can change
+    sends it, and omitting it leaves the size untouched.
     """
 
     token: str = Field(min_length=1, max_length=MAX_TOKEN)
     first_seat: int = Field(ge=0, le=1)
     is_open: bool
     move_limit_seconds: MoveLimitSeconds
+    # Only a game whose board size can change sends this; left off, the room keeps its current size.
+    # Changing it resets the board, so the service allows it only before a game has started.
+    cell_count: int | None = Field(default=None, ge=1, le=_MAX_CELLS)
 
 
 class TokenRequest(CamelModel):
@@ -111,6 +116,17 @@ class MoveRequest(CamelModel):
     finished: bool = False
     # Whether that move won it, as opposed to filling the last square for a draw.
     won: bool = False
+
+
+class AimRequest(CamelModel):
+    """A move aimed but not committed, kept so the clock plays it rather than forfeiting the game.
+
+    A real cell only — the pass sentinel is not something a player aims, so ``move`` starts at 0.
+    """
+
+    token: str = Field(min_length=1, max_length=MAX_TOKEN)
+    move: int = Field(ge=0, le=_MAX_MOVE)
+    expected_version: int = Field(ge=0)
 
 
 # Returned only to the seat that owns it, on create/join — carries the secret token.

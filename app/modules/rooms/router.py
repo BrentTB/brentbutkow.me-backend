@@ -7,6 +7,7 @@ from app.modules.rooms.constants import RoomOutcome, RoomStatus
 from app.modules.rooms.models import Room
 from app.modules.rooms.schemas import (
     MAX_TOKEN,
+    AimRequest,
     CreateRoomRequest,
     JoinRoomRequest,
     MatchmakeRequest,
@@ -221,8 +222,10 @@ def start_game(
     summary="Change the room's settings between games",
     description=(
         "Replaces the opening seat, clock and open flag — all three are required, so a partial "
-        "body is a 422 rather than a reset of what it left out. Only the room's owner may call it, "
-        "and only between games: before the first one, and after any game has ended."
+        "body is a 422 rather than a reset of what it left out. `cellCount` is optional (only a "
+        "game whose board size can change sends it); when it differs it resets the board. Only the "
+        "room's owner may call it, and only between games: before the first one, and after any "
+        "game has ended."
     ),
     responses=RATE_LIMITED,
 )
@@ -240,6 +243,7 @@ def update_settings(
         first_seat=body.first_seat,
         is_open=body.is_open,
         move_limit_seconds=body.move_limit_seconds,
+        cell_count=body.cell_count,
     )
     return _state(room)
 
@@ -260,6 +264,35 @@ def update_profile(
 ) -> RoomState:
     room = service.update_profile(
         session, code=code, token=body.token, name=body.name, colour=body.colour
+    )
+    return _state(room)
+
+
+@router.post(
+    "/{code}/aim",
+    response_model=RoomState,
+    summary="Aim a move without committing it",
+    description=(
+        "Records a move you have aimed but not yet committed, so that if your clock runs out on "
+        "this turn the server plays it for you instead of forfeiting the game. Held to the same "
+        "checks as a real move short of ending the turn: your seat (403), your version (409), your "
+        "turn (403), and a legal move (422). Committing a move, or aiming another, replaces it."
+    ),
+    responses=RATE_LIMITED,
+)
+@limiter.limit("120/minute")
+def aim_move(
+    request: Request,
+    body: AimRequest,
+    code: str = RoomCode,
+    session: Session = Depends(get_session),
+) -> RoomState:
+    room = service.aim_move(
+        session,
+        code=code,
+        token=body.token,
+        move=body.move,
+        expected_version=body.expected_version,
     )
     return _state(room)
 

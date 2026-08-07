@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.modules.rooms.constants import (
     ROOM_FIRST_SEAT_CHECK,
+    ROOM_OPEN_ANY_SIZE_INDEX_COLUMNS,
     ROOM_OPEN_INDEX_COLUMNS,
     ROOM_OPEN_INDEX_WHERE,
     ROOM_OUTCOME_CHECK,
@@ -45,6 +46,13 @@ class Room(Base):
         Index(
             "ix_rooms_open",
             *ROOM_OPEN_INDEX_COLUMNS,
+            postgresql_where=text(ROOM_OPEN_INDEX_WHERE),
+        ),
+        # Games in MATCH_ANY_SIZE_GAMES search without the cell_count predicate, so they need the
+        # created_at order to fall directly out of the index rather than a sort of every open room.
+        Index(
+            "ix_rooms_open_any_size",
+            *ROOM_OPEN_ANY_SIZE_INDEX_COLUMNS,
             postgresql_where=text(ROOM_OPEN_INDEX_WHERE),
         ),
     )
