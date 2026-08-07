@@ -10,7 +10,20 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import NotRequired, TypedDict
+from typing import NamedTuple, NotRequired, TypedDict
+
+
+class GameId(StrEnum):
+    """The games the rooms transport knows by name.
+
+    A ``game_id`` on the wire is still a free string — an unknown one is a game with no special
+    rules, which is deliberately allowed. These members are the keys the per-game registries
+    (validators, outcome judges, board sizes) are spelled with, so a game opts into server-side
+    logic in one place and a typo is a ``NameError`` rather than a silent fall-through to defaults.
+    """
+
+    tic_tac_toe = "tic-tac-toe"
+    othello = "othello"
 
 
 class RoomStatus(StrEnum):
@@ -40,6 +53,17 @@ class RoomOutcome(StrEnum):
 MATCHABLE_STATUSES = (RoomStatus.waiting, RoomStatus.finished)
 
 MAX_SEATS = 2
+
+
+class Verdict(NamedTuple):
+    """Whether a game is over, and who took it. ``winner_seat`` is None for a draw.
+
+    Lives here, not in ``validators``, so ``othello`` can return one without importing back into the
+    module that imports it.
+    """
+
+    finished: bool
+    winner_seat: int | None
 
 
 class SeatEntry(TypedDict):
@@ -75,6 +99,10 @@ ROOM_OUTCOME_CHECK = f"outcome IS NULL OR outcome IN ({_sql_values(RoomOutcome)}
 ROOM_FIRST_SEAT_CHECK = "first_seat IN (0,1)"
 ROOM_OWNER_SEAT_CHECK = "owner_seat IN (0,1)"
 ROOM_WINNER_SEAT_CHECK = "winner_seat IS NULL OR winner_seat IN (0,1)"
-# Matchmaking reads the oldest matchable open room for one game and board size.
+# Matchmaking reads the oldest matchable open room. The size-specific pool seeks on game_id +
+# cell_count and reads in created_at order; the any-size pool (MATCH_ANY_SIZE_GAMES) drops the
+# cell_count predicate, so it needs its own (game_id, created_at) index to stay an ordered seek
+# rather than a sort of the whole open-room backlog. Both share this WHERE.
 ROOM_OPEN_INDEX_WHERE = f"is_open AND status IN ({_sql_values(MATCHABLE_STATUSES)})"
 ROOM_OPEN_INDEX_COLUMNS = ("game_id", "cell_count", "created_at")
+ROOM_OPEN_ANY_SIZE_INDEX_COLUMNS = ("game_id", "created_at")

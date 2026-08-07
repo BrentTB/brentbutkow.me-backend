@@ -84,11 +84,13 @@ class ProfileRequest(CamelModel):
 
 
 class SettingsRequest(RoomOptions):
-    """A full replacement of the room's settings, not a patch.
+    """A full replacement of the room's core settings, not a patch.
 
-    Every option is required, so a body that omits one is a 422 rather than a silent reset of the
-    field it left out — inherited defaults would quietly hand back seat 0, a closed room and no
-    clock to a client that only meant to change the clock.
+    ``firstSeat``, ``isOpen`` and ``moveLimitSeconds`` are all required, so a body that omits one
+    is a 422 rather than a silent reset of the field it left out — inherited defaults would quietly
+    hand back seat 0, a closed room and no clock to a client that only meant to change the clock.
+    ``cellCount`` is the exception: it is optional, since only a game whose board size can change
+    sends it, and omitting it leaves the size untouched.
     """
 
     token: str = Field(min_length=1, max_length=MAX_TOKEN)

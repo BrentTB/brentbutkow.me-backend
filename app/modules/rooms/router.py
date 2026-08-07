@@ -222,8 +222,10 @@ def start_game(
     summary="Change the room's settings between games",
     description=(
         "Replaces the opening seat, clock and open flag — all three are required, so a partial "
-        "body is a 422 rather than a reset of what it left out. Only the room's owner may call it, "
-        "and only between games: before the first one, and after any game has ended."
+        "body is a 422 rather than a reset of what it left out. `cellCount` is optional (only a "
+        "game whose board size can change sends it); when it differs it resets the board. Only the "
+        "room's owner may call it, and only between games: before the first one, and after any "
+        "game has ended."
     ),
     responses=RATE_LIMITED,
 )

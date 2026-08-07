@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from math import isqrt
 
+from app.modules.rooms.constants import Verdict
+
 # Board cells hold one of these. Dark opens, by Othello convention.
 DARK = 1
 LIGHT = 2
@@ -57,10 +59,8 @@ def _captures_at(board: list[int], index: int, colour: int, size: int) -> list[i
 
 
 def _has_legal_move(board: list[int], colour: int, size: int) -> bool:
-    return any(
-        board[index] == EMPTY and _captures_at(board, index, colour, size)
-        for index in range(len(board))
-    )
+    # _captures_at already returns [] for a non-empty or out-of-range cell, so it is the whole test.
+    return any(_captures_at(board, index, colour, size) for index in range(len(board)))
 
 
 def _starting_board(size: int) -> list[int]:
@@ -84,6 +84,10 @@ def replay(moves: list[int], size: int) -> list[int]:
     for played, move in enumerate(moves):
         colour = _colour_at_turn(played)
         if move == PASS:
+            continue
+        # A stored move outside the board would only exist through corruption; skip it rather than
+        # let the write below raise IndexError and turn a bad row into a 500.
+        if not 0 <= move < len(board):
             continue
         for cell in _captures_at(board, move, colour, size):
             board[cell] = colour
@@ -115,8 +119,8 @@ def is_legal(moves: list[int], move: int, cell_count: int) -> tuple[bool, str]:
     return True, ""
 
 
-def outcome(moves: list[int], first_seat: int, cell_count: int) -> tuple[bool, int | None] | None:
-    """(finished, winner_seat) for the position, or None when the board is not square.
+def outcome(moves: list[int], first_seat: int, cell_count: int) -> Verdict | None:
+    """The verdict for the position, or None when the board is not square.
 
     The game is over when neither colour can move. The winner is whoever holds more discs; equal
     counts are a draw (winner None). ``winner_seat`` maps the winning colour back to a seat: the
@@ -128,12 +132,12 @@ def outcome(moves: list[int], first_seat: int, cell_count: int) -> tuple[bool, i
 
     board = replay(moves, size)
     if _has_legal_move(board, DARK, size) or _has_legal_move(board, LIGHT, size):
-        return False, None
+        return Verdict(False, None)
 
     dark = board.count(DARK)
     light = board.count(LIGHT)
     if dark == light:
-        return True, None
+        return Verdict(True, None)
     winning_colour = DARK if dark > light else LIGHT
     winner_seat = first_seat if winning_colour == DARK else 1 - first_seat
-    return True, winner_seat
+    return Verdict(True, winner_seat)

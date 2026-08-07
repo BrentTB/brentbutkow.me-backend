@@ -3,7 +3,12 @@
 import pytest
 
 from app.modules.rooms import othello
-from app.modules.rooms.validators import InvalidMove, judge_outcome, validate_move
+from app.modules.rooms.validators import (
+    InvalidMove,
+    is_valid_cell_count,
+    judge_outcome,
+    validate_move,
+)
 
 # The standard board the site plays online.
 CELLS = 64
@@ -79,8 +84,9 @@ def _play_to_the_end(first_seat: int) -> list[int]:
     """Play first-legal-move for both colours, passing when stuck, until the judge calls it over."""
     moves: list[int] = []
     for _ in range(CELLS * 2):
-        finished, _winner = othello.outcome(moves, first_seat, CELLS)  # type: ignore[misc]
-        if finished:
+        verdict = othello.outcome(moves, first_seat, CELLS)
+        assert verdict is not None
+        if verdict.finished:
             return moves
         played = next(
             (cell for cell in range(CELLS) if othello.is_legal(moves, cell, CELLS)[0]), None
@@ -106,16 +112,44 @@ def test_the_winning_seat_follows_first_seat():
     # The move list is the same whoever opened; the seat the win maps to flips with first_seat,
     # because the opener is dark.
     moves = _play_to_the_end(first_seat=0)
-    _finished, seat_when_zero_opens = othello.outcome(moves, 0, CELLS)  # type: ignore[misc]
-    _finished, seat_when_one_opens = othello.outcome(moves, 1, CELLS)  # type: ignore[misc]
-    if seat_when_zero_opens is None:
-        assert seat_when_one_opens is None  # a draw is a draw whoever opened
+    zero = othello.outcome(moves, 0, CELLS)
+    one = othello.outcome(moves, 1, CELLS)
+    assert zero is not None and one is not None
+    if zero.winner_seat is None:
+        assert one.winner_seat is None  # a draw is a draw whoever opened
     else:
-        assert seat_when_one_opens == 1 - seat_when_zero_opens
+        assert one.winner_seat == 1 - zero.winner_seat
 
 
 def test_a_game_in_progress_is_not_over():
     assert othello.outcome([], 0, CELLS) == (False, None)
+
+
+def test_a_fixed_opening_flips_exactly_the_expected_cells():
+    # Dark opens at (2,3): the light disc at (3,3) is flanked by dark's new disc above it and dark's
+    # own (4,3) below, so it flips — and nothing else changes. Every cell here is hand-computed, so
+    # this catches a wrong flip that a replay-derived expectation would move in lockstep with.
+    move = _idx(2, 3)
+    board = othello.replay([move], SIZE)
+    assert board[_idx(2, 3)] == othello.DARK  # the placed disc
+    assert board[_idx(3, 3)] == othello.DARK  # flipped from light
+    assert board[_idx(3, 4)] == othello.DARK  # untouched centre dark
+    assert board[_idx(4, 3)] == othello.DARK  # the flanking dark
+    assert board[_idx(4, 4)] == othello.LIGHT  # untouched centre light
+    start = othello._starting_board(SIZE)
+    changed = [i for i in range(CELLS) if board[i] != start[i]]
+    assert sorted(changed) == sorted([_idx(2, 3), _idx(3, 3)])
+
+
+def test_a_capture_never_wraps_a_row_boundary():
+    # A run of the opponent at the right edge of row 0, "closed" only by our disc at the left edge
+    # of row 1 — adjacent in the flat array but not on the board. A wrap bug would count it; the
+    # row/col walk must not.
+    size = 4
+    board = [othello.EMPTY] * (size * size)
+    board[0 * size + 3] = othello.LIGHT  # (0,3) opponent, right edge
+    board[1 * size + 0] = othello.DARK  # (1,0) ours, next flat index but a different row
+    assert othello._captures_at(board, 0 * size + 2, othello.DARK, size) == []
 
 
 # --- registry wiring ---
@@ -132,3 +166,19 @@ def test_the_room_uses_the_othello_judge():
     verdict = judge_outcome("othello", moves=[], first_seat=0, cell_count=CELLS)
     assert verdict is not None
     assert verdict.finished is False
+
+
+def test_the_board_registry_accepts_only_playable_sizes():
+    # Othello: an even edge of at least 4. A judge that cannot read the board would otherwise hand
+    # the win back to the client's claim, so an unplayable size has to be refused up front.
+    assert is_valid_cell_count("othello", 64)  # 8x8
+    assert is_valid_cell_count("othello", 36)  # 6x6
+    assert not is_valid_cell_count("othello", 63)  # not square
+    assert not is_valid_cell_count("othello", 4)  # 2x2 starts full
+    assert not is_valid_cell_count("othello", 25)  # 5x5, odd edge
+    # tic-tac-toe: a perfect cube, the only board its line judge can read.
+    assert is_valid_cell_count("tic-tac-toe", 64)  # 4x4x4
+    assert is_valid_cell_count("tic-tac-toe", 27)  # 3x3x3
+    assert not is_valid_cell_count("tic-tac-toe", 36)  # not a cube
+    # A game with no registered judge keeps any size the wire schema allowed.
+    assert is_valid_cell_count("mystery-game", 63)

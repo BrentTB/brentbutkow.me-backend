@@ -53,14 +53,15 @@ tests/             categorize · openfda · routes · contact (TestClient, no DB
 | POST | `/nullspace/score` | **public**, 10/min per IP — submit a game score; implausible runs are accepted but hidden from the board |
 | GET | `/nullspace/leaderboard?version&limit` | **public** — top scores, highest first; optional `version` scope, `limit` 1–200 |
 | POST | `/rooms` | **public**, 20/min + 100/hour per IP — opens a room for a game and claims seat 0 (which owns the room) → `RoomCredentials` with the seat token |
-| POST | `/rooms/matchmake` | **public**, 20/min + 100/hour per IP — joins the longest-waiting open room for the same game + board size, or opens one and waits |
+| POST | `/rooms/matchmake` | **public**, 20/min + 100/hour per IP — joins the longest-waiting open room for the same game (matching board size too, except games in `MATCH_ANY_SIZE_GAMES` like Othello, which match across sizes), or opens one and waits |
 | POST | `/rooms/{code}/join` | **public**, 20/min per IP — claims the room's open seat; 409 while a game is running or when both seats are taken |
 | POST | `/rooms/{code}/leave` | **public**, 30/min per IP — frees the caller's seat; walking out mid-game forfeits it to the other player |
 | POST | `/rooms/{code}/start` | **public**, 30/min per IP — **owner only**, clears the board and begins play; needs both players present |
-| POST | `/rooms/{code}/settings` | **public**, 30/min per IP — **owner only**, between games; a **full replacement** of `firstSeat` + `isOpen` + `moveLimitSeconds` (partial body → 422) |
+| POST | `/rooms/{code}/settings` | **public**, 30/min per IP — **owner only**, between games; a **full replacement** of `firstSeat` + `isOpen` + `moveLimitSeconds` (partial body → 422), plus an optional `cellCount` (only a game whose board size can change sends it; when it differs it resets the board) |
 | POST | `/rooms/{code}/profile` | **public**, 60/min per IP — changes the caller's own seat name and colour |
 | GET | `/rooms/{code}` | **public**, 240/min per IP — the polled room state; send `X-Seat-Token` so the read doubles as your heartbeat |
 | POST | `/rooms/{code}/move` | **public**, 120/min per IP — appends a move under a row lock; resubmitting the applied move returns state rather than an error |
+| POST | `/rooms/{code}/aim` | **public**, 120/min per IP — records a move you have aimed but not committed, so if your clock runs out this turn the server plays it instead of forfeiting; same checks as a move short of ending the turn |
 
 `category` ∈ `allergen · pathogen · foreignMaterial · mislabeling · contaminant · other`.
 `classification` ∈ `Class I · Class II · Class III · Public Health Alert` (US, and CA's Class 1–3
@@ -114,7 +115,8 @@ the `ml` extra. The whole `/recalls/stats` payload (these aggregations + anomali
 **materialised per country** by `scripts/build_stats.py` after each ingest — the request path reads
 one row instead of recomputing it, with a live fallback when a row is absent.
 
-`/rooms/*` is a **game-agnostic turn-based transport**, used by the site's 4x4x4 tic-tac-toe. A room
+`/rooms/*` is a **game-agnostic turn-based transport**, used by the site's 4x4x4 tic-tac-toe and
+Othello (played on a configurable square board). A room
 is named by a 6-character code drawn from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no I/L/O/0/1, so a code
 read aloud has one spelling), holds two seats, and lives `ROOM_TTL_SECONDS` from its last activity.
 A seat's proof is a token returned once on create/join and stored only as a sha256 — the polled
@@ -122,8 +124,10 @@ A seat's proof is a token returned once on create/join and stored only as a sha2
 `outcome` ∈ `win · draw · timeout · forfeit`. The transport enforces the seat token, whose turn it
 is, and that the client is on the current version (a stale `expectedVersion` is a retriable 409);
 what makes a move *legal* and *who won* are per-game hooks in `app/modules/rooms/validators.py`, and
-for a game with a registered judge — `tic-tac-toe` — the result is the server's own reading of the
-move list, not the client's claim. Reads settle the game as a side effect: a turn past its
+for a game with a registered judge — `tic-tac-toe` and `othello` — the result is the server's own
+reading of the move list, not the client's claim. A game with a registered judge also constrains its
+board size (`GAME_BOARDS`): a size that judge could not read is a 422, never a room whose result
+falls back to the client's word. Reads settle the game as a side effect: a turn past its
 `turnEndsAt` becomes a `timeout`, and an opponent quiet past `ROOM_FORFEIT_TIMEOUT_SECONDS` a
 `forfeit`, so nobody has to be online for the right answer to be there when either side asks.
 Presence (`ROOM_PRESENCE_TIMEOUT_SECONDS`) is the much shorter display signal that greys out a name

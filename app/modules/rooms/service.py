@@ -15,13 +15,20 @@ from app.config import settings
 from app.modules.rooms.constants import (
     MATCHABLE_STATUSES,
     MAX_SEATS,
+    GameId,
     RoomOutcome,
     RoomStatus,
     SeatEntry,
+    Verdict,
     now_utc,
 )
 from app.modules.rooms.models import Room
-from app.modules.rooms.validators import InvalidMove, Verdict, judge_outcome, validate_move
+from app.modules.rooms.validators import (
+    InvalidMove,
+    is_valid_cell_count,
+    judge_outcome,
+    validate_move,
+)
 
 # Human-friendly room codes: no I/L/O/0/1, so a code read aloud or off a screen is unambiguous.
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -41,11 +48,26 @@ _SEAT_LEFT_MARKER = [{"joined": False}]
 # Every other game matches only within its own board size. A game listed here has to be one where a
 # guest can simply adopt the size of the room they land in — Othello plays the same at any size.
 # Keyed by game_id like the validator and outcome registries, so a game opts in without a wire flag.
-MATCH_ANY_SIZE_GAMES = frozenset({"othello"})
+MATCH_ANY_SIZE_GAMES = frozenset({GameId.othello})
 
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _require_valid_cell_count(game_id: str, cell_count: int) -> None:
+    """Reject a board size the game cannot actually play, before it reaches the DB.
+
+    The wire schema only bounds ``cell_count`` to a generous range; whether that number is a legal
+    board for *this* game is a per-game rule. A size the game's outcome judge cannot read would
+    silently switch the judge off and hand wins back to the client's claim, so this is a security
+    guard, not a nicety — it runs at every entry that sets a size.
+    """
+    if not is_valid_cell_count(game_id, cell_count):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported board size for this game",
+        )
 
 
 def random_code() -> str:
@@ -220,6 +242,36 @@ def is_move_replay(
     return turn_seat(first_seat, moves[:-1]) == seat
 
 
+def _check_move_in_turn(
+    *,
+    moves: list[int],
+    cell_count: int,
+    game_id: str,
+    first_seat: int,
+    seat: int,
+    move: int,
+    expected_version: int,
+) -> None:
+    """Freshness, turn, then legality for ``seat``'s move — every rule short of who they are.
+
+    Order matters: freshness before turn because a client on the wrong version is out of turn as a
+    consequence, and "your version is stale" is both the more specific answer and a retriable one —
+    where 403 is what a player who no longer holds the seat gets, and cannot be retried into
+    working. Shared by ``authorize_move`` (a committed move) and ``aim_move`` (an aimed one) so the
+    two cannot drift apart.
+    """
+    if expected_version != len(moves):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Move is out of date")
+    if turn_seat(first_seat, moves) != seat:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your turn")
+    try:
+        validate_move(game_id, moves, move, seat, cell_count)
+    except InvalidMove as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
 def authorize_move(
     *,
     moves: list[int],
@@ -233,22 +285,18 @@ def authorize_move(
 ) -> int:
     """Every rule an accepted move must satisfy, as pure logic (no DB) so it is directly testable.
 
-    Order matters: identity, then freshness, then turn, then legality. Freshness comes before turn
-    because a client on the wrong version is out of turn as a consequence, and "your version is
-    stale" is both the more specific answer and a retriable one — where 403 is what a player who no
-    longer holds the seat gets, and cannot be retried into working. Returns the mover's seat.
+    Identity first, then the in-turn checks. Returns the mover's seat.
     """
     seat = seat_for_token(seats, token)
-    if expected_version != len(moves):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Move is out of date")
-    if turn_seat(first_seat, moves) != seat:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your turn")
-    try:
-        validate_move(game_id, moves, move, seat, cell_count)
-    except InvalidMove as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+    _check_move_in_turn(
+        moves=moves,
+        cell_count=cell_count,
+        game_id=game_id,
+        first_seat=first_seat,
+        seat=seat,
+        move=move,
+        expected_version=expected_version,
+    )
     return seat
 
 
@@ -300,6 +348,7 @@ def create_room(
     move_limit_seconds: int | None = None,
 ) -> tuple[Room, str]:
     """Open a room; the creator takes seat 0. Returns the room and the creator's raw token."""
+    _require_valid_cell_count(game_id, cell_count)
     _prune_expired(session)
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     room = Room(
@@ -611,9 +660,10 @@ def update_settings(
     Only from the owner's seat, and only between games: mid-game the terms are settled, but before a
     game starts, including after one has finished, the owner may still change them.
 
-    `cell_count` is sent only by a game whose board size can change; left as ``None`` the size
-    holds. A new size cannot keep moves played on the old one, so changing it clears the board back
-    to waiting, which is safe here, since settings are editable only while no game is running.
+    `cell_count` is optional — only a game whose board size can change sends it, and left as
+    ``None`` the size holds. When present it is validated for the game and, if it differs, clears
+    the board back to waiting (a new size cannot keep moves played on the old one), which is safe
+    here since settings are editable only while no game is running.
     """
     room = _live_room_checked(session, code, lock=True)
     seat = seat_for_token(room.seats, token)
@@ -625,6 +675,16 @@ def update_settings(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="A game is already running"
         )
+    # An abandoned room was retired by matchmaking; it is revived by starting a game or a fresh
+    # join, not by editing its settings. Without this, changing the size runs _clear_last_game and
+    # silently puts it back to waiting, so the same request resurrects it or not depending on an
+    # unrelated field.
+    if room.status == RoomStatus.abandoned:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This room is no longer active"
+        )
+    if cell_count is not None:
+        _require_valid_cell_count(room.game_id, cell_count)
     room.first_seat = first_seat
     room.is_open = is_open
     room.move_limit_seconds = move_limit_seconds
@@ -695,6 +755,7 @@ def matchmake(
     ``MATCH_ANY_SIZE_GAMES``, where a match across sizes beats no match at all. `cell_count` is
     still the size any room this opens is created at.
     """
+    _require_valid_cell_count(game_id, cell_count)
     now = now_utc()
     filters = [
         Room.game_id == game_id,
@@ -823,16 +884,15 @@ def aim_move(session: Session, *, code: str, token: str, move: int, expected_ver
     seat = seat_for_token(room.seats, token)
     if room.status != RoomStatus.active:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This game is not running")
-    if expected_version != len(room.moves):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Move is out of date")
-    if turn_seat(room.first_seat, room.moves) != seat:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your turn")
-    try:
-        validate_move(room.game_id, room.moves, move, seat, room.cell_count)
-    except InvalidMove as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+    _check_move_in_turn(
+        moves=room.moves,
+        cell_count=room.cell_count,
+        game_id=room.game_id,
+        first_seat=room.first_seat,
+        seat=seat,
+        move=move,
+        expected_version=expected_version,
+    )
     room.seats = [
         {**entry, "pending_move": move} if int(entry["seat"]) == seat else entry
         for entry in room.seats

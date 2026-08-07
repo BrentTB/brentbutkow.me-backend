@@ -875,6 +875,15 @@ def test_the_winner_seat_check_and_open_index_match_their_migration():
     assert constants.MATCHABLE_STATUSES == (constants.RoomStatus.waiting, RoomStatus.finished)
 
 
+def test_the_any_size_open_index_matches_its_migration():
+    migration = _migration("f8a9b0c1d2e3")
+    assert tuple(migration._ANY_SIZE_INDEX_COLUMNS) == constants.ROOM_OPEN_ANY_SIZE_INDEX_COLUMNS
+    assert migration._OPEN_INDEX_WHERE == constants.ROOM_OPEN_INDEX_WHERE
+    index = next(i for i in Room.__table__.indexes if i.name == "ix_rooms_open_any_size")
+    assert tuple(c.name for c in index.columns) == constants.ROOM_OPEN_ANY_SIZE_INDEX_COLUMNS
+    assert str(index.dialect_options["postgresql"]["where"]) == constants.ROOM_OPEN_INDEX_WHERE
+
+
 def test_the_owner_may_change_settings_after_a_game_as_well_as_before():
     for state in ("waiting", "finished"):
         room = _room_with_both(status=state)
@@ -925,12 +934,184 @@ def test_settings_changing_the_board_size_resets_the_board():
             first_seat=0,
             is_open=False,
             move_limit_seconds=None,
-            cell_count=36,
+            cell_count=27,
         )
     finally:
         service._live_room = original  # type: ignore[assignment]
-    assert room.cell_count == 36
+    assert room.cell_count == 27
     # A different size cannot keep moves played on the old board, so the room goes back to waiting.
     assert room.status == "waiting"
     assert room.moves == []
     assert room.winner_seat is None
+
+
+# --- board-size validation: a size the game's judge cannot read must never reach the room ---
+
+
+def test_create_room_rejects_an_unplayable_board_for_the_game():
+    # A non-square Othello board: the guard runs before the session is touched, so a fake is enough.
+    with pytest.raises(HTTPException) as exc:
+        service.create_room(_FakeSession(), game_id="othello", name="", colour="1", cell_count=63)
+    assert exc.value.status_code == 422
+
+
+def test_matchmake_rejects_an_unplayable_board_for_the_game():
+    with pytest.raises(HTTPException) as exc:
+        service.matchmake(_FakeSession(), game_id="othello", cell_count=63, name="", colour="1")
+    assert exc.value.status_code == 422
+
+
+def test_settings_rejects_an_unplayable_board_for_the_game():
+    room = _room_with_both(status="waiting", game_id="othello", cell_count=64)
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.update_settings(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                first_seat=0,
+                is_open=False,
+                move_limit_seconds=None,
+                cell_count=63,
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 422
+    assert room.cell_count == 64  # the bad size never landed
+
+
+def test_settings_refuses_to_revive_an_abandoned_room():
+    # Matchmaking retired this room; editing its settings must not silently put it back in the pool.
+    room = _room_with_both(status="abandoned", game_id="othello", cell_count=64, moves=[])
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.update_settings(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                first_seat=1,
+                is_open=True,
+                move_limit_seconds=None,
+                cell_count=36,
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 409
+    assert room.status == "abandoned"
+    assert room.cell_count == 64
+
+
+# --- aiming a move: the same authorization as a committed move, short of ending the turn ---
+
+# A legal opening for dark (seat 0 by default) on the standard 8x8 board.
+_OTH_OPENING = 2 * 8 + 3
+_OTH_OTHER_OPENING = 3 * 8 + 2
+
+
+def _active_othello_room(**over) -> Room:
+    return _room_with_both(
+        status="active",
+        game_id="othello",
+        cell_count=64,
+        turn_started_at=datetime(2030, 1, 1, tzinfo=UTC),
+        **over,
+    )
+
+
+def test_aim_records_the_move_for_the_seat_on_turn():
+    room = _active_othello_room()
+    original = _patch_live(room)
+    try:
+        service.aim_move(
+            _FakeSession(), code="ABCDEF", token="opener", move=_OTH_OPENING, expected_version=0
+        )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert [s.get("pending_move") for s in room.seats] == [_OTH_OPENING, None]
+
+
+def test_aim_rejects_a_move_out_of_turn():
+    room = _active_othello_room()
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.aim_move(
+                _FakeSession(),
+                code="ABCDEF",
+                token="joiner",  # seat 1, but it is seat 0's turn
+                move=_OTH_OPENING,
+                expected_version=0,
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 403
+    assert all("pending_move" not in s for s in room.seats)
+
+
+def test_aim_rejects_a_stale_version():
+    room = _active_othello_room()
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.aim_move(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                move=_OTH_OPENING,
+                expected_version=5,
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 409
+
+
+def test_aim_rejects_when_the_game_is_not_running():
+    room = _room_with_both(status="waiting", game_id="othello", cell_count=64)
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.aim_move(
+                _FakeSession(), code="ABCDEF", token="opener", move=_OTH_OPENING, expected_version=0
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 409
+
+
+def test_aim_rejects_an_illegal_move():
+    room = _active_othello_room()
+    original = _patch_live(room)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            service.aim_move(
+                _FakeSession(),
+                code="ABCDEF",
+                token="opener",
+                move=0,  # a corner that flanks nothing
+                expected_version=0,
+            )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    assert exc.value.status_code == 422
+
+
+def test_aiming_again_replaces_the_previous_aim():
+    room = _active_othello_room()
+    original = _patch_live(room)
+    try:
+        service.aim_move(
+            _FakeSession(), code="ABCDEF", token="opener", move=_OTH_OPENING, expected_version=0
+        )
+        service.aim_move(
+            _FakeSession(),
+            code="ABCDEF",
+            token="opener",
+            move=_OTH_OTHER_OPENING,
+            expected_version=0,
+        )
+    finally:
+        service._live_room = original  # type: ignore[assignment]
+    # Only the latest aim is held — they do not stack.
+    assert [s.get("pending_move") for s in room.seats] == [_OTH_OTHER_OPENING, None]
