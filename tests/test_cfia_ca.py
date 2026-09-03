@@ -1,3 +1,5 @@
+import json
+
 from app.modules.recalls import cfia_ca
 from app.modules.recalls.cfia_ca import (
     CfiaRecord,
@@ -36,6 +38,20 @@ NON_FOOD = {
     "Recall class": "",
     "Last updated": "2026-06-29",
     "Archived": "1",
+}
+
+
+# A CFIA food row with no NID. The NID is the upsert key, so these are unusable and dropped at
+# fetch — an empty one would collide on the composite PK.
+NO_NID = {
+    "NID": None,
+    "Title": "Various brands of sprouts recalled due to Salmonella",
+    "Organization": "CFIA",
+    "Product": "Alfalfa sprouts",
+    "Issue": "Microbial contamination - Salmonella",
+    "Recall class": "Class 1",
+    "Last updated": "2026-05-02",
+    "Archived": "0",
 }
 
 
@@ -132,17 +148,57 @@ def test_product_description_falls_back_when_no_brand():
     assert _product_description(record) == "Certain cheese products"
 
 
-def test_fetch_keeps_only_cfia_food(monkeypatch):
+# fetch_cfia parses the response body incrementally off `.content`. The stub exposes both
+# `.content` and `.json()`, like a real httpx.Response does, so that the assertions below — not a
+# missing attribute — are what fails if the whole-document parse ever comes back.
+def _stub_export(monkeypatch, rows):
+    body = json.dumps(rows).encode()
+
     def fake_get(url, **kwargs):
         class _Resp:
+            content = body
+
             def raise_for_status(self):
                 return None
 
             def json(self):
-                return [RECALL, NON_FOOD]
+                return json.loads(body)
 
         return _Resp()
 
     monkeypatch.setattr(cfia_ca.httpx, "get", fake_get)
+
+
+def test_fetch_keeps_only_cfia_food(monkeypatch):
+    _stub_export(monkeypatch, [RECALL, NON_FOOD])
     records = fetch_cfia()
     assert [r.nid for r in records] == ["98765"]  # the consumer-product row is dropped
+
+
+def test_fetch_preserves_all_mapped_fields(monkeypatch):
+    """The incremental parser must yield records identical to a whole-document parse."""
+    _stub_export(monkeypatch, [RECALL])
+    (record,) = fetch_cfia()
+    assert record.model_dump() == CfiaRecord.model_validate(RECALL).model_dump()
+
+
+def test_fetch_does_not_build_a_model_per_feed_row(monkeypatch):
+    """Non-food rows must be discarded before validation, not after.
+
+    The export is ~34k rows of which ~5k are CFIA food. Validating every row before filtering is
+    what made this fetch peak large enough to get the 512 MB service OOM-killed (2026-09-02), so
+    the count here is the memory guard: one model per *kept* row, not per feed row.
+    """
+    validated: list[str | None] = []
+    original = CfiaRecord.model_validate
+
+    def counting_validate(item, *args, **kwargs):
+        record = original(item, *args, **kwargs)
+        validated.append(record.nid)
+        return record
+
+    monkeypatch.setattr(cfia_ca.CfiaRecord, "model_validate", counting_validate)
+    _stub_export(monkeypatch, [NON_FOOD, RECALL, NON_FOOD, NO_NID])
+    records = fetch_cfia()
+    assert [r.nid for r in records] == ["98765"]
+    assert validated == ["98765"]  # the 3 unusable rows never became models
