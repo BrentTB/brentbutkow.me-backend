@@ -50,9 +50,30 @@ These are materialized offline (build_analytics / build_events / build_predictio
 ingest. Every write MUST preserve `recalls.updated_at` (set it to itself in a Core UPDATE) — it's
 the "source changed" signal build_stats/build_analytics read for staleness, so a derived write that
 bumps it makes every rebuild re-run forever. novelty rides in build_analytics' topic_id UPDATE;
-predicted_class in build_predictions'. The models (classifier.joblib, class_predictor.joblib) load
-ONLY in offline scripts — never import class_predictor from the request path (constraints.txt pins
-the sklearn stack the pickles were built with; re-pin + retrain together).
+predicted_class in build_predictions'. class_predictor.joblib loads ONLY in build_predictions —
+never import class_predictor, or anything else that drags in sklearn/scipy, from the request path
+(constraints.txt pins the sklearn stack the pickle was built with; re-pin + retrain together).
+classifier.joblib is no longer loaded anywhere: category comes from `categorize.label_category`,
+pure Python — see the memory budget below.
+
+## Request-path memory budget (512 MB, 0.1 CPU)
+
+The API runs on a free tier with 512 MB and 0.1 CPU, and the daily ingest runs *inside* that
+process — seven sources back to back, so peaks land on a heap already fragmented by the earlier
+ones. The 2026-09-02 outage was an OOM kill mid-ingest: the container died serving the CFIA
+request (502 after 21s of work) and the two steps behind it got instant 503s, so RASFF never ran
+and the digest never sent. Both causes were avoidable.
+
+- Never `response.json()` a whole-catalogue export. CFIA's is ~34k rows to keep ~5k, which cost
+  ~150 MB in dicts and models. Parse it with `ijson` and filter on the feed's own key names
+  *before* validating, so peak memory tracks the rows actually kept (cfia_ca.py `fetch_cfia`).
+- Never import sklearn/scipy on the request path. The import graph alone is ~116 MB — almost none
+  of it the model (classifier.joblib's vectorizer + coefficients are ~1.2 MB). Guarded by
+  tests/test_classifier.py, which asserts in a subprocess that importing the ingest path leaves
+  sklearn out of `sys.modules`.
+- A model earns its memory only against a measured baseline. The dropped TF-IDF classifier agreed
+  with the labeler it was trained on for 5294 of 5296 Canadian recalls, and model_card.md concedes
+  there is no ground-truth set to judge either against — 116 MB for an unmeasurable gain.
 
 ## Backfill / seed scripts (scripts/backfill_*.py, scripts/seed_*.py)
 

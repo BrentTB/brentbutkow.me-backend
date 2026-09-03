@@ -1,6 +1,8 @@
+import io
 import re
 
 import httpx
+import ijson
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.recalls.classifier import classify
@@ -150,10 +152,26 @@ def normalize_cfia(record: CfiaRecord) -> NormalizedRecall:
 # Downloads the full export (~15 MB) and keeps the CFIA food rows. The whole corpus arrives in one
 # file, so each run is a full re-sync — the upsert is idempotent, and there's no pagination or
 # separate backfill to manage.
+#
+# Parsed incrementally, and filtered before validation, to stay inside the 512 MB service. The
+# export is ~34k rows and we keep ~5k, so `response.json()` peaked ~80 MB building dicts for all
+# 34k at once (on top of the 15 MB body) and `model_validate` then built a model per row —
+# together enough to get the container OOM-killed mid-request, which is what took the service down
+# on 2026-09-02. ijson yields one row at a time, so peak memory tracks the rows we actually keep.
 def fetch_cfia() -> list[CfiaRecord]:
     response = httpx.get(ENDPOINT, timeout=120, follow_redirects=True)
     response.raise_for_status()
-    records = (CfiaRecord.model_validate(item) for item in response.json())
+    # Filtering on the feed's own key names (rather than on a validated model) is what keeps the
+    # 29k non-food rows from ever becoming objects. It's equivalent to filtering on the model: the
+    # export only ever spells these keys as the aliases below, never as the field names.
     # Keep CFIA food rows that carry a NID — the NID is the upsert key, so a row without one is
     # unusable (and shouldn't occur in practice).
-    return [record for record in records if record.organization == FOOD_ORG and record.nid]
+    #
+    # use_float: ijson yields Decimal for JSON numbers by default, which would not survive the
+    # JSON round-trip into the `raw` column. Every value in the export is a string or null today,
+    # so this only guards the feed growing a numeric field.
+    return [
+        CfiaRecord.model_validate(item)
+        for item in ijson.items(io.BytesIO(response.content), "item", use_float=True)
+        if item.get("Organization") == FOOD_ORG and item.get("NID")
+    ]

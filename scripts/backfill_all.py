@@ -12,7 +12,7 @@ existing corpus. New rows get all of this at ingest; these scripts re-stage it f
                                  -> scripts.backfill_html_decode
   entities                       from reason_text + the gazetteer (entities.py)
                                  -> scripts.backfill_entities
-  category (+ confidence)        from reason_text + the model (classifier.joblib)
+  category (+ confidence)        from reason_text + the gazetteer (categorize.py)
                                  -> scripts.reclassify
   severity (score + label)       from classification + category + entities + states +
                                  distribution_pattern + the rules in severity.py
@@ -27,8 +27,10 @@ existing corpus. New rows get all of this at ingest; these scripts re-stage it f
 So when you change ...           re-run ...
   the reason_text mapping        reclassify (entities+category+severity), then build_analytics
   the product_description text   build_analytics
-  the entity gazetteer           backfill_entities, then backfill_severity
-  the classifier model           reclassify
+  the entity gazetteer           backfill_entities, then backfill_severity — and reclassify:
+                                 category derives from the gazetteer too, now that the learned
+                                 classifier is gone (categorize.label_category)
+  the category keywords          reclassify
   the severity rules             backfill_severity
   the analytics params           build_analytics, then build_events
   the clustering params          build_events

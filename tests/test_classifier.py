@@ -1,55 +1,67 @@
-import numpy as np
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
-from app.modules.recalls import classifier
 from app.modules.recalls.classifier import classify
 from app.modules.recalls.schemas import RecallCategory
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-def test_falls_back_to_keyword_baseline_without_a_model(monkeypatch):
-    monkeypatch.setattr(classifier, "_get_model", lambda: None)
+
+def test_names_a_cause_with_full_confidence():
     assert classify("Product contains undeclared milk.") == (RecallCategory.allergen, 1.0)
+    assert classify("Potential Listeria monocytogenes contamination.") == (
+        RecallCategory.pathogen,
+        1.0,
+    )
+
+
+def test_unnamed_cause_falls_through_to_other_with_zero_confidence():
     assert classify("Quality defect of unknown origin.") == (RecallCategory.other, 0.0)
 
 
-def test_classify_returns_a_valid_category_and_confidence():
-    # Works whether the trained artifact is present (model) or not (keyword fallback).
-    category, confidence = classify("Potential Listeria monocytogenes contamination.")
-    assert isinstance(category, RecallCategory)
-    assert 0.0 <= confidence <= 1.0
+def test_gazetteer_decides_over_an_incidental_ingredient_word():
+    # "raw milk cheese recalled for E. coli" — the named pathogen is the cause, not the ingredient.
+    category, confidence = classify("Raw milk cheese recalled due to E. coli O157:H7")
+    assert category == RecallCategory.pathogen
+    assert confidence == 1.0
 
 
-class _OtherModel:
-    """A stand-in model that always predicts 'other' — the case the gazetteer rescue targets."""
-
-    classes_ = np.array(["other", "contaminant"])
-
-    def predict_proba(self, _texts):
-        return np.array([[0.9, 0.1]])
+def test_confidence_is_always_in_range():
+    for text in ("Undeclared peanuts", "Metal fragments found", "", "Unspecified issue"):
+        _, confidence = classify(text)
+        assert 0.0 <= confidence <= 1.0
 
 
-def test_gazetteer_rescues_an_other_prediction_when_it_names_a_cause(monkeypatch):
-    # The model was trained before the gazetteer gained EU terms, so it reads "acetamiprid" as
-    # "other"; the high-precision gazetteer names it a contaminant and must win.
-    monkeypatch.setattr(classifier, "_get_model", lambda: _OtherModel())
-    assert classify("Acetamiprid in pears from Turkey") == (RecallCategory.contaminant, 1.0)
+# The API process runs on a 512 MB box. joblib.load() of the old classifier pulled in the
+# sklearn/scipy import graph — ~116 MB, and a contributor to the 2026-09-02 OOM. CLAUDE.md's rule
+# is that the ML stack loads only in offline scripts, never on the request path; this is the guard.
+# It runs in a subprocess because the offline-script tests in this suite import sklearn themselves,
+# so an in-process sys.modules check would pass or fail depending on test ordering.
+def test_ingest_path_never_imports_the_ml_stack():
+    probe = textwrap.dedent(
+        """
+        import sys
 
+        # The ingest request path: the service module imports every source normalizer, and each one
+        # classifies as it normalizes.
+        from app.modules.recalls.service import run_cfia_ingest  # noqa: F401
+        from app.modules.recalls.classifier import classify
 
-def test_gazetteer_rescue_leaves_a_genuine_other_alone(monkeypatch):
-    # No entity to rescue with → the model's "other" stands.
-    monkeypatch.setattr(classifier, "_get_model", lambda: _OtherModel())
-    category, _ = classify("Unauthorised novel food ingredient, no named hazard.")
-    assert category == RecallCategory.other
+        classify("Undeclared milk in chocolate bars.")
 
-
-def test_gazetteer_rescue_never_overrides_a_confident_model_class(monkeypatch):
-    class _AllergenModel:
-        classes_ = np.array(["other", "allergen"])
-
-        def predict_proba(self, _texts):
-            return np.array([[0.2, 0.8]])  # confident allergen
-
-    monkeypatch.setattr(classifier, "_get_model", lambda: _AllergenModel())
-    # Even though the reason names a pathogen, a confident non-"other" model class is kept as-is.
-    category, confidence = classify("Salmonella found")
-    assert category == RecallCategory.allergen
-    assert confidence == 0.8
+        heavy = sorted(m for m in ("sklearn", "scipy", "joblib") if m in sys.modules)
+        print(",".join(heavy))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "", (
+        f"the ingest path imported the ML stack: {result.stdout.strip()}"
+    )

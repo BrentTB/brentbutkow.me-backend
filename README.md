@@ -21,11 +21,11 @@ app/
   db.py            engine + session dependency + Base
   auth.py          bearer dependency
   main.py          FastAPI app, CORS, rate limit, create_all on boot
-  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (+ model/) · class_predictor (cross-country class, model/) · entities · severity · anomalies · embeddings · analytics (embedding themes + similarity + novelty) · service · router
+  modules/recalls/ schemas · models · openfda · fsis · fsa_uk (fetch+normalize+validate) · categorize · classifier (gazetteer-backed, no model) · class_predictor (cross-country class, model/) · entities · severity · anomalies · embeddings · analytics (embedding themes + similarity + novelty) · service · router
   modules/contact/ schemas · models · service · router — visitor messages (rate-limited, bot-flagged)
   modules/nullspace/ schemas · models · service · router — Null Space game leaderboard (rate-limited, server-side score plausibility checks)
   modules/rooms/   constants (statuses · outcomes · the shared CHECK/index SQL) · schemas · models · validators (per-game legality + who-won judges) · service · router — turn-based multiplayer rooms, game-agnostic
-scripts/           per-source ingest + ingest_all · backfill + backfill_all (detects what's needed) · reclassify · classifier training
+scripts/           per-source ingest + ingest_all · backfill + backfill_all (detects what's needed) · reclassify
 tests/             categorize · openfda · routes · contact (TestClient, no DB) · service (Postgres integration)
 ```
 
@@ -171,8 +171,9 @@ python -m scripts.backfill_rasff_enrichment  # one-time: attach national-authori
 python -m scripts.backfill_severity          # one-time: seed severity over existing recalls (after migrating)
 python -m scripts.backfill_entities          # one-time: seed entities over existing recalls (after migrating)
 python -m scripts.backfill_all               # run the still-needed backfills above (--all forces · --check previews)
-python -m scripts.train_classifier           # train the category model → recalls/model/classifier.joblib
-python -m scripts.reclassify                 # re-run model + entities + severity over stored recalls
+python -m scripts.train_classifier           # train the category model (UNUSED: the app classifies with
+                                             # categorize.label_category, not this artifact)
+python -m scripts.reclassify                 # re-run category + entities + severity over stored recalls
 python -m scripts.build_analytics            # rebuild themes + similar-recall neighbours (after ingest)
 python -m scripts.build_stats                # re-materialise the /recalls/stats payload per country
 
