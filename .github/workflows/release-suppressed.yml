@@ -1,0 +1,80 @@
+name: Release suppressed digests
+
+# Manual only, and deliberately its own workflow rather than an entry in run-script.yml: this is
+# the one script that emails real subscribers, and its window/country inputs would otherwise hang
+# off every unrelated script in that dropdown.
+#
+# When one country's fresh batch exceeds the backfill guard threshold, the daily dispatcher holds
+# that country's subscriber digests, emails the operator, and advances the cursor anyway — so the
+# held recalls are never picked up by a later run. This workflow is the operator's release valve:
+# it re-runs one dispatch cycle over exactly the held window and countries, guard off, without
+# moving the daily cursor. See scripts/release_suppressed.py.
+#
+# Leave "apply" unchecked first: that prints a preview (recalls in window, subscribers who would
+# receive one) and sends nothing. Check the count against the operator digest's "Suppressed
+# (backfill guard)" number, then re-run with apply checked.
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Window start — '36h', '3d', or an ISO instant. Must precede the held run."
+        type: string
+        required: true
+      until:
+        description: "Window end (optional) — '12h' or an ISO instant. Set this if a daily run has dispatched since the hold, or its recalls go out twice."
+        type: string
+        required: false
+        default: ""
+      countries:
+        description: "Comma-separated countries to release, e.g. 'us'"
+        type: string
+        required: true
+      apply:
+        description: "Actually send (unchecked = dry-run preview)"
+        type: boolean
+        required: false
+        default: false
+
+# Least privilege: runs a script against the external DB and only needs the checkout.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0 # v2.0.0
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DATABASE_URL: op://Developer/Neon-Postgres/CONNECTION_STRING
+          # App config requires this at import even though this script never uses it.
+          INGEST_BEARER_TOKEN: op://Developer/API-Backend/INGEST_BEARER_TOKEN
+          # Without these the dispatcher is a no-op — an apply run would send nothing.
+          RESEND_API_KEY: op://Developer/Resend/API_KEY
+          RESEND_FROM_ADDRESS: op://Developer/Resend/NOTIFICATION_FROM_ADDRESS
+          OPERATOR_EMAIL: op://Developer/Resend/OPERATOR_EMAIL
+
+      - name: Install dependencies
+        # Base deps only — the dispatcher path loads no model (see CLAUDE.md's memory budget).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "." -c constraints.txt
+
+      - name: Run scripts.release_suppressed
+        env:
+          # Free-form inputs ride in env, never interpolated into the shell.
+          RELEASE_SINCE: ${{ inputs.since }}
+          RELEASE_UNTIL: ${{ inputs.until }}
+          RELEASE_COUNTRIES: ${{ inputs.countries }}
+          RELEASE_APPLY: ${{ inputs.apply }}
+        run: python -m scripts.release_suppressed

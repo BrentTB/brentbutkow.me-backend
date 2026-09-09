@@ -80,13 +80,13 @@ _FIRST_RUN_LOOKBACK = timedelta(days=1)
 
 # Backfill circuit breaker, applied per country. Newness keys off `created_at` (ingest time), so a
 # one-shot backfill, a brand-new country/source, or a re-sync that fresh-inserts a big batch would
-# otherwise blast every active subscriber at once. A normal daily delta is a handful of recalls per
-# country; a country this far above that is a bulk load, not a news day. We suppress only the
-# flooded countries' recalls this run — subscribers to the other countries still get theirs — alert
-# the operator, and still advance the cursor so the next run returns to normal. The operator decides
-# whether to release a held batch. The guard is per-country so seeding one new country (e.g. CA's
-# ~5k-row history) never blocks the genuine US/UK/ZA/EU recalls that landed the same run.
-_BACKFILL_GUARD_THRESHOLD = 50
+# otherwise blast every active subscriber at once. A country whose batch exceeds
+# `settings.backfill_guard_threshold` is treated as a bulk load, not a news day. We suppress only
+# the flooded countries' recalls this run — subscribers to the other countries still get theirs —
+# alert the operator, and still advance the cursor so the next run returns to normal. The operator
+# decides whether to release a held batch (scripts/release_suppressed.py). The guard is per-country
+# so seeding one new country (e.g. CA's ~5k-row history) never blocks the genuine US/UK/ZA/EU
+# recalls that landed the same run.
 
 
 def _load_dispatch_state(db_session: Session) -> DispatchState:
@@ -113,8 +113,28 @@ def _commit_or_rollback(db_session: Session, context: str) -> bool:
         return False
 
 
-async def run_dispatch(db_session: Session) -> dict:
-    """Run one dispatch cycle. Returns a summary metrics dict."""
+async def run_dispatch(
+    db_session: Session,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    only_countries: set[str] | None = None,
+    apply_backfill_guard: bool = True,
+) -> dict:
+    """Run one dispatch cycle. Returns a summary metrics dict.
+
+    The keyword arguments exist for one job: releasing a batch the backfill guard held
+    (scripts/release_suppressed.py). Passing `since` puts the cycle in *release mode* — it reads
+    recalls created after that instant instead of after the persisted cursor, and it leaves
+    `DispatchState.last_run_at` untouched, because the daily cycle has already moved past those
+    recalls and must not be rewound. `until` closes the window at the top, and `only_countries`
+    narrows it to the held countries, so a release can't re-send recalls subscribers already
+    received from a later run or another country; `apply_backfill_guard=False` stops the guard from
+    re-holding the very batch being released. Contact messages are skipped in release mode —
+    the daily operator digest already reported them.
+    The daily path (app/internal/router.py) passes none of these and behaves exactly as before.
+    """
+    release_mode = since is not None
     if email_disabled():
         # No API key → sending is a no-op. Bail before touching subscription state so we don't
         # mark anyone as "sent" or advance the cursor over recalls that were never delivered.
@@ -139,11 +159,17 @@ async def run_dispatch(db_session: Session) -> dict:
     # ------------------------------------------------------------------
     # Require at least one date — a recall with neither is structurally invalid and shouldn't alert.
     has_date = (Recall.report_date.isnot(None)) | (Recall.recall_initiation_date.isnot(None))
-    if last_run_at is None:
+    if since is not None:
+        cutoff = since
+    elif last_run_at is None:
         cutoff = datetime.now(UTC) - _FIRST_RUN_LOOKBACK
-        stmt_recalls = select(Recall).where(has_date & (Recall.created_at > cutoff))
     else:
-        stmt_recalls = select(Recall).where(has_date & (Recall.created_at > last_run_at))
+        cutoff = last_run_at
+    stmt_recalls = select(Recall).where(has_date & (Recall.created_at > cutoff))
+    if until is not None:
+        stmt_recalls = stmt_recalls.where(Recall.created_at <= until)
+    if only_countries is not None:
+        stmt_recalls = stmt_recalls.where(Recall.country.in_(sorted(only_countries)))
 
     # load_only keeps each row to the handful of fields we use — no `raw` JSONB — so a big backlog
     # doesn't exhaust memory.
@@ -156,6 +182,8 @@ async def run_dispatch(db_session: Session) -> dict:
     # Folded into the operator digest rather than emailed per-message, so a burst of submissions
     # can't spam the inbox or burn the free-tier send budget. Spam (is_bot) is excluded here — the
     # admin console still surfaces it. Same cursor window as recalls.
+    # A release re-runs an already-reported window, so it skips messages rather than forwarding
+    # the same submissions to the operator a second time.
     msg_cutoff = (datetime.now(UTC) - _FIRST_RUN_LOOKBACK) if last_run_at is None else last_run_at
     stmt_messages = (
         select(Message)
@@ -163,7 +191,9 @@ async def run_dispatch(db_session: Session) -> dict:
         .order_by(Message.created_at.asc())
         .options(load_only(*_MESSAGE_COLUMNS))
     )
-    new_messages: list[Message] = list(db_session.scalars(stmt_messages).all())
+    new_messages: list[Message] = (
+        [] if release_mode else list(db_session.scalars(stmt_messages).all())
+    )
 
     # Per-country backfill guard: any country whose fresh batch is abnormally large is a bulk load,
     # not a news day. Suppress only those countries' recalls this run (the rest still dispatch); the
@@ -171,10 +201,13 @@ async def run_dispatch(db_session: Session) -> dict:
     # The suppressed batch is NOT auto-re-windowed — once the cursor advances those recalls are no
     # longer "new", so releasing them to subscribers is a deliberate operator action (rewind
     # state.last_run_at past them and re-run dispatch).
+    threshold = settings.backfill_guard_threshold
     new_by_country: Counter[str] = Counter(recall.country for recall in new_recalls)
-    suppressed_countries = {
-        country for country, count in new_by_country.items() if count > _BACKFILL_GUARD_THRESHOLD
-    }
+    suppressed_countries = (
+        {country for country, count in new_by_country.items() if count > threshold}
+        if apply_backfill_guard
+        else set()
+    )
     dispatchable_recalls = [r for r in new_recalls if r.country not in suppressed_countries]
     if suppressed_countries:
         logger.warning(
@@ -244,7 +277,7 @@ async def run_dispatch(db_session: Session) -> dict:
     # Surface any tripped country in the operator email's errors section so it can't be missed.
     operator_errors = [
         f"Backfill guard tripped for '{country}': {new_by_country[country]} new recalls exceeds "
-        f"threshold {_BACKFILL_GUARD_THRESHOLD}. That country's digests were suppressed this run — "
+        f"threshold {threshold}. That country's digests were suppressed this run — "
         f"review the batch and dispatch manually if it is legitimate."
         for country in sorted(suppressed_countries)
     ]
@@ -344,8 +377,10 @@ async def run_dispatch(db_session: Session) -> dict:
     # ------------------------------------------------------------------
     # 6. Advance the persisted dispatch cursor
     # ------------------------------------------------------------------
-    state.last_run_at = datetime.now(UTC)
-    _commit_or_rollback(db_session, "advance dispatch cursor")
+    # A release runs behind the live cursor; moving it would re-send everything since.
+    if not release_mode:
+        state.last_run_at = datetime.now(UTC)
+        _commit_or_rollback(db_session, "advance dispatch cursor")
 
     # ------------------------------------------------------------------
     # 7. Summary log
