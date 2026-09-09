@@ -477,6 +477,8 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
 
     monkeypatch.setattr(settings, "resend_api_key", "test-key")
     monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+    # A small threshold keeps the flood fixtures cheap; the guard reads it off settings.
+    monkeypatch.setattr(settings, "backfill_guard_threshold", 5)
 
     # Operator digest is still expected; capture it instead of hitting the network.
     operator_calls: list[tuple] = []
@@ -495,9 +497,7 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
     monkeypatch.setattr(dispatcher, "send_digest_email", _must_not_send)
 
     # First run (last_run_at None), one country's batch above the threshold — the 137-style flood.
-    big_batch = [
-        _make_recall(country="ca") for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD + 1)
-    ]
+    big_batch = [_make_recall(country="ca") for _ in range(settings.backfill_guard_threshold + 1)]
     session = _mock_session_for_dispatch(recalls=big_batch, subs=[], last_run_at=None)
 
     loop = asyncio.new_event_loop()
@@ -508,7 +508,7 @@ def test_run_dispatch_backfill_guard_suppresses_subscriber_sends(monkeypatch):
 
     assert result["backfillGuardTripped"] is True
     assert result["suppressedCountries"] == ["ca"]
-    assert result["suppressedRecalls"] == dispatcher._BACKFILL_GUARD_THRESHOLD + 1
+    assert result["suppressedRecalls"] == settings.backfill_guard_threshold + 1
     assert result["sent"] == 0
     # Operator still alerted, with the guard flag and a non-empty errors list.
     assert len(operator_calls) == 1
@@ -527,6 +527,8 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
 
     monkeypatch.setattr(settings, "resend_api_key", "test-key")
     monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+    # A small threshold keeps the flood fixtures cheap; the guard reads it off settings.
+    monkeypatch.setattr(settings, "backfill_guard_threshold", 5)
     monkeypatch.setattr(
         dispatcher,
         "send_operator_digest_email",
@@ -534,7 +536,7 @@ def test_run_dispatch_below_threshold_does_not_trip_guard(monkeypatch):
     )
 
     # A normal daily delta (at the threshold, not above it) with no subscribers to send to.
-    normal_batch = [_make_recall(country="us") for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD)]
+    normal_batch = [_make_recall(country="us") for _ in range(settings.backfill_guard_threshold)]
     session = _mock_session_for_dispatch(recalls=normal_batch, subs=[], last_run_at=None)
 
     loop = asyncio.new_event_loop()
@@ -554,6 +556,8 @@ def test_run_dispatch_backfill_guard_is_per_country(monkeypatch):
 
     monkeypatch.setattr(settings, "resend_api_key", "test-key")
     monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+    # A small threshold keeps the flood fixtures cheap; the guard reads it off settings.
+    monkeypatch.setattr(settings, "backfill_guard_threshold", 5)
     monkeypatch.setattr(
         dispatcher,
         "send_operator_digest_email",
@@ -572,7 +576,7 @@ def test_run_dispatch_backfill_guard_is_per_country(monkeypatch):
     entity = "testentity"
     ca_flood = [
         _make_recall(country="ca", entity=entity)
-        for _ in range(dispatcher._BACKFILL_GUARD_THRESHOLD + 1)
+        for _ in range(settings.backfill_guard_threshold + 1)
     ]
     us_recall = _make_recall(country="us", entity=entity)
     # A subscriber to *both* countries — CA should be withheld, US should still arrive.
@@ -626,3 +630,77 @@ def test_run_dispatch_forwards_contact_messages_to_operator(monkeypatch):
 
     assert captured["messages"] == msgs
     assert captured["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Release mode — scripts/release_suppressed.py re-sending a batch the guard held
+# ---------------------------------------------------------------------------
+
+
+def test_run_dispatch_release_mode_sends_held_batch_without_moving_cursor(monkeypatch):
+    """`since=` re-sends a held batch with the guard off, leaving the daily cursor untouched."""
+    from types import SimpleNamespace
+
+    from app.config import settings
+    from app.subscriptions import dispatcher
+
+    monkeypatch.setattr(settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(settings, "operator_email", "ops@example.com")
+    monkeypatch.setattr(settings, "backfill_guard_threshold", 5)
+    monkeypatch.setattr(
+        dispatcher,
+        "send_operator_digest_email",
+        lambda metrics, recalls, errors, messages=None: None,
+    )
+
+    sent_countries: list[str] = []
+    monkeypatch.setattr(
+        dispatcher,
+        "send_digest_email",
+        lambda sub, matching: sent_countries.extend(r.country for r in matching),
+    )
+
+    entity = "testentity"
+    # A batch well over the threshold — exactly what the guard held in the first place.
+    held_batch = [
+        _make_recall(country="us", entity=entity)
+        for _ in range(settings.backfill_guard_threshold + 1)
+    ]
+    sub = _FakeSubscription(
+        entities=[entity],
+        countries=["us"],
+        categories=[VALID_CATEGORIES[0]],
+        min_severity=VALID_SEVERITIES[0],
+        last_digest_at=None,
+        confirmed_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    cursor_at = datetime.now(UTC)
+    session = MagicMock()
+    session.get.return_value = SimpleNamespace(last_run_at=cursor_at)
+    recalls_scalar = MagicMock()
+    recalls_scalar.all.return_value = held_batch
+    subs_scalar = MagicMock()
+    subs_scalar.all.return_value = [sub]
+    # Only two scalars() calls in release mode: recalls, then subscriptions — messages are skipped.
+    session.scalars.side_effect = [recalls_scalar, subs_scalar]
+    session.execute.return_value.scalar_one.return_value = 0
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(
+            dispatcher.run_dispatch(
+                session,
+                since=cursor_at - timedelta(hours=36),
+                only_countries={"us"},
+                apply_backfill_guard=False,
+            )
+        )
+    finally:
+        loop.close()
+
+    assert result["backfillGuardTripped"] is False, "the guard must not re-hold a release"
+    assert result["suppressedCountries"] == []
+    assert result["sent"] == 1
+    assert sent_countries == ["us"] * len(held_batch)
+    # The daily cursor is left exactly where the daily run put it.
+    assert session.get.return_value.last_run_at == cursor_at

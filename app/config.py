@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     # throttles a background tab's polling to roughly once a minute, so a player who switches tabs
     # must not lose a game they are still playing.
     room_forfeit_timeout_seconds: int = 300
+    # Backfill circuit breaker (app/subscriptions/dispatcher.py), applied per country per run: a
+    # country whose fresh batch exceeds this is treated as a bulk load and its subscriber digests
+    # are held. Sized off real traffic, not comfort: the US alone (openFDA enforcement + FSIS)
+    # posts batched days well past 50 — 69 on 2026-09-08 was a genuine news day, not a backfill.
+    # Env-tunable so a noisy stretch is a config change, not a deploy. Release a held batch with
+    # scripts/release_suppressed.py rather than by raising this after the fact.
+    backfill_guard_threshold: int = 150
 
     @model_validator(mode="before")
     @classmethod

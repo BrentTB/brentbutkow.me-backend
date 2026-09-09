@@ -176,6 +176,10 @@ python -m scripts.train_classifier           # train the category model (UNUSED:
 python -m scripts.reclassify                 # re-run category + entities + severity over stored recalls
 python -m scripts.build_analytics            # rebuild themes + similar-recall neighbours (after ingest)
 python -m scripts.build_stats                # re-materialise the /recalls/stats payload per country
+RELEASE_SINCE=36h RELEASE_COUNTRIES=us python -m scripts.release_suppressed
+                                             # preview a batch the dispatcher's backfill guard held
+                                             # (RELEASE_APPLY=true sends it; own GitHub workflow:
+                                             # "Release suppressed digests")
 
 pytest                              # tests (no DB needed)
 ruff check . && ruff format .       # lint + format
