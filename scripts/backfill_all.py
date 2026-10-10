@@ -10,9 +10,9 @@ existing corpus. New rows get all of this at ingest; these scripts re-stage it f
   decoded text (product_desc,    HTML entities decoded + tags stripped over the stored corpus; new
   reason_text, company_name)     rows are decoded at ingest by each source normalizer (strip_html)
                                  -> scripts.backfill_html_decode
-  entities                       from reason_text + the gazetteer (entities.py)
-                                 -> scripts.backfill_entities
-  category (+ confidence)        from reason_text + the gazetteer (categorize.py)
+  entities                       from reason_text (+ RASFF's hazard names, read from raw) + the
+                                 gazetteer (entities.py) -> scripts.backfill_entities
+  category (+ confidence)        from the same text + the gazetteer (categorize.py)
                                  -> scripts.reclassify
   severity (score + label)       from classification + category + entities + states +
                                  distribution_pattern + the rules in severity.py

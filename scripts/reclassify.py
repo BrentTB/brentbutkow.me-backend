@@ -2,12 +2,14 @@ from app.modules.recalls.classifier import classify
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.models import Recall
 from app.modules.recalls.severity import score_severity
-from scripts._common import backfill_recalls
+from scripts._common import CauseText, backfill_recalls, load_cause_text
 
 
-def _reclassify(recall: Recall) -> None:
-    category, confidence = classify(recall.reason_text)
-    entities = extract_entities(recall.reason_text)
+def _reclassify(recall: Recall, cause_text: CauseText) -> None:
+    # Classify the same text ingest did (RASFF adds its hazard names), not reason_text alone.
+    cause = cause_text(recall.source, recall.recall_number, recall.reason_text)
+    category, confidence = classify(cause)
+    entities = extract_entities(cause)
     recall.category = category.value
     recall.category_confidence = confidence
     recall.entities = entities
@@ -35,7 +37,10 @@ def _reclassify(recall: Recall) -> None:
 def main() -> None:
     # batch=None → the whole corpus updates in one transaction, so a mid-run failure rolls back
     # rather than leaving the table half-reclassified.
-    backfill_recalls(_reclassify, label="Reclassified", batch=None)
+    cause_text = load_cause_text()
+    backfill_recalls(
+        lambda recall: _reclassify(recall, cause_text), label="Reclassified", batch=None
+    )
 
 
 if __name__ == "__main__":

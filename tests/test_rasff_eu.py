@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from app.modules.recalls import rasff_eu, service
+from app.modules.recalls.classifier import classify
 from app.modules.recalls.rasff_eu import (
     RASFF_WINDOW_HOST,
     RasffRecord,
@@ -134,6 +135,52 @@ def test_hazard_and_subject_whitespace_is_collapsed():
     row = _normalize(BORDER)
     assert row["reason_text"] == "Salmonella spp. in poultry meat preparation from Brazil."
     assert not row["reason_text"].startswith((" ", "\t"))
+
+
+# Verbatim from the DG SANTE API: a French notifier's subject spells it "Salmonelle", while the
+# structured hazard field stays canonical. It was categorized "other" despite its Salmonella chip.
+SALMONELLE = {
+    "NOTIF_ID": 878018,
+    "NOTIFICATION_REFERENCE": "2026.8845",
+    "NOTIF_DATE": "2026-10-06T00:00:00",
+    "NOTIFICATION_STATUS_DESC": "ec_validated",
+    "PRODUCT_NAME": "chicken-based product",
+    "PRODUCT_CATEGORY_DESC": "poultry meat and poultry meat products",
+    "NOTIFICATION_TYPE_DESC": "food",
+    "NOTIF_SUBJECT": "Salmonelle detected in a chicken-based product",
+    "NOTIFYNG_COUNTRY_DESC": "France",
+    "NOTIFICATION_CLASSIFICAT_DESC": "alert notification",
+    "NOTIFICATION_BASIS_DESC": "company's own check",
+    "RISK_DECISION_DESC": "serious",
+    "HAZARD_CATEGORY_NAME": "Salmonella   - {non-pathogenic micro-organisms}",
+    "ORIGIN_COUNTRY_DESC": "Poland",
+    "DISTRIBUTION_COUNTRY_DESC": "France",
+    "DISTRIBUTION_STATUS_DESC": "distribution restricted to notifying country",
+    "NETWORK_DESC": "RASFF",
+}
+
+
+@pytest.fixture
+def _real_classifier(monkeypatch):
+    # classify is the pure-Python labeler now (no model to isolate from), so these tests can undo
+    # the autouse stub and exercise the real category decision.
+    monkeypatch.setattr(rasff_eu, "classify", classify)
+
+
+@pytest.mark.usefixtures("_real_classifier")
+def test_foreign_spelled_subject_is_categorized_as_pathogen():
+    row = _normalize(SALMONELLE)
+    assert row["category"] == RecallCategory.pathogen.value
+    assert {"type": "pathogen", "value": "Salmonella"} in row["entities"]
+
+
+@pytest.mark.usefixtures("_real_classifier")
+def test_category_reads_the_hazard_field_not_just_the_subject():
+    # A subject naming no cause must still be categorized from the structured hazard names — the
+    # same text the entity chips come from, so category and chips can't disagree.
+    row = _normalize({**SALMONELLE, "NOTIF_SUBJECT": "Contamination of a chicken-based product"})
+    assert row["category"] == RecallCategory.pathogen.value
+    assert row["category_confidence"] == 1.0
 
 
 def test_missing_reference_raises():
