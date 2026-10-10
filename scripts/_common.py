@@ -55,7 +55,7 @@ def cause_text_resolver(session: Session) -> CauseText:
             select(Recall.recall_number, Recall.raw["HAZARD_CATEGORY_NAME"].astext).where(
                 Recall.source == RecallSource.rasff.value
             )
-        ).tuples()
+        )
     }
 
     def resolve(source: str, recall_number: str, reason_text: str) -> str:

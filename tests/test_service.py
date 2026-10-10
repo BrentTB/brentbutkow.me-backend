@@ -578,6 +578,42 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
     assert build_stats.status(session)[0] is True
 
 
+def test_build_stats_staleness_uses_one_clock_despite_app_db_skew(session, monkeypatch):
+    # computed_at and updated_at must both come from the DB clock. Simulate the app server's clock
+    # drifting from the database's (Render vs Neon, or Docker's VM locally) — mixing the two made a
+    # change right after a build look older than the build, so status() missed it.
+    real_datetime = service.datetime
+
+    def skew(offset: timedelta) -> None:
+        class _Skewed(real_datetime):  # type: ignore[misc, valid-type]
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime.now(tz) + offset
+
+        monkeypatch.setattr(service, "datetime", _Skewed)
+
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+
+    # App clock AHEAD of the DB: a build stamped with app time would sit in the DB's future, hiding
+    # the next ORM update (reclassify / backfills, stamped by the DB's now()).
+    skew(timedelta(hours=1))
+    service.rebuild_stats(session)
+    recall = session.scalars(select(Recall)).one()
+    recall.severity_score += 1
+    session.commit()
+    assert build_stats.status(session)[0] is True
+
+    # App clock BEHIND the DB: an ingest upsert stamped with app time would look older than the
+    # build, so a re-ingested, changed recall went unnoticed.
+    skew(-timedelta(hours=1))
+    service.rebuild_stats(session)
+    assert build_stats.status(session)[0] is False
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk and soy")])
+    service.run_fda_ingest(session)
+    assert build_stats.status(session)[0] is True
+
+
 def test_build_analytics_status_ignores_preexisting_null_topics(session):
     session.add(
         RecallTopic(

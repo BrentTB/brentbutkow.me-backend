@@ -149,7 +149,8 @@ def _upsert_recalls(session: Session, rows: list[NormalizedRecall]) -> None:
         update_set: dict[str, Any] = {
             key: insert_stmt.excluded[key] for key in chunk[0] if key not in _CONFLICT_KEYS
         }
-        update_set["updated_at"] = datetime.now(UTC)
+        # The DB clock, like the ORM onupdate and the build markers status() compares against.
+        update_set["updated_at"] = func.now()
         session.execute(
             insert_stmt.on_conflict_do_update(index_elements=list(_CONFLICT_KEYS), set_=update_set)
         )
@@ -498,7 +499,10 @@ def get_facets(
         affected_country=_affected_country_counts(
             session, _recall_conditions(**{**base, "affected_country": None})
         ),
-        company=[LabelCount(label=name, count=count) for name, count in company_rows],
+        # company_name is nullable; the query already drops NULLs, this just tells the type checker.
+        company=[
+            LabelCount(label=name, count=count) for name, count in company_rows if name is not None
+        ],
         entity=[
             EntityCount(type=etype, label=value, count=count) for etype, value, count in entity_rows
         ],
@@ -735,7 +739,11 @@ def rebuild_stats(session: Session) -> dict[str, int]:
     into JSONB; `get_stats` reverses it with `model_validate` (CamelModel has populate_by_name, so
     snake-case round-trips).
     """
-    now = datetime.now(UTC)
+    # The database's clock, not the app's: build_stats.status compares this to Recall.updated_at,
+    # which the server stamps with now(). Mixing clocks let a few ms of app/DB skew hide a change
+    # made just after a build. now() is this transaction's start, so any drift errs toward
+    # "stale" (an extra rebuild), never toward a missed one.
+    now = session.execute(select(func.now())).scalar_one()
     countries = list(_COUNTRY_SOURCES)  # dashboard's per-country scopes: us, uk, za, ca, eu
     payloads = {
         country: compute_stats(session, country).model_dump(mode="json") for country in countries
@@ -1051,7 +1059,7 @@ def run_rasff_ingest(session: Session, days: int | None = 14, enrich: bool = Tru
     )
 
 
-def _rasff_enrichment_stmt() -> Select[tuple[Recall]]:
+def _rasff_enrichment_stmt() -> Select[Recall]:
     # The scripts/backfill_rasff_enrichment.py work-list: RASFF recalls still on the RASFF Window
     # fallback URL (or with none), i.e. not yet upgraded to a national-authority link. Filters on
     # Recall.source == the RecallSource enum value the normalizer writes ("rasff") — NOT the
