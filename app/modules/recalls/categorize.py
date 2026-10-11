@@ -1,13 +1,18 @@
+import re
+
 from app.modules.recalls.entities import extract_entities
 from app.modules.recalls.schemas import EntityType, RecallCategory
 
 # Keyword baseline (v1). v2 replaces this with a trained text classifier.
-# Order = priority: the first rule whose keyword appears in the reason text wins.
+# Order = priority: the first rule whose keyword appears in the reason text wins. Keywords match at
+# the start of a word only (so "egg" still catches "eggs" but not the Italian "legge" or "veggie").
 _RULES: list[tuple[RecallCategory, list[str]]] = [
     (
         RecallCategory.allergen,
         [
-            "undeclared",
+            # No bare "undeclared": it is the allergen signal only alongside a named allergen, which
+            # the keywords below (and the entity gazetteer) already catch. Alone — "sorbic acid
+            # undeclared", "ambrosia undeclared" — it is a labelling failure (see mislabeling).
             "allergen",
             "peanut",
             "tree nut",
@@ -63,6 +68,7 @@ _RULES: list[tuple[RecallCategory, list[str]]] = [
             "incorrect ingredient",
             "ingredient statement",
             "wrong product",
+            "undeclared",
             # EU labelling / date-marking / species-substitution notices.
             "labelling",
             "non compliant label",
@@ -79,10 +85,15 @@ _RULES: list[tuple[RecallCategory, list[str]]] = [
 ]
 
 
+_COMPILED_RULES: list[tuple[RecallCategory, re.Pattern[str]]] = [
+    (category, re.compile(r"\b(?:" + "|".join(map(re.escape, keywords)) + ")", re.IGNORECASE))
+    for category, keywords in _RULES
+]
+
+
 def categorize(reason_text: str) -> RecallCategory:
-    text = reason_text.lower()
-    for category, keywords in _RULES:
-        if any(keyword in text for keyword in keywords):
+    for category, pattern in _COMPILED_RULES:
+        if pattern.search(reason_text):
             return category
     return RecallCategory.other
 

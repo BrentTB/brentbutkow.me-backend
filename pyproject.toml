@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.1,<2.2",  # minor releases change typing + behaviour: bump deliberately, not via CI drift
     "psycopg[binary]>=3.2",
     "pydantic[email]>=2.9",  # the [email] extra (email-validator) backs schemas' EmailStr
     "pydantic-settings>=2.6",

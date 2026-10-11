@@ -6,6 +6,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -34,6 +35,12 @@ _SEARCH_TEXT_LOWER_EXPR = f"lower({_SEARCH_TEXT_EXPR})"
 
 class Recall(Base):
     __tablename__ = "recalls"
+    # GIN indexes for the entity filter (jsonb @>) and full-text search. Declared here (not only in
+    # their migrations) so autogenerate sees them and never proposes dropping them.
+    __table_args__ = (
+        Index("ix_recalls_entities", "entities", postgresql_using="gin"),
+        Index("ix_recalls_search", "search_vector", postgresql_using="gin"),
+    )
 
     source: Mapped[str] = mapped_column(Text, primary_key=True, server_default="fda")
     country: Mapped[str] = mapped_column(Text, server_default="us", index=True)

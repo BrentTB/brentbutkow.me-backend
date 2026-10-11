@@ -20,7 +20,7 @@ class Entity(TypedDict):
 # (type, canonical value, synonyms). Word-boundary matched, case-insensitive. Order is the output
 # order: allergens, then pathogens, then hazards, then contaminants.
 _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
-    (EntityType.allergen, "milk", ("milk",)),
+    (EntityType.allergen, "milk", ("milk", "lactose", "casein", "caseine")),
     (EntityType.allergen, "egg", ("egg", "eggs")),
     (EntityType.allergen, "fish", ("fish",)),
     (EntityType.allergen, "crustaceans", ("crustacean", "crustaceans", "shellfish")),
@@ -46,6 +46,8 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
             "pistachios",
             "macadamia",
             "brazil nut",
+            "pine nut",
+            "pine nuts",
         ),
     ),
     (EntityType.allergen, "soybeans", ("soy", "soya", "soybean", "soybeans")),
@@ -60,7 +62,7 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
         ("sulphite", "sulphites", "sulfite", "sulfites", "sulphur dioxide", "sulfur dioxide"),
     ),
     (EntityType.pathogen, "Listeria", ("listeria", "monocytogenes")),
-    (EntityType.pathogen, "Salmonella", ("salmonella",)),
+    (EntityType.pathogen, "Salmonella", ("salmonella", "salmonellae", "salmonelle")),
     (EntityType.pathogen, "E. coli", ("e. coli", "e.coli", "escherichia", "stec", "o157")),
     (EntityType.pathogen, "Clostridium botulinum", ("botulism", "clostridium")),
     (EntityType.pathogen, "Hepatitis A", ("hepatitis",)),
@@ -199,6 +201,17 @@ _GAZETTEER: list[tuple[EntityType, str, tuple[str, ...]]] = [
             "paralytic shellfish",
             "amnesic shellfish",
             "diarrhetic shellfish",
+            # EU spelling, and the RASFF shorthands — without them "shellfish" in the full name
+            # matched as the allergen ("Diarrhoeic Shellfish Poisoning (DSP) toxins").
+            "diarrhoeic shellfish",
+            "lipophilic toxin",
+            "lipophilic toxins",
+            "dsp toxin",
+            "dsp toxins",
+            "asp toxin",
+            "asp toxins",
+            "psp toxin",
+            "psp toxins",
             "tetrodotoxin",
         ),
     ),

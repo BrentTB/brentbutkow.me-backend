@@ -71,3 +71,33 @@ def test_label_category_flags_a_chemical_contaminant():
     assert categorize("Shrimp found to contain the antibiotic chloramphenicol.") == (
         RecallCategory.other
     )
+
+
+def test_keywords_match_at_word_start_only():
+    # Real RASFF 2026.1223: "egg" inside the Italian "legge" (law) labelled a copper/zinc limit
+    # breach an allergen. Word-start matching still catches plurals ("eggs").
+    text = "rame e zinco in mangime per gatti, zinco superiore al limite di legge"
+    assert categorize(text) == RecallCategory.other
+    assert categorize("Contains eggs not on the label") == RecallCategory.allergen
+
+
+def test_bare_undeclared_is_mislabeling_not_allergen():
+    # Real openFDA / RASFF reasons: an undeclared colour or additive is misbranding, not allergen.
+    for text in (
+        "Undeclared Yellow #5",
+        "Food Suppliment from Russia E 200 - sorbic acid undeclared",
+    ):
+        assert label_category(text) == RecallCategory.mislabeling, text
+    # A named allergen beside it still wins.
+    assert label_category("Undeclared pine nut") == RecallCategory.allergen
+    assert label_category("Undeclared lactose on the label") == RecallCategory.allergen
+
+
+def test_shellfish_biotoxins_are_contaminants_not_the_shellfish_allergen():
+    # Real RASFF wording: "shellfish" inside the toxin's name must not decide the category.
+    for text in (
+        "DSP toxins in mussels from Italy Diarrhoeic Shellfish Poisoning (DSP) toxins",
+        "lipophilic toxins in shellfish",
+        "ASP toxin in scallops",
+    ):
+        assert label_category(text) == RecallCategory.contaminant, text

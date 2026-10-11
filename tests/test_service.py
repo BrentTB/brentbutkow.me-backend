@@ -11,7 +11,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -575,6 +575,42 @@ def test_build_stats_status_reports_staleness(session, monkeypatch):
     assert recall is not None
     recall.severity_score += 1
     session.commit()
+    assert build_stats.status(session)[0] is True
+
+
+def test_build_stats_staleness_uses_one_clock_despite_app_db_skew(session, monkeypatch):
+    # computed_at and updated_at must both come from the DB clock. Simulate the app server's clock
+    # drifting from the database's (Render vs Neon, or Docker's VM locally) — mixing the two made a
+    # change right after a build look older than the build, so status() missed it.
+    real_datetime = service.datetime
+
+    def skew(offset: timedelta) -> None:
+        class _Skewed(real_datetime):  # type: ignore[misc, valid-type]
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime.now(tz) + offset
+
+        monkeypatch.setattr(service, "datetime", _Skewed)
+
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk")])
+    service.run_fda_ingest(session)
+
+    # App clock AHEAD of the DB: a build stamped with app time would sit in the DB's future, hiding
+    # the next ORM update (reclassify / backfills, stamped by the DB's now()).
+    skew(timedelta(hours=1))
+    service.rebuild_stats(session)
+    recall = session.scalars(select(Recall)).one()
+    recall.severity_score += 1
+    session.commit()
+    assert build_stats.status(session)[0] is True
+
+    # App clock BEHIND the DB: an ingest upsert stamped with app time would look older than the
+    # build, so a re-ingested, changed recall went unnoticed.
+    skew(-timedelta(hours=1))
+    service.rebuild_stats(session)
+    assert build_stats.status(session)[0] is False
+    _patch_fetch(monkeypatch, [_record("F-1", reason_for_recall="undeclared milk and soy")])
+    service.run_fda_ingest(session)
     assert build_stats.status(session)[0] is True
 
 
@@ -1310,3 +1346,59 @@ def test_rebuild_predictions_writes_class_and_lifts_uk_severity(session, monkeyp
     assert us.severity_score == us_severity_before  # and is never re-scored
     # Both writes are derived, so they must not look like a source change.
     assert session.scalar(select(func.max(Recall.updated_at))) == before
+
+
+# Verbatim from the DG SANTE API (2026.6889): the subject names no hazard — only the structured
+# HAZARD_CATEGORY_NAME says Salmonella, and it lives in `raw`, which the backfill loader defers.
+_KEBAB = {
+    "NOTIF_ID": 863520,
+    "NOTIFICATION_REFERENCE": "2026.6889",
+    "NOTIF_DATE": "2026-08-03T00:00:00",
+    "NOTIFICATION_STATUS_DESC": "ec_validated",
+    "PRODUCT_NAME": "Frozen chicken and turkey kebab ",
+    "PRODUCT_CATEGORY_DESC": "poultry meat and poultry meat products",
+    "NOTIFICATION_TYPE_DESC": "food",
+    "NOTIF_SUBJECT": "Frozen chicken and turkey kebab from Poland",
+    "NOTIFYNG_COUNTRY_DESC": "Italy",
+    "NOTIFICATION_CLASSIFICAT_DESC": "alert notification",
+    "NOTIFICATION_BASIS_DESC": "official control on the market",
+    "RISK_DECISION_DESC": "serious",
+    "HAZARD_CATEGORY_NAME": "Salmonella infantis  - {pathogenic micro-organisms}",
+    "ORIGIN_COUNTRY_DESC": "Poland",
+    "DISTRIBUTION_COUNTRY_DESC": "Italy",
+    "DISTRIBUTION_STATUS_DESC": "no distribution from notifying country",
+    "NETWORK_DESC": "RASFF",
+}
+
+
+def test_rederivation_scripts_keep_rasff_hazard_derived_category_and_entities(session, monkeypatch):
+    from scripts import _common, backfill_entities, reclassify
+
+    # The scripts open their own sessions via SessionLocal; point them at the test database.
+    monkeypatch.setattr(
+        _common, "SessionLocal", sessionmaker(bind=session.get_bind(), expire_on_commit=False)
+    )
+    _patch_rasff(monkeypatch, [RasffRecord.model_validate(_KEBAB)])
+    service.run_rasff_ingest(session)
+
+    def stored() -> Recall:
+        session.expire_all()
+        return session.scalars(select(Recall).where(Recall.recall_number == "2026.6889")).one()
+
+    salmonella = {"type": "pathogen", "value": "Salmonella"}
+    assert stored().category == RecallCategory.pathogen.value
+    assert salmonella in stored().entities
+
+    # reclassify must rebuild from subject + hazard, exactly like ingest — from reason_text alone it
+    # rewrote this row to `other` with no entities.
+    reclassify.main()
+    assert stored().category == RecallCategory.pathogen.value
+    assert salmonella in stored().entities
+
+    # backfill_entities: a row whose entities went missing must be detected (status) and refilled
+    # from the hazard field too.
+    session.execute(update(Recall).where(Recall.recall_number == "2026.6889").values(entities=[]))
+    session.commit()
+    assert backfill_entities.status(session)[0] is True
+    backfill_entities.main()
+    assert salmonella in stored().entities

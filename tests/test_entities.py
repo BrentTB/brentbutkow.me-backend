@@ -1,4 +1,6 @@
+from app.modules.recalls.categorize import label_category
 from app.modules.recalls.entities import extract_entities
+from app.modules.recalls.schemas import RecallCategory
 
 
 def _values(text: str, etype: str | None = None) -> set[str]:
@@ -83,6 +85,15 @@ def test_mycotoxin_plurals_and_spellings_match():
 def test_multiple_types_in_one_reason():
     types = {e["type"] for e in extract_entities("Undeclared peanuts and possible Salmonella")}
     assert types == {"allergen", "pathogen"}
+
+
+def test_salmonella_foreign_and_plural_spellings():
+    # EU RASFF subjects carry the notifier's spelling ("Salmonelle" from France, 2026.8845).
+    for text in ("Salmonelle detected in a chicken-based product", "salmonellae in eggs"):
+        assert "Salmonella" in _values(text, "pathogen"), text
+    assert (
+        label_category("Salmonelle detected in a chicken-based product") == RecallCategory.pathogen
+    )
 
 
 def test_word_boundaries_avoid_false_positives():

@@ -236,6 +236,17 @@ def _hazard_text(raw: str | None) -> str:
     return ", ".join(names)
 
 
+def cause_text(reason_text: str, hazards: str | None) -> str:
+    """The text category and entities derive from: the subject plus the structured hazard names.
+
+    Subjects are sometimes written in the notifier's language or with typos ("Salmonelle detected
+    in ...", "Sslmonella spp") or name no hazard at all, while HAZARD_CATEGORY_NAME stays canonical.
+    `hazards` is the raw feed value, so the re-derivation scripts can pass it straight from the
+    stored `raw` JSON and get exactly what ingest computed.
+    """
+    return f"{reason_text} {_hazard_text(hazards)}".strip()
+
+
 def is_recall(record: RasffRecord) -> bool:
     """Classification-based recall filter (see _RECALL_CLASSIFICATIONS). Enrichment-independent."""
     return (record.classification or "").strip().lower() in _RECALL_CLASSIFICATIONS
@@ -270,8 +281,10 @@ def normalize_rasff(record: RasffRecord) -> NormalizedRecall:
     # generic product name — fall back to the subject so a line is never empty.
     product_description = product or subject or (record.reference or "")
 
-    category, confidence = classify(reason_text)
-    entities = extract_entities(f"{reason_text} {hazard}".strip())
+    # Category and entities read the same text, so they can't disagree (see cause_text).
+    cause = cause_text(reason_text, record.hazards)
+    category, confidence = classify(cause)
+    entities = extract_entities(cause)
     notif_date = parse_iso_date(record.notif_date)
     # RASFF has no native class ladder (only a risk decision), so classification stays None and the
     # class predictor fills predicted_class for "eu". Severity leans on the cause/entities the same
