@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, Text, func, text
+from sqlalchemy import Boolean, DateTime, Index, Integer, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -8,6 +8,12 @@ from app.db import Base
 
 class Score(Base):
     __tablename__ = "nullspace_scores"
+    # Leaderboard reads: global top-N by score, and the per-version board. Declared here (not only
+    # in the migration) so autogenerate sees them and never proposes dropping them.
+    __table_args__ = (
+        Index("ix_nullspace_scores_score", "score"),
+        Index("ix_nullspace_scores_version_score", "version", "score"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
